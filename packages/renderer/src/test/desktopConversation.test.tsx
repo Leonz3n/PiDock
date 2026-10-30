@@ -32,6 +32,40 @@ function setup(taskId = "task-a") {
   let unreadable = false;
   let associationState = "unassigned";
   const calls: Array<Record<string, unknown>> = [];
+  // [#117 第 7 项] The desktop draft is Host state now: this map is the Host's
+  // `task/saveDraft`/`task/readDraft` memory, so "restart" = a new mount.
+  const drafts = new Map<string, { text: string; references?: unknown[] }>();
+  let draftRefuse = "";
+  let draftSaveRefuse = "";
+  let draftRecord: unknown;
+  const draftTaskOp = async (taskId_: string, op: string, payload: Record<string, unknown> = {}) => {
+    const envelope = (inner: Record<string, unknown>) => ({ ok: true as const, payload: { workspaceId: "w", taskId: taskId_, op, payload: inner } });
+    if (!op.startsWith("task/")) return { ok: false as const, error: `unexpected ${op}` };
+    if (op === "task/readDraft") {
+      if (draftRefuse) return { ok: false as const, error: draftRefuse };
+      if (draftRecord !== undefined) return envelope({ sessionId: "main", draft: draftRecord });
+      return envelope({ sessionId: "main", draft: drafts.get(taskId_) ?? null });
+    }
+    if (op === "task/saveDraft") {
+      if (draftRefuse || draftSaveRefuse) return { ok: false as const, error: draftRefuse || draftSaveRefuse };
+      drafts.set(taskId_, { text: String(payload["text"]), ...(payload["references"] !== undefined ? { references: payload["references"] as unknown[] } : {}) });
+      return envelope({ sessionId: "main" });
+    }
+    if (op === "task/clearDraft") {
+      if (draftRefuse) return { ok: false as const, error: draftRefuse };
+      drafts.delete(taskId_);
+      return envelope({ sessionId: "main" });
+    }
+    return undefined;
+  };
+  /** The draft half is always the Host's; a test's own handler sees everything else. */
+  const taskOpWithDraft = (handler?: (taskId: string, op: string, payload: Record<string, unknown>) => unknown) =>
+    vi.fn(async (taskId_: string, op: string, payload: Record<string, unknown> = {}) => {
+      const drafted = await draftTaskOp(taskId_, op, payload);
+      if (drafted !== undefined) return drafted;
+      return handler ? handler(taskId_, op, payload) : { ok: false as const, error: `unexpected ${op}` };
+    });
+  let installedTaskOp = taskOpWithDraft() as never;
   const bridge: PidockBridge = {
     listTasks: vi.fn(async () => unreadable ? { ok: false, error: "root unreadable" } : { ok: true, payload: { tasks: [{ taskId, name: "Task", branch: "main", repoCount: 0, updatedAt: "now" }], roots } }),
     projectOp: vi.fn(async (request) => ({ ok: true, payload: request.op === "list" ? { initialized: true, projects: [] } : { roots, tasks: [{ ...association(taskId), state: associationState }] } })),
@@ -54,7 +88,14 @@ function setup(taskId = "task-a") {
       return { ok: true, payload: { unsubscribed: true } };
     }),
   };
-  return { bridge, calls, emit: (value: unknown) => listener?.(value), setStatus: (value: unknown) => { status = value; }, setMessages: (value: unknown[]) => { messages = value; }, setFail: (value: string) => { fail = value; }, invalidate: () => { associationState = "unavailable"; }, unreadable: () => { unreadable = true; }, subscribed: () => Boolean(listener) };
+  // A test may replace `taskOp` wholesale; the draft half stays the Host's, so
+  // "the fixture forgot the draft channel" is never the reason a test fails.
+  Object.defineProperty(bridge, "taskOp", {
+    configurable: true,
+    get: () => installedTaskOp,
+    set: (handler: (taskId: string, op: string, payload: Record<string, unknown>) => unknown) => { installedTaskOp = taskOpWithDraft(handler) as never; },
+  });
+  return { bridge, calls, drafts, setDraftRefuse: (value: string) => { draftRefuse = value; }, setDraftSaveRefuse: (value: string) => { draftSaveRefuse = value; }, setDraftRecord: (value: unknown) => { draftRecord = value; }, setTaskOp: (handler: (taskId: string, op: string, payload: Record<string, unknown>) => unknown) => { bridge.taskOp = taskOpWithDraft(handler) as never; }, emit: (value: unknown) => listener?.(value), setStatus: (value: unknown) => { status = value; }, setMessages: (value: unknown[]) => { messages = value; }, setFail: (value: string) => { fail = value; }, invalidate: () => { associationState = "unavailable"; }, unreadable: () => { unreadable = true; }, subscribed: () => Boolean(listener) };
 }
 function mount(fixture: ReturnType<typeof setup>, taskId = "task-a") {
   window.pidock = fixture.bridge;
@@ -122,14 +163,19 @@ describe("Desktop SDK conversation", () => {
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
   });
 
-  it("persists an explicitly cleared draft and an acknowledged fresh send without reviving accepted receipt text", async () => {
+  it("stores an emptied draft in the Host so a restart never revives acknowledged receipt text", async () => {
     const f = setup(); let view = mount(f); await screen.findByText(/尚未开始/);
     const input = screen.getByRole("textbox", { name: "消息" });
     fireEvent.change(input, { target: { value: "erase me" } });
+    await waitFor(() => expect(f.drafts.get("task-a")).toEqual({ text: "erase me" }));
     fireEvent.change(input, { target: { value: "" } });
+    // An emptied composer is an EMPTY draft record, not "no record": the composer
+    // uses that difference to keep a pending receipt's text out of the box.
+    await waitFor(() => expect(f.drafts.get("task-a")).toEqual({ text: "" }));
     view.unmount(); view = mount(f); await screen.findByText(/尚未开始/);
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
     await send("accepted original"); await screen.findByRole("button", { name: "停止" });
+    await waitFor(() => expect(f.drafts.get("task-a")).toEqual({ text: "" }));
     expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).not.toBeNull();
     view.unmount(); mount(f); await screen.findByRole("button", { name: "停止" });
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
@@ -160,67 +206,77 @@ describe("Desktop SDK conversation", () => {
   });
 
   it.each([
-    "{invalid",
-    JSON.stringify({ schema: 2, taskId: "task-a", sessionId: "main", text: "unsupported" }),
-    JSON.stringify({ schema: 1, taskId: "task-b", sessionId: "main", text: "foreign" }),
-    JSON.stringify({ schema: 1, taskId: "task-a", sessionId: "other", text: "foreign session" }),
-    JSON.stringify({ schema: 1, taskId: "task-a", sessionId: "main", text: "中".repeat(5462) }),
-    " ".repeat(131073),
-  ])("preserves unreadable draft bytes and allows editing and sending without repairing them (%#)", async (raw) => {
-    const key = "pidock-sdk-draft-v1:task-a:main";
-    localStorage.setItem(key, raw);
-    const f = setup(); mount(f); await screen.findByText(/尚未开始/);
-    expect(screen.getByRole("alert")).toHaveTextContent("本机草稿不可读取");
-    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
+    // An unreadable text is not guessed at: the box stays empty and says why.
+    { draft: { text: 42 }, text: "" },
+    // A readable text survives a bad reference list; the note names what was ignored.
+    { draft: { text: "ok", references: "not-a-list" }, text: "ok" },
+    { draft: "nonsense", text: "" },
+  ])("reports an unreadable Host draft by name and never rewrites it (%#)", async (record) => {
+    const f = setup();
+    f.setDraftRecord(record.draft);
+    mount(f); await screen.findByText(/尚未开始/);
+    // Named refusal, not a silently empty composer.
+    expect(screen.getByRole("alert")).toHaveTextContent("草稿读取失败");
+    expect(screen.getByRole("alert")).toHaveTextContent("仍可编辑和发送");
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue(record.text);
+    // Reading never repairs the Host's record: the user's edit is the first write.
+    expect(f.drafts.has("task-a")).toBe(false);
     await send("explicit new text"); await screen.findByRole("button", { name: "停止" });
-    expect(localStorage.getItem(key)).toBe(raw);
     expect(f.calls.filter((call) => call.action === "start")[0]).toMatchObject({ text: "explicit new text" });
-    expect(screen.getByRole("alert")).toHaveTextContent("原记录保留");
   });
 
-  it("retains the last saved draft when UTF-8 storage limits are exceeded without truncating the editor", async () => {
+  it("names a failed Host draft read instead of pretending the composer was empty", async () => {
+    const f = setup();
+    f.setDraftRefuse("task-host-closing");
+    mount(f); await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("alert")).toHaveTextContent("草稿读取失败：task-host-closing");
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
+    await send("explicit request"); await screen.findByRole("button", { name: "停止" });
+    expect(f.calls.find((call) => call.action === "start")?.text).toBe("explicit request");
+  });
+
+  it("refuses an over-long draft locally, keeps the last saved one in the Host, and never truncates the editor", async () => {
     const f = setup(); const view = mount(f); await screen.findByText(/尚未开始/);
     const input = screen.getByRole("textbox", { name: "消息" });
     const within = "中".repeat(5461);
     fireEvent.change(input, { target: { value: within } });
-    const saved = localStorage.getItem("pidock-sdk-draft-v1:task-a:main");
-    expect(JSON.parse(saved!).text).toBe(within);
+    await waitFor(() => expect(f.drafts.get("task-a")).toMatchObject({ text: within }));
     const beyond = within + "中";
     fireEvent.change(input, { target: { value: beyond } });
-    expect(screen.getByRole("alert")).toHaveTextContent("文字超过 16 KiB");
+    // Over the SDK cap: refused by name, and the Host still holds the last good draft.
+    expect(await screen.findByText(/文字超过 16 KiB/)).toBeInTheDocument();
     expect(input).toHaveValue(beyond);
-    expect(localStorage.getItem("pidock-sdk-draft-v1:task-a:main")).toBe(saved);
+    expect(f.drafts.get("task-a")).toMatchObject({ text: within });
     view.unmount(); mount(f); await screen.findByText(/尚未开始/);
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue(within);
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
   });
 
-  it("warns on draft quota failure while preserving saved bytes and keeping independent receipt send usable", async () => {
+  it("quotes a Host draft-save refusal while keeping the independent receipt send usable", async () => {
     const f = setup(); mount(f); await screen.findByText(/尚未开始/);
     fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "previous draft" } });
-    const key = "pidock-sdk-draft-v1:task-a:main";
-    const saved = localStorage.getItem(key);
-    const setItem = Storage.prototype.setItem;
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
-      if (key.startsWith("pidock-sdk-draft-v1:")) throw new DOMException("full", "QuotaExceededError");
-      setItem.call(this, key, value);
-    });
+    await waitFor(() => expect(f.drafts.get("task-a")).toMatchObject({ text: "previous draft" }));
+    const saved = f.drafts.get("task-a");
+    f.setDraftSaveRefuse("invalid-payload: task/saveDraft.references[0].label must be a non-empty string");
     await send("new unsaved text"); await screen.findByRole("button", { name: "停止" });
-    expect(screen.getByRole("alert")).toHaveTextContent("草稿未保存：本机存储不可用");
-    expect(localStorage.getItem(key)).toBe(saved);
+    // The Host's own words, not a generic "storage unavailable".
+    expect(screen.getByRole("alert")).toHaveTextContent("草稿未保存：invalid-payload: task/saveDraft.references[0].label");
+    expect(screen.getByRole("alert")).toHaveTextContent("仍可编辑和发送");
+    expect(f.drafts.get("task-a")).toEqual(saved);
     expect(f.calls.filter((call) => call.action === "start")[0]).toMatchObject({ text: "new unsaved text" });
     expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).not.toBeNull();
   });
 
   it("does not restore or save drafts before fresh identity verification, or for an unavailable task", async () => {
-    const key = "pidock-sdk-draft-v1:task-a:main";
-    const raw = JSON.stringify({ schema: 1, taskId: "task-a", sessionId: "main", text: "saved task text" });
-    localStorage.setItem(key, raw);
-    const f = setup(); f.invalidate(); mount(f);
+    const f = setup();
+    // The Host already holds a draft for this task; an unavailable association
+    // must keep it out of the composer AND keep this page from writing over it.
+    f.drafts.set("task-a", { text: "saved task text" });
+    f.invalidate(); mount(f);
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
     await screen.findByText(/任务或任务根已变化/);
     fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "unverified edit" } });
-    expect(localStorage.getItem(key)).toBe(raw);
+    expect(f.drafts.get("task-a")).toEqual({ text: "saved task text" });
     expect(f.calls.some((call) => call.action === "subscribe" || call.action === "start")).toBe(false);
   });
 
@@ -264,7 +320,9 @@ describe("Desktop SDK conversation", () => {
     const f = setup(); f.setFail("lost"); const view = mount(f);
     await screen.findByText(/尚未开始/); await send("legacy request"); await screen.findByText(/请求结果未知/);
     const first = f.calls.find((call) => call.action === "start")!;
-    view.unmount(); localStorage.removeItem("pidock-sdk-draft-v1:task-a:main"); f.setFail("");
+    // No Host draft record exists for this task: the retry text comes from the
+    // local receipt, not from a saved draft.
+    view.unmount(); f.drafts.delete("task-a"); f.setFail("");
     const reopened = mount(f); await screen.findByText(/请求状态未知/);
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("legacy request");
     fireEvent.click(screen.getByRole("button", { name: "按原 ID 重试" })); await screen.findByRole("button", { name: "停止" });
@@ -273,30 +331,29 @@ describe("Desktop SDK conversation", () => {
     act(() => f.emit({ kind: "sdk-turn-status", turn: turn("task-a", String(first.requestId), "done") }));
     await screen.findByText(/已从 SDK 历史核验/);
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("legacy request");
-    expect(localStorage.getItem("pidock-sdk-draft-v1:task-a:main")).toBeNull();
+    // Still no draft record: the retry never became a saved draft on its own.
+    expect(f.drafts.has("task-a")).toBe(false);
     reopened.unmount(); mount(f); await screen.findByText(/尚未开始/);
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(2);
   });
 
-  it("warns when draft reads are unavailable while keeping independent receipt sending usable", async () => {
-    const getItem = Storage.prototype.getItem;
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (this: Storage, key) {
-      if (key.startsWith("pidock-sdk-draft-v1:")) throw new DOMException("denied", "SecurityError");
-      return getItem.call(this, key);
-    });
-    const f = setup(); mount(f); await screen.findByText(/尚未开始/);
-    expect(screen.getByRole("alert")).toHaveTextContent("本机草稿不可读取");
+  it("keeps independent receipt sending usable when the Host refuses the draft read", async () => {
+    const f = setup(); f.setDraftRefuse("task-host-closing");
+    mount(f); await screen.findByText(/尚未开始/);
+    expect(screen.getByRole("alert")).toHaveTextContent("草稿读取失败：task-host-closing");
     await send("explicit request"); await screen.findByRole("button", { name: "停止" });
     expect(f.calls.find((call) => call.action === "start")?.text).toBe("explicit request");
   });
 
-  it("blocks sending when both draft and pending-receipt storage writes fail", async () => {
-    const f = setup(); mount(f); await screen.findByText(/尚未开始/);
+  it("blocks sending when both the Host draft save and the local receipt write fail", async () => {
+    const f = setup(); f.setDraftSaveRefuse("task-host-closing");
+    mount(f); await screen.findByText(/尚未开始/);
+    // The pending-receipt record is still this window's own storage.
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage unavailable"); });
     await send("unsaved draft and request");
     await screen.findByText("storage unavailable");
-    expect(screen.getByText(/草稿未保存：本机存储不可用/)).toBeInTheDocument();
+    expect(screen.getByText(/草稿未保存：task-host-closing/)).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("unsaved draft and request");
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
   });
@@ -511,7 +568,9 @@ describe("Desktop SDK conversation", () => {
     expect(attachment).toBeEnabled();
     await user.click(input);
     await user.type(input, "saved text draft");
-    const draft = localStorage.getItem("pidock-sdk-draft-v1:task-a:main");
+    // [#117 第 7 项] The saved draft is Host state now, not a localStorage key.
+    await waitFor(() => expect(f.drafts.get("task-a")).toMatchObject({ text: "saved text draft" }));
+    const draft = f.drafts.get("task-a");
     await user.tab();
     const explanation = screen.getByLabelText("附件说明");
     expect(explanation).toHaveFocus();
@@ -520,7 +579,7 @@ describe("Desktop SDK conversation", () => {
     await user.keyboard("{Enter} ");
     expect(attachment).toBeEnabled();
     expect(input).toHaveValue("saved text draft");
-    expect(localStorage.getItem("pidock-sdk-draft-v1:task-a:main")).toBe(draft);
+    expect(f.drafts.get("task-a")).toEqual(draft);
     expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
     expect(f.calls.some((call) => call.action === "start")).toBe(false);
     // The picker exists and is multi-select; choosing a file is page state only,

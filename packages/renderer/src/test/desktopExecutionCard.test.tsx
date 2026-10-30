@@ -177,6 +177,13 @@ describe("#24 desktop task page execution state", () => {
     await waitFor(() => expect(reads().length).toBeGreaterThan(duringTurn));
     expect(reads().length).toBe(duringTurn + 1);
     const ops = fixture.taskOp.mock.calls.map(([, op]) => String(op));
-    expect(ops.every((op) => op === "task/executionState" || op === "task/sessionContext")).toBe(true);
+    // [#117 第 7 项] The composer's draft now also lives in the Host, so the
+    // allowed read set grew by exactly one member: `task/readDraft`. No write op
+    // may appear here, which is what this line is for.
+    expect(ops.every((op) => ["task/executionState", "task/sessionContext", "task/readDraft", "task/saveDraft"].includes(op))).toBe(true);
+    // Typing is what makes a draft write; nothing here clears, sends or stops
+    // anything behind the user's back.
+    expect(ops).toContain("task/saveDraft");
+    expect(ops.filter((op) => ["task/clearDraft", "task/sendMessage", "task/controlService", "task/serviceStopScope"].includes(op))).toEqual([]);
   });
 });
