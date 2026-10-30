@@ -56,6 +56,17 @@ describe.skipIf(process.platform === "win32")("installed Host parent RPC service
     f.main.confirm(f.child as never, (result.payload as { serviceOwner: unknown }).serviceOwner);
     await expect(f.task("task/controlService", { serviceId: "service-a", action: "start" })).rejects.toThrow("task-host-closing");
   });
+  it("[#117 第 7 项] stores and reads back the unsent draft with its references over the Host RPC", async () => {
+    const f = await installed();
+    const reference = { id: "task-task-file:repo-a:invoice.md", kind: "file", label: "repo-a/invoice.md", detail: "repo-a · 任务代码引用", sourceKind: "worktree" };
+    expect((await f.task("task/saveDraft", { sessionId: "main", text: "请看这个文件", references: [reference] })).payload).toMatchObject({ sessionId: "main" });
+    // The composer reads the draft back through this op, references included.
+    expect((await f.task("task/readDraft", { sessionId: "main" })).payload).toMatchObject({ sessionId: "main", draft: { text: "请看这个文件", references: [reference] } });
+    await f.task("task/clearDraft", { sessionId: "main" });
+    // Cleared is reported as "no draft", not as an empty one.
+    expect((await f.task("task/readDraft", { sessionId: "main" })).payload).toMatchObject({ sessionId: "main", draft: null });
+  });
+
   it("bootstraps ordinary registry routes and confirms the durable report before authorizing Host disposal", async () => {
     const f = await installed();
     const registry = new PerTaskHostRegistry("workspace-a", async () => ({ client: f.client, child: f.child as never }), () => f.taskDir, undefined, f.roots);
