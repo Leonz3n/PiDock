@@ -227,6 +227,11 @@ describe("#15 box 28 external editor launch (real process)", () => {
     expect(result.launch.windowObserved).toBe(false);
     expect(result.launch.started).toBe(true);
     expect(typeof result.launch.pid).toBe("number");
+    // [#117 第 6 项 / #108] The receipt states the boundary in words: an editor's
+    // own writes are outside PiDock's write coordination, and PiDock does not
+    // pause its own writes while the editor is open.
+    expect(result.launch.note).toContain("写入不受 PiDock 写协调约束");
+    expect(result.launch.note).toContain("不会因为它开着而暂停自己的写入");
     expect(result.launch.attribution.repo).toBe(REPO_DIR);
 
     // Nothing in the task workspace changed, and in particular no editor
