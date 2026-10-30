@@ -18,7 +18,7 @@
 
 import { shutdownDeadline } from "./shutdown-deadline.js";
 import type { TaskPathProtection } from "./protected-application-path.js";
-import { PiSessionChannel, type PiPermission, type PiReportedUsage, type PiRunState, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView, type PiUsageSource } from "../main/pi-session.js";
+import { PiSessionChannel, type PiPermission, type PiReportedUsage, type PiRunState, type PiSessionDraft, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView, type PiUsageSource } from "../main/pi-session.js";
 import {
   TaskExecutionLedger,
   type ControlExecutionHandle,
@@ -2389,6 +2389,18 @@ export class TaskWorkspaceHost {
     const channel = this.openSession(sessionId);
     channel.clearDraft();
     this.store.writeSession(this.taskDir, channel.snapshot());
+  }
+
+  /**
+   * [#117 第 7 项 / 业主定 A] Read the unsent draft back. A live channel holds
+   * the newest draft; otherwise the persisted snapshot on disk is read WITHOUT
+   * opening the session, so a read never materializes a session, a draft or a
+   * file. `null` means "no draft", never "empty draft".
+   */
+  readDraft(sessionId: string): PiSessionDraft | null {
+    const live = this.channels.get(sessionId);
+    const snapshot = live ? live.snapshot() : this.store.readSession(this.taskDir, sessionId);
+    return snapshot?.draft ? { ...snapshot.draft } : null;
   }
 
   /**

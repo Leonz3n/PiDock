@@ -60,6 +60,7 @@ export type HostTaskOp =
   | "task/approve"
   | "task/reject"
   | "task/saveDraft"
+  | "task/readDraft"
   | "task/clearDraft"
   | "task/setPermission"
   | "task/listApprovals"
@@ -239,6 +240,7 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/approve",
   "task/reject",
   "task/saveDraft",
+  "task/readDraft",
   "task/clearDraft",
   "task/setPermission",
   "task/listApprovals",

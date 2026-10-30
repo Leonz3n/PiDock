@@ -116,6 +116,7 @@ export type ShellTaskOp =
   | "task/approve"
   | "task/reject"
   | "task/saveDraft"
+  | "task/readDraft"
   | "task/clearDraft"
   | "task/setPermission"
   | "task/listApprovals"
