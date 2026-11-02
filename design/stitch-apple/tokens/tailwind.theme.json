@@ -1,0 +1,165 @@
+{
+  "theme": {
+    "extend": {
+      "colors": {
+        "canvas": "#ffffff",
+        "surface": "#ffffff",
+        "sidebar": "#f6f6f8",
+        "surface-subtle": "#fbfbfd",
+        "surface-inset": "#f3f4f7",
+        "ink": "#24262b",
+        "secondary": "#555b66",
+        "muted": "#6f7682",
+        "decorative": "#a0a6b1",
+        "line": "#e9e9ed",
+        "border-control": "#d3d8e1",
+        "primary": "#2768df",
+        "primary-hover": "#205bc9",
+        "primary-soft": "#eaf0fc",
+        "on-primary": "#ffffff",
+        "attention": "#875c20",
+        "attention-soft": "#fff4e4",
+        "danger": "#b23c3c",
+        "danger-soft": "#fff3f2",
+        "neutral-status": "#596271",
+        "neutral-status-soft": "#f1f2f5",
+        "focus": "#2768df",
+        "overlay": "#252b3966"
+      },
+      "fontFamily": {
+        "page-title": [
+          "Inter",
+          "Noto Sans SC",
+          "PingFang SC",
+          "Microsoft YaHei",
+          "system-ui",
+          "sans-serif"
+        ],
+        "task-title": [
+          "Inter",
+          "Noto Sans SC",
+          "PingFang SC",
+          "Microsoft YaHei",
+          "system-ui",
+          "sans-serif"
+        ],
+        "section": [
+          "Inter",
+          "Noto Sans SC",
+          "PingFang SC",
+          "Microsoft YaHei",
+          "system-ui",
+          "sans-serif"
+        ],
+        "body": [
+          "Inter",
+          "Noto Sans SC",
+          "PingFang SC",
+          "Microsoft YaHei",
+          "system-ui",
+          "sans-serif"
+        ],
+        "label": [
+          "Inter",
+          "Noto Sans SC",
+          "PingFang SC",
+          "Microsoft YaHei",
+          "system-ui",
+          "sans-serif"
+        ],
+        "meta": [
+          "Inter",
+          "Noto Sans SC",
+          "PingFang SC",
+          "Microsoft YaHei",
+          "system-ui",
+          "sans-serif"
+        ],
+        "mono": [
+          "JetBrains Mono",
+          "SFMono-Regular",
+          "Menlo",
+          "Consolas",
+          "monospace"
+        ]
+      },
+      "fontSize": {
+        "page-title": [
+          "26px",
+          {
+            "lineHeight": "36px",
+            "letterSpacing": "-0.02em",
+            "fontWeight": "600"
+          }
+        ],
+        "task-title": [
+          "24px",
+          {
+            "lineHeight": "34px",
+            "letterSpacing": "-0.01em",
+            "fontWeight": "600"
+          }
+        ],
+        "section": [
+          "16px",
+          {
+            "lineHeight": "24px",
+            "letterSpacing": "0em",
+            "fontWeight": "600"
+          }
+        ],
+        "body": [
+          "14px",
+          {
+            "lineHeight": "24px",
+            "letterSpacing": "0em",
+            "fontWeight": "400"
+          }
+        ],
+        "label": [
+          "13px",
+          {
+            "lineHeight": "20px",
+            "letterSpacing": "0em",
+            "fontWeight": "500"
+          }
+        ],
+        "meta": [
+          "12px",
+          {
+            "lineHeight": "18px",
+            "letterSpacing": "0em",
+            "fontWeight": "400"
+          }
+        ],
+        "mono": [
+          "12px",
+          {
+            "lineHeight": "20px",
+            "letterSpacing": "0em",
+            "fontWeight": "400"
+          }
+        ]
+      },
+      "borderRadius": {
+        "xs": "4px",
+        "sm": "6px",
+        "md": "8px",
+        "lg": "10px",
+        "xl": "12px",
+        "dialog": "16px",
+        "full": "9999px"
+      },
+      "spacing": {
+        "xxs": "4px",
+        "xs": "8px",
+        "sm": "12px",
+        "md": "16px",
+        "lg": "24px",
+        "xl": "32px",
+        "2xl": "40px",
+        "3xl": "48px"
+      }
+    }
+  }
+}

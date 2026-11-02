@@ -1,0 +1,213 @@
+{
+  "package": "PiDock Apple Flat · Google Stitch handoff",
+  "date": "2026-11-02",
+  "source": "See SOURCES.md; screenshots are fictional local prototype data.",
+  "scope": "Only stitch-apple/; no production source, credentials, or sibling design package.",
+  "hashAlgorithm": "SHA-256",
+  "manifestExcludedFromHashes": true,
+  "referenceDimensions": {
+    "01-task.jpg": [
+      1440,
+      860
+    ],
+    "02-task-info.jpg": [
+      1440,
+      860
+    ],
+    "03-project.jpg": [
+      1440,
+      860
+    ],
+    "04-create-task.jpg": [
+      1440,
+      900
+    ],
+    "05-preparation-failed.jpg": [
+      1440,
+      860
+    ],
+    "06-sessions.jpg": [
+      1440,
+      860
+    ],
+    "07-schedules.jpg": [
+      1440,
+      860
+    ],
+    "08-schedule-editor.jpg": [
+      1440,
+      860
+    ],
+    "09-providers.jpg": [
+      1440,
+      860
+    ],
+    "10-mcp.jpg": [
+      1440,
+      860
+    ],
+    "11-skills.jpg": [
+      1440,
+      860
+    ],
+    "12-cleanup.jpg": [
+      1440,
+      860
+    ],
+    "13-compact.jpg": [
+      720,
+      524
+    ],
+    "14-flat-alternative.jpg": [
+      1440,
+      860
+    ]
+  },
+  "files": [
+    {
+      "path": "CHECKLIST.md",
+      "bytes": 3665,
+      "sha256": "d3c83cac7948172432292e063262911e257ba59efac571f930dfba45670911a7"
+    },
+    {
+      "path": "DESIGN.md",
+      "bytes": 22093,
+      "sha256": "199282d05ec7d28b2593f8087449cea270a5b50edc6a1d6896e2237d4e75ab09"
+    },
+    {
+      "path": "FLOWS.md",
+      "bytes": 6252,
+      "sha256": "175d7e574b731ec77297a554cbfbf2f624bb20aac6d8e14a041629d0e32cd936"
+    },
+    {
+      "path": "README.md",
+      "bytes": 5418,
+      "sha256": "6286496e53c00cbf8aaf9c4cb7c510bee69ca2156d198b3001f45832140c0189"
+    },
+    {
+      "path": "SCREENS.md",
+      "bytes": 7288,
+      "sha256": "3b97d97fddebce6e9b370152f743d10100fe736a7935fcf53c23906e86131568"
+    },
+    {
+      "path": "SOURCES.md",
+      "bytes": 4041,
+      "sha256": "b0e2161797a15e409443e34a5a20914dea1cd617b9359e15705ada201a76bc16"
+    },
+    {
+      "path": "STITCH-PROMPTS.md",
+      "bytes": 12317,
+      "sha256": "95b77ab96a9414612bc54b98fb071bff587e64c7b846489f3a33b0d7b5aa9136"
+    },
+    {
+      "path": "VALIDATION.md",
+      "bytes": 1475,
+      "sha256": "4f58fba7f001db0e094750e56743e27c0f1c09ae1a03190c2b139fd06b44fce7"
+    },
+    {
+      "path": "reference/01-task.jpg",
+      "bytes": 116327,
+      "sha256": "57df64236bef153fc8fce769fece1f98911145eca781ed63a7424a998ea4a2d5"
+    },
+    {
+      "path": "reference/02-task-info.jpg",
+      "bytes": 86916,
+      "sha256": "e804fef662c8b2ae2df7367ff32e56c9468c63731b90a4cd5d3386e982bd2e3b"
+    },
+    {
+      "path": "reference/03-project.jpg",
+      "bytes": 52868,
+      "sha256": "8d5d866f644b0827a5b9a59410d7ff9425a36246b260037d102c2b5fb3f21143"
+    },
+    {
+      "path": "reference/04-create-task.jpg",
+      "bytes": 95808,
+      "sha256": "fc0e10a3701dcb67f5755bbd7fff525dd35c4d3b29c34873eab82c7a0a25aa9a"
+    },
+    {
+      "path": "reference/05-preparation-failed.jpg",
+      "bytes": 87254,
+      "sha256": "5f0a6dfe6aef7b796bfef9aea909e4d6fdffa0846779cd9cb94eb4200a81b1e8"
+    },
+    {
+      "path": "reference/06-sessions.jpg",
+      "bytes": 61526,
+      "sha256": "dc5013de8c90c494ef93a58d3c20db4da93021574a15e51aedb3f580a6d76216"
+    },
+    {
+      "path": "reference/07-schedules.jpg",
+      "bytes": 47017,
+      "sha256": "f513c5a515bed8640a28057489de1400c32e466bb4edb394bd69518fba6bd316"
+    },
+    {
+      "path": "reference/08-schedule-editor.jpg",
+      "bytes": 50608,
+      "sha256": "b731308351d15f25271c6fb712a15acb0f16d0932d969d1862679d3bae5975b5"
+    },
+    {
+      "path": "reference/09-providers.jpg",
+      "bytes": 38316,
+      "sha256": "69e1dcd60bea3b45395b80fedc297a0bf07a2afdcec06894ccde167cb46fe4c6"
+    },
+    {
+      "path": "reference/10-mcp.jpg",
+      "bytes": 40440,
+      "sha256": "d1c354a33360b9cf06f69787356bb45747c46e5cb4f0d0ce7c0cf1efdaa99e85"
+    },
+    {
+      "path": "reference/11-skills.jpg",
+      "bytes": 38879,
+      "sha256": "d453b71eea87292f89fdf5e3df0ca6ab510abbd78a3bcb624ed8170336b95d3c"
+    },
+    {
+      "path": "reference/12-cleanup.jpg",
+      "bytes": 60053,
+      "sha256": "cccf9dd5ac3cd6e65e4ce857ac4e4e69a9863a50dd6034242f290109d61e25bb"
+    },
+    {
+      "path": "reference/13-compact.jpg",
+      "bytes": 29071,
+      "sha256": "518b8fd7943d22c88fbe980dd1e80740d902f118b000db936281174010f7d5a5"
+    },
+    {
+      "path": "reference/14-flat-alternative.jpg",
+      "bytes": 64846,
+      "sha256": "7099609270f3ebec788f5f73906abc3e638136ca80a29b21db2bfc81487bed59"
+    },
+    {
+      "path": "reference/README.md",
+      "bytes": 2807,
+      "sha256": "2df0e9538cf0dd424b34f8777118122f38705082d15adb54e3b058e5f2904a7b"
+    },
+    {
+      "path": "tokens/design_tokens.json",
+      "bytes": 9383,
+      "sha256": "92b2dc7077d34878308a887fb10e7e9d8e9e404f95323213623a6beaac69f430"
+    },
+    {
+      "path": "tokens/tailwind.theme.json",
+      "bytes": 3714,
+      "sha256": "1ee2535e72ce4d444ca545e2ac9d7bc486cfc598e1a5b974065858f946deb4a5"
+    },
+    {
+      "path": "tokens/theme.css",
+      "bytes": 2451,
+      "sha256": "f6951d910e9ff7a914d80ebebadcf7a5f326b618e6cf8fc9cee32cdcd414227c"
+    },
+    {
+      "path": "tools/normalize-tokens.py",
+      "bytes": 1511,
+      "sha256": "57a3a386fc74de06aec835bef3520cca77f165bc63ea7d8f66bf21e15194c2db"
+    },
+    {
+      "path": "tools/package.py",
+      "bytes": 4080,
+      "sha256": "6dbbfa379d9d59e32da5fbd17981d149aaed65f4a05c21a54b982fbe30b6fd38"
+    },
+    {
+      "path": "validation/design-lint.json",
+      "bytes": 289,
+      "sha256": "b3e72974f1d28205df71a52aeb12768d8c45d5f9b93a9bace888410ef66f9aa8"
+    }
+  ]
+}
