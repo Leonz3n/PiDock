@@ -1,6 +1,6 @@
 # Figma 导入说明
 
-`design/figma/*.svg` 是与 Stitch 参考图同版的矢量稿，画布均为 **1440 × 900**。它们用于把版式、密度、颜色与组件状态带进 Figma，不是最终组件库。
+`docs/design/quiet-ledger/figma/*.svg` 是与 Stitch 参考图同版的矢量稿，画布均为 **1440 × 900**。它们用于把版式、密度、颜色与组件状态带进 Figma，不是最终组件库。
 
 ## 导入步骤
 

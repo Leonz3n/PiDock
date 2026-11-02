@@ -3,7 +3,7 @@
 **状态：** 设计候选，待业主确认方向。视觉方向为 **Quiet Ledger（安静台账）**，替代旧原型 A；旧桌面与原型 A 不再作为复刻目标。
 **规格依据：** [父规格 #1](https://github.com/Leonz3n/PiDock/issues/1)、[首版收口 #135](https://github.com/Leonz3n/PiDock/issues/135)、[UI 交接 #24](https://github.com/Leonz3n/PiDock/issues/24)。
 **设计系统：** `DESIGN.md`（符合 google-labs-code/design.md 格式，`lint` 0 error / 2 个透明背景对比度预期警告）。
-**并存的另一候选：** 同目录 [`stitch-apple/`](stitch-apple/README.md) 是独立的 Apple 风格版本；两套 token、导航和提示词不混用。
+**并存的另一候选：** [`../stitch-apple/`](../stitch-apple/README.md) 是独立的 Apple 风格版本；两套 token、导航和提示词不混用。统一入口见 [`../README.md`](../README.md)。
 **范围：** 项目 → 任务 → 会话；已有目录与独立 worktree；定时任务；Provider / MCP / Skills；会话生命周期；归档与清理。
 **不在范围：** 服务启停与编排、环境模板、内置浏览器、内置终端、远程访问、复杂用量报表、文件/差异工作台。
 **示例数据：** 参考图中的任务名、路径、分支、提交、计数与状态仅用于版式，不代表真实运行结果。

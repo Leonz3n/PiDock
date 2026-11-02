@@ -1,10 +1,10 @@
-# PiDock 设计交付包
+# PiDock · Quiet Ledger 设计交付包
 
 面向 **Google Stitch** 的 UI 设计输入，以及可导入 **Figma** 的参考稿。
 
-**状态：设计候选，待业主确认。** 本目录不构成产品实现授权。范围与验收以 [GitHub #135](https://github.com/Leonz3n/PiDock/issues/135) 和 [父规格 #1](https://github.com/Leonz3n/PiDock/issues/1) 为准；视觉方向、布局与交互在确认前均可调整。
+**状态：设计候选，待业主确认。** 本包不构成产品实现授权。范围与验收以 [GitHub #135](https://github.com/Leonz3n/PiDock/issues/135) 和 [父规格 #1](https://github.com/Leonz3n/PiDock/issues/1) 为准；视觉方向、布局与交互在确认前均可调整。
 
-> 本目录同时保留两套互不混用的候选：根目录为 **Quiet Ledger**（暖纸 + 墨蓝），[`stitch-apple/`](stitch-apple/README.md) 为 **Apple 风格**（冷灰白 + 亮蓝）。两套均待评审，业主尚未确认采用哪一套。
+> 本包是 **Quiet Ledger** 候选。另一套互不混用的候选是 [`../stitch-apple/`](../stitch-apple/README.md)（Apple 风格）。统一入口、两套对照与未决事项见 [`../README.md`](../README.md) 和 [`../DECISIONS.md`](../DECISIONS.md)。
 
 - **视觉方向：** Quiet Ledger（安静台账）——暖纸底、墨蓝强调、发丝分隔线、文字优先的状态，不使用绿色。
 - **层级：** 项目 → 任务 → 会话；不增加「工作空间」顶层。
@@ -18,7 +18,7 @@
 
 | 路径 | 用途 |
 | --- | --- |
-| `DESIGN.md` | **唯一设计系统源文件**。符合 [google-labs-code/design.md](https://github.com/google-labs-code/design.md) 格式，可直接绑定 Stitch 或交给实现方。 |
+| `DESIGN.md` | **本候选的设计系统源文件**。符合 [google-labs-code/design.md](https://github.com/google-labs-code/design.md) 格式，可直接绑定 Stitch 或交给实现方。 |
 | `STITCH-BRIEF.md` | 全局 Prompt、S01–S14 单屏 Prompt、关键流程、迭代 Prompt、禁止项与评审清单。 |
 | `reference/*.png` | 11 张 1440×900 参考图，**附加给 Stitch**。 |
 | `reference/*.svg` | 同版矢量源文件，可导入 Figma 或浏览器查看。 |
@@ -35,7 +35,7 @@
 2. 设计系统：
    - 若当前工作区支持绑定 `DESIGN.md`，直接绑定本文件；
    - 否则把 `STITCH-BRIEF.md` 的「全局 Prompt」作为第一条消息，并选择不使用预设主题。
-3. 按 S01–S12 逐屏发送 Prompt，并附上对应的 `reference/*.png`。参考图用于版式密度，不要求逐像素复刻。
+3. 按 S01–S14 逐屏发送 Prompt，并附上该屏对应的 `reference/*.png`。没有单独参考图的页面（如 Skills）复用相邻布局。参考图用于版式密度，不要求逐像素复刻。
 4. 使用「迭代 Prompt」修正，不要重开项目。最后按禁止项与评审清单检查。
 5. 方向确认后再进入实现；确认记录应回写到 #24 / #135。
 
@@ -51,7 +51,7 @@
 
 ```bash
 # 设计系统格式与对比度（0 error；2 个透明背景对比度警告为预期）
-cd design
+cd docs/design/quiet-ledger
 npx -y @google/design.md lint DESIGN.md
 
 # 重新导出 tokens
@@ -84,11 +84,7 @@ cp reference/*.svg figma/
 
 ## 6. 待确认事项
 
-1. 是否采用 Quiet Ledger 作为新一轮视觉方向。
-2. 侧栏是否保留项目树（当前方案保留，任务页展开当前项目）。
-3. 任务详情使用抽屉还是独立页（当前为抽屉）。
-4. 「无绿色、完成用 slate」的状态语义是否接受。
-5. 最小窗口 720×560 是否仍作为首版验收尺寸。
+本候选相关的方向、侧栏、详情入口、状态色、最小窗口和 Figma 深度，统一记录在 [`../DECISIONS.md`](../DECISIONS.md) 的 D1–D8；本文件不再单独维护第二份状态表。
 
 ## 7. 设计系统说明
 
@@ -104,7 +100,7 @@ Lint 的两条警告来自 `button-ghost` 与 `list-row` 的透明背景：它�
 
 - 范围与验收：[#135](https://github.com/Leonz3n/PiDock/issues/135)、[#1](https://github.com/Leonz3n/PiDock/issues/1)
 - UI 交接：[#24](https://github.com/Leonz3n/PiDock/issues/24)
-- 术语：[GLOSSARY.md](../GLOSSARY.md)
-- 收口规则：[docs/product-design-closure.md](../docs/product-design-closure.md)
-- 技术边界：[docs/implementation-stack-design.md](../docs/implementation-stack-design.md)
+- 术语：[GLOSSARY.md](../../../GLOSSARY.md)
+- 收口规则：[docs/product-design-closure.md](../../product-design-closure.md)
+- 技术边界：[docs/implementation-stack-design.md](../../implementation-stack-design.md)
 - DESIGN.md 格式：[google-labs-code/design.md](https://github.com/google-labs-code/design.md)
