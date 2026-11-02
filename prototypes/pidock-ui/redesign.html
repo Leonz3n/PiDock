@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<!-- THROWAWAY UI PROTOTYPE: compare Apple inspector, tactical terminal, and split evidence workspace. All data and actions are simulated. -->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PiDock · 优化方案展示 (Apple 极简 / 二次元机能 / 融合探索)</title>
+  <style>
+    /* Reset & Base */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Segoe UI", sans-serif; }
+    button, input, textarea, select { font-family: inherit; }
+
+    #app-viewport { width: 100vw; height: 100vh; display: flex; flex-direction: column; position: relative; }
+
+    /* Switcher Bar */
+    .prototype-switcher {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      background: rgba(18, 22, 34, 0.92);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.15);
+      color: #fff;
+      font-size: 13px;
+      user-select: none;
+    }
+    .prototype-switcher .switch-btn {
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      padding: 6px 12px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .prototype-switcher .switch-btn:hover { color: #f8fafc; background: rgba(255, 255, 255, 0.08); }
+    .prototype-switcher .switch-btn.active {
+      background: #3b82f6;
+      color: #fff;
+      box-shadow: 0 2px 10px rgba(59, 130, 246, 0.4);
+    }
+    .prototype-switcher .nav-arrow {
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      transition: all 0.2s;
+    }
+    .prototype-switcher .nav-arrow:hover { background: rgba(255, 255, 255, 0.2); }
+    .prototype-switcher .divider { width: 1px; height: 16px; background: rgba(255, 255, 255, 0.15); margin: 0 4px; }
+    .prototype-switcher .tag-info { font-size: 11px; color: #94a3b8; font-family: "JetBrains Mono", monospace; }
+
+    /* ========================================================================= */
+    /* VARIANT A: APPLE MINIMALIST PRO                                           */
+    /* ========================================================================= */
+    .variant-a {
+      --bg-base: #f5f5f7;
+      --bg-sidebar: rgba(246, 246, 248, 0.85);
+      --bg-surface: #ffffff;
+      --bg-subtle: #f0f0f4;
+      --border-subtle: rgba(0, 0, 0, 0.08);
+      --text-main: #1d1d1f;
+      --text-muted: #86868b;
+      --accent-apple: #0071e3;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
+      --shadow-md: 0 4px 16px rgba(0,0,0,0.06);
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      background: var(--bg-base);
+      color: var(--text-main);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .variant-a .macos-titlebar {
+      height: 48px;
+      background: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 16px;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .variant-a .traffic-lights { display: flex; gap: 8px; margin-right: 8px; }
+    .variant-a .traffic-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .variant-a .traffic-dot.close { background: #ff5f56; border: 1px solid #e0443e; }
+    .variant-a .traffic-dot.min { background: #ffbd2e; border: 1px solid #dea123; }
+    .variant-a .traffic-dot.max { background: #27c93f; border: 1px solid #1aab29; }
+    .variant-a .brand-badge { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: #1d1d1f; }
+    .variant-a .brand-logo-pi {
+      width: 24px; height: 24px; border-radius: 6px;
+      background: linear-gradient(135deg, #1e3a8a, #3b82f6);
+      color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 13px;
+    }
+    .variant-a .apple-btn {
+      height: 28px; padding: 0 12px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border-subtle); background: #ffffff;
+      color: var(--text-main); font-size: 12px; font-weight: 500;
+      display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+      box-shadow: var(--shadow-sm); transition: all 0.15s ease;
+    }
+    .variant-a .apple-btn:hover { background: #fbfbfd; border-color: rgba(0,0,0,0.15); }
+    .variant-a .apple-btn.primary {
+      background: var(--accent-apple); color: #fff; border-color: var(--accent-apple);
+      box-shadow: 0 2px 8px rgba(0, 113, 227, 0.3);
+    }
+    .variant-a .workspace-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+    .variant-a .sidebar {
+      width: 240px; background: var(--bg-sidebar); backdrop-filter: blur(25px);
+      border-right: 1px solid var(--border-subtle); display: flex;
+      flex-direction: column; flex-shrink: 0; padding: 12px 10px; gap: 14px;
+    }
+    .variant-a .sidebar-item {
+      display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+      border-radius: var(--radius-sm); font-size: 13px; color: #333336; cursor: pointer;
+    }
+    .variant-a .sidebar-item.active { background: #e5eef9; color: var(--accent-apple); font-weight: 600; }
+    .variant-a .task-card-item {
+      padding: 10px; border-radius: var(--radius-md); background: #ffffff;
+      border: 1px solid var(--border-subtle); box-shadow: var(--shadow-sm); cursor: pointer; margin-bottom: 6px;
+    }
+    .variant-a .task-card-item.selected { border-color: #93c5fd; background: #fbfdff; box-shadow: 0 2px 8px rgba(0, 113, 227, 0.12); }
+    .variant-a .center-workspace { flex: 1; display: flex; flex-direction: column; min-width: 0; background: #ffffff; position: relative; }
+    .variant-a .task-header {
+      padding: 16px 24px 12px; border-bottom: 1px solid var(--border-subtle);
+      display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
+    }
+    .variant-a .chat-stream { flex: 1; overflow-y: auto; padding: 20px 28px; display: flex; flex-direction: column; gap: 20px; }
+    .variant-a .msg-user-bubble {
+      align-self: flex-end; background: #f0f1f5; color: #1d1d1f; padding: 12px 16px;
+      border-radius: 16px 16px 4px 16px; font-size: 14px; line-height: 1.6; max-width: 80%;
+    }
+    .variant-a .thinking-box {
+      border-radius: var(--radius-md); background: #f8fafc; border: 1px solid #e2e8f0; font-size: 12px; margin-top: 8px;
+    }
+    .variant-a .tool-action-card {
+      border: 1px solid #e2e8f0; border-radius: var(--radius-md); background: #ffffff; box-shadow: var(--shadow-sm); overflow: hidden; margin-top: 8px;
+    }
+    .variant-a .tool-action-header {
+      padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+      display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; color: #334155;
+    }
+    .variant-a .code-diff { padding: 10px 12px; font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 1.5; background: #fafafa; }
+    .variant-a .diff-del { background: #fee2e2; color: #991b1b; display: block; padding: 1px 4px; border-radius: 2px; }
+    .variant-a .diff-add { background: #dcfce7; color: #166534; display: block; padding: 1px 4px; border-radius: 2px; }
+    .variant-a .composer-container { padding: 14px 28px 18px; flex-shrink: 0; }
+    .variant-a .composer-box {
+      max-width: 820px; margin: 0 auto; border-radius: var(--radius-lg);
+      border: 1px solid rgba(0, 0, 0, 0.12); background: #ffffff; box-shadow: var(--shadow-md);
+      padding: 10px 14px; display: flex; flex-direction: column; gap: 8px;
+    }
+    .variant-a .composer-textarea {
+      width: 100%; border: none; outline: none; resize: none; font-size: 14px; line-height: 1.5; color: #1d1d1f; min-height: 48px; background: transparent;
+    }
+    .variant-a .right-panel {
+      width: 420px; background: #fafafc; border-left: 1px solid var(--border-subtle); display: flex; flex-direction: column; flex-shrink: 0;
+    }
+
+    /* ========================================================================= */
+    /* VARIANT B: CYBER-ANIME TACTICAL TERMINAL                                  */
+    /* ========================================================================= */
+    .variant-b {
+      --cyber-bg: #080c14;
+      --cyber-sidebar: #0d121f;
+      --cyber-cyan: #00f0ff;
+      --cyber-pink: #ff2a6d;
+      --cyber-amber: #f59e0b;
+      --font-mono: "Share Tech Mono", "JetBrains Mono", monospace;
+      --font-title: "Orbitron", sans-serif;
+      background: var(--cyber-bg);
+      color: #e2e8f0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      font-family: var(--font-mono);
+      background-image: linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+    .variant-b .tactical-header {
+      height: 52px; background: rgba(13, 18, 31, 0.95); border-bottom: 1px solid rgba(0, 240, 255, 0.25);
+      display: flex; align-items: center; padding: 0 20px; gap: 16px; flex-shrink: 0;
+    }
+    .variant-b .hud-title {
+      font-family: var(--font-title); font-size: 18px; font-weight: 800; letter-spacing: 2px;
+      background: linear-gradient(90deg, #00f0ff, #fff, #ff2a6d); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .variant-b .pi-live-core-pill {
+      margin-left: 20px; display: flex; align-items: center; gap: 10px; padding: 4px 14px;
+      background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.3);
+      clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+    }
+    .variant-b .cyber-btn {
+      background: rgba(0, 240, 255, 0.1); border: 1px solid var(--cyber-cyan); color: var(--cyber-cyan);
+      padding: 5px 14px; font-family: var(--font-mono); font-size: 12px; cursor: pointer; text-transform: uppercase;
+      clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+    }
+    .variant-b .cyber-workspace { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+    .variant-b .cyber-sidebar {
+      width: 250px; background: var(--cyber-sidebar); border-right: 1px solid rgba(0, 240, 255, 0.2);
+      display: flex; flex-direction: column; flex-shrink: 0; padding: 14px 12px; gap: 14px;
+    }
+    .variant-b .war-room-center {
+      flex: 1; display: flex; flex-direction: column; min-width: 0; background: rgba(10, 14, 23, 0.85); border-right: 1px solid rgba(0, 240, 255, 0.2);
+    }
+    .variant-b .terminal-chat-stream { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 18px; }
+    .variant-b .cyber-user-msg {
+      align-self: flex-end; max-width: 80%; background: rgba(0, 240, 255, 0.1); border: 1px solid var(--cyber-cyan);
+      border-left: 4px solid var(--cyber-cyan); padding: 12px 16px; color: #fff; font-size: 13px; line-height: 1.6;
+    }
+    .variant-b .anime-agent-msg { display: flex; gap: 14px; width: 100%; max-width: 860px; margin: 0 auto; }
+    .variant-b .anime-portrait {
+      width: 44px; height: 44px; border-radius: 8px; border: 1px solid var(--cyber-cyan);
+      background: linear-gradient(135deg, #0f172a, #1e1b4b); display: grid; place-items: center; font-size: 20px;
+    }
+    .variant-b .cyber-composer {
+      padding: 16px 20px; background: rgba(13, 18, 31, 0.95); border-top: 1px solid rgba(0, 240, 255, 0.2);
+    }
+    .variant-b .cyber-textarea {
+      width: 100%; background: transparent; border: none; outline: none; color: #00f0ff;
+      font-family: var(--font-mono); font-size: 13px; line-height: 1.6; resize: none; min-height: 48px;
+    }
+    .variant-b .cyber-right-hud {
+      width: 440px; background: var(--cyber-sidebar); display: flex; flex-direction: column; flex-shrink: 0;
+    }
+
+    /* ========================================================================= */
+    /* VARIANT C: NEO-CYBER FUSION                                               */
+    /* ========================================================================= */
+    .variant-c {
+      --fusion-bg: #0f141c;
+      --fusion-sidebar: #141b26;
+      --fusion-surface: #1a2232;
+      --fusion-border: rgba(255, 255, 255, 0.1);
+      --fusion-accent-gradient: linear-gradient(135deg, #00d2ff, #7928ca);
+      background: var(--fusion-bg);
+      color: #f1f5f9;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .variant-c .fusion-topbar {
+      height: 50px; background: rgba(20, 27, 38, 0.85); backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--fusion-border); display: flex; align-items: center; padding: 0 16px; gap: 16px; flex-shrink: 0;
+    }
+    .variant-c .fusion-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+    .variant-c .fusion-sidebar {
+      width: 230px; background: var(--fusion-sidebar); border-right: 1px solid var(--fusion-border);
+      display: flex; flex-direction: column; flex-shrink: 0; padding: 12px; gap: 12px;
+    }
+    .variant-c .fusion-center {
+      flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--fusion-surface); border-right: 1px solid var(--fusion-border);
+    }
+    .variant-c .fusion-stream { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+    .variant-c .fusion-composer {
+      padding: 14px 24px 18px; background: rgba(20, 27, 38, 0.95); border-top: 1px solid var(--fusion-border); flex-shrink: 0;
+    }
+    .variant-c .fusion-right { width: 420px; background: var(--fusion-sidebar); display: flex; flex-direction: column; flex-shrink: 0; }
+
+    /* Visibility helpers */
+    .variant-container { display: none; width: 100%; height: 100%; }
+    .variant-container.active-variant { display: flex; }
+  </style>
+  <link rel="stylesheet" href="redesign-review.css">
+</head>
+<body>
+  <div id="app-viewport">
+    <!-- VARIANT A -->
+    <div id="variant-a-root" class="variant-container variant-a active-variant">
+      <div class="macos-titlebar">
+        <div class="traffic-lights"><div class="traffic-dot close"></div><div class="traffic-dot min"></div><div class="traffic-dot max"></div></div>
+        <div class="brand-badge"><div class="brand-logo-pi">π</div><span>PiDock Studio</span></div>
+        <div style="font-size: 12px; color: #86868b;">工作区 / Atlas Web / <strong style="color: #1d1d1f;">对账单详情·本地联调</strong></div>
+        <div style="margin-left: auto; display: flex; gap: 8px;">
+          <button class="apple-btn" onclick="toggleRightPanel('a')">◨ 运行与验证抽屉</button>
+          <button class="apple-btn primary">+ 新建任务</button>
+        </div>
+      </div>
+      <div class="workspace-body">
+        <aside class="sidebar">
+          <div style="font-size: 11px; font-weight: 600; color: #86868b; text-transform: uppercase;">工作区</div>
+          <div class="sidebar-item">⌘ 项目总览</div>
+          <div class="sidebar-item">⛭ 环境与服务</div>
+          <div class="sidebar-item">∿ Token 用量</div>
+          <div style="font-size: 11px; font-weight: 600; color: #86868b; text-transform: uppercase; margin-top: 10px;">进行中的任务 (2)</div>
+          <div class="task-card-item selected">
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;">
+              <span style="width: 7px; height: 7px; border-radius: 50%; background: #10b981;"></span>
+              <span>对账单详情·本地联调</span>
+            </div>
+            <div style="font-size: 11px; color: #86868b; margin-top: 4px;">3 仓库 · 测试环境</div>
+          </div>
+          <div class="task-card-item">
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;">
+              <span style="width: 7px; height: 7px; border-radius: 50%; background: #94a3b8;"></span>
+              <span>运单地址校验修复</span>
+            </div>
+            <div style="font-size: 11px; color: #86868b; margin-top: 4px;">1 仓库 · 主干</div>
+          </div>
+        </aside>
+        <main class="center-workspace">
+          <header class="task-header">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+              <div>
+                <div style="font-size: 11px; font-weight: 600; color: #86868b;">TASK WORKSPACE #A1F92C3D · 分支 feat/invoice-fix</div>
+                <h1 style="font-size: 20px; font-weight: 700; color: #1d1d1f; margin-top: 2px;">对账单详情·本地联调</h1>
+              </div>
+              <button class="apple-btn" style="color: #b91c1c;">停止本任务服务</button>
+            </div>
+            <div style="display: flex; gap: 8px; font-size: 11px;">
+              <span style="padding: 2px 8px; background: #e0f2fe; color: #0369a1; border-radius: 9999px;">● 3/3 本地服务运行中</span>
+              <span style="padding: 2px 8px; background: #ecfdf5; color: #059669; border-radius: 9999px;">端口自动改址已生效 (8080)</span>
+            </div>
+          </header>
+          <div class="chat-stream">
+            <div class="msg-user-bubble">帮我定位为什么对账单详情里的运单号总是展示为 null，修复后在本地拉起服务并用内置浏览器验证详情页面。</div>
+            <div style="display: flex; flex-direction: column; gap: 12px; max-width: 820px;">
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;">
+                <div class="brand-logo-pi" style="width: 20px; height: 20px; font-size: 11px;">π</div>
+                <span>Pi Agent · 实现与验证</span>
+              </div>
+              <div class="thinking-box">
+                <div style="padding: 8px 12px; color: #64748b; font-weight: 500; cursor: pointer;">✦ 深度思考链路 (耗时 12s · 已折叠) ▼</div>
+              </div>
+              <div class="tool-action-card">
+                <div class="tool-action-header">
+                  <span>⚡ 代码变更已应用：bff-service/src/mappers/bill.mapper.ts</span>
+                  <span style="color: #16a34a;">+3 -1 lines</span>
+                </div>
+                <div class="code-diff">
+<span class="diff-del">- return { id: bill.id, trackingNumber: bill.trackingNumber };</span>
+<span class="diff-add">+ // 兼容 payment-core 重构后的字段命名</span>
+<span class="diff-add">+ const tracking = bill.trackingNumber || bill.trackingNo || null;</span>
+<span class="diff-add">+ return { id: bill.id, trackingNumber: tracking };</span>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; color: #15803d; font-size: 13px;">
+                <span style="font-size: 18px;">✓</span>
+                <div>
+                  <strong>内置浏览器目视验证完成</strong><br>
+                  <span style="font-size: 11px;">访问 http://127.0.0.1:5173/bills/10023，运单号「SF142857001」已正常渲染，控制台 0 报错。</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="composer-container">
+            <div class="composer-box">
+              <textarea class="composer-textarea" placeholder="描述你的任务要求，输入 @ 引用仓库文件，/ 调用快捷指令..."></textarea>
+              <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 4px;">
+                <div style="display: flex; gap: 6px; font-size: 11px;">
+                  <span style="padding: 3px 8px; background: #f1f3f7; border-radius: 9999px;">@ 引用文件</span>
+                  <span style="padding: 3px 8px; background: #f1f3f7; border-radius: 9999px;">/ 快捷指令</span>
+                  <span style="padding: 3px 8px; background: #f1f3f7; border-radius: 9999px;">模型: 默认模型</span>
+                </div>
+                <button class="apple-btn primary" style="width: 28px; height: 28px; border-radius: 50%; padding: 0; justify-content: center;">↑</button>
+              </div>
+            </div>
+          </div>
+        </main>
+        <aside class="right-panel" id="panel-a">
+          <div style="padding: 12px 16px; border-bottom: 1px solid rgba(0,0,0,0.08); font-size: 12px; font-weight: 600;">运行与验证抽屉</div>
+          <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="background: #ffffff; padding: 12px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.08);">
+              <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 600;">
+                <span>bff-service</span>
+                <span style="color: #b45309; background: #fffbeb; padding: 2px 6px; border-radius: 4px; font-size: 11px;">PORT 8080 (改址)</span>
+              </div>
+              <div style="font-size: 11px; color: #86868b; margin-top: 4px;">端口冲突已自动改址并向前端注入</div>
+            </div>
+            <div style="background: #ffffff; padding: 12px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.08);">
+              <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 600;">
+                <span>frontend-web</span>
+                <span style="color: #2563eb; background: #eff6ff; padding: 2px 6px; border-radius: 4px; font-size: 11px;">PORT 5173</span>
+              </div>
+              <div style="font-size: 11px; color: #86868b; margin-top: 4px;">Vite HMR 已连通 · 页面正常</div>
+            </div>
+            <div style="border-radius: 10px; overflow: hidden; border: 1px solid rgba(0,0,0,0.08); background: #ffffff;">
+              <div style="padding: 6px 10px; background: #f1f3f5; font-size: 11px; color: #64748b;">浏览器验证: http://127.0.0.1:5173/bills/10023</div>
+              <div style="padding: 14px; background: #f8fafc; font-size: 12px;">
+                <div style="font-weight: 600;">对账单详情 #10023</div>
+                <div style="margin-top: 4px; color: #64748b;">运单号: <span style="color: #0369a1; font-weight: 600;">SF142857001 (已修复)</span></div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- VARIANT B -->
+    <div id="variant-b-root" class="variant-container variant-b">
+      <header class="tactical-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 28px; height: 28px; background: rgba(0,240,255,0.2); border: 1px solid #00f0ff; display: grid; place-items: center; color: #00f0ff; font-weight: 900;">π</div>
+          <div class="hud-title">PIDOCK // TACTICAL</div>
+        </div>
+        <div class="pi-live-core-pill">
+          <div style="width: 20px; height: 20px; border-radius: 50%; background: #00f0ff; display: grid; place-items: center; color: #000; font-size: 11px; font-weight: bold;">π</div>
+          <div style="font-size: 11px; color: #00f0ff; font-weight: bold;">NEURAL LINK: ACTIVE (同步率 99.4%)</div>
+        </div>
+        <div style="margin-left: auto; display: flex; gap: 10px;">
+          <button class="cyber-btn" onclick="toggleRightPanel('b')">[HUD] 战术监控阵列</button>
+          <button class="cyber-btn" style="border-color: #ff2a6d; color: #ff2a6d;">+ 建立新作战序列</button>
+        </div>
+      </header>
+      <div class="cyber-workspace">
+        <aside class="cyber-sidebar">
+          <div style="font-size: 10px; color: #00f0ff; letter-spacing: 1px;">// ACTIVE MISSIONS</div>
+          <div style="padding: 10px; background: rgba(0,240,255,0.12); border-left: 3px solid #00f0ff; border-top: 1px solid rgba(0,240,255,0.3);">
+            <div style="font-size: 12px; font-weight: bold; color: #fff;">OP-INVOICE-FIX [ENGAGED]</div>
+            <div style="font-size: 10px; color: #94a3b8; margin-top: 2px;">对账单详情·本地联调</div>
+          </div>
+        </aside>
+        <main class="war-room-center">
+          <div style="padding: 12px 20px; background: rgba(18,24,40,0.8); border-bottom: 1px solid rgba(0,240,255,0.2); display: flex; justify-content: space-between;">
+            <div style="font-size: 13px; font-weight: bold; color: #fff;">MISSION: 对账单详情·跨仓联调与修复</div>
+            <div style="font-size: 11px; color: #f59e0b;">PORT HOPPING: 8000 ➔ 8080 COMPLETE</div>
+          </div>
+          <div class="terminal-chat-stream">
+            <div class="cyber-user-msg">[COMMANDER] 帮我定位为什么对账单详情里的运单号总是展示为 null，修复后在本地拉起服务并用内置浏览器验证详情页面。</div>
+            <div class="anime-agent-msg">
+              <div class="anime-portrait">🤖</div>
+              <div style="flex: 1; display: flex; flex-direction: column; gap: 10px;">
+                <div style="font-size: 12px; color: #00f0ff; font-weight: bold;">PI // 战术辅助AI · 深度计算完毕</div>
+                <div style="padding: 10px; background: rgba(0,240,255,0.08); border: 1px dashed #00f0ff; font-size: 11px; color: #94a3b8;">
+                  [NEURAL REASONING] 发现 payment-core 重构时将字段命名更改为 trackingNo，已在 BFF 接入层加入兼容热补丁。
+                </div>
+                <div style="background: rgba(18,26,44,0.8); border: 1px solid rgba(0,240,255,0.3); padding: 10px;">
+                  <div style="color: #00f0ff; font-size: 11px; font-weight: bold; margin-bottom: 6px;">[CODE PATCH APPLIED]</div>
+                  <div style="font-size: 11.5px;">
+                    <span style="color: #ff2a6d;">- return { id: bill.id, trackingNumber: bill.trackingNumber };</span><br>
+                    <span style="color: #00f0ff;">+ const tracking = bill.trackingNumber || bill.trackingNo || null;</span><br>
+                    <span style="color: #00f0ff;">+ return { id: bill.id, trackingNumber: tracking };</span>
+                  </div>
+                </div>
+                <div style="padding: 10px; background: rgba(16,185,129,0.15); border: 1px solid #10b981; color: #a7f3d0; font-size: 12px;">
+                  [VISUAL RECON] 浏览器目视回传：运单号「SF142857001」在 127.0.0.1:5173/bills/10023 锁定成功！
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="cyber-composer">
+            <div style="border: 1px solid rgba(0,240,255,0.3); background: rgba(10,14,24,0.9); padding: 10px;">
+              <textarea class="cyber-textarea" placeholder="// 请输入战术指令... 输入 @ 挂载仓库代码，/ 展开战术指令"></textarea>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                <span style="font-size: 10px; color: #64748b;">AI 核心: DEFAULT // READY</span>
+                <button class="cyber-btn" style="background: #00f0ff; color: #000; font-weight: bold;">[TRANSMIT // 发送]</button>
+              </div>
+            </div>
+          </div>
+        </main>
+        <aside class="cyber-right-hud" id="panel-b">
+          <div style="padding: 12px; font-size: 11px; color: #00f0ff; font-weight: bold; border-bottom: 1px solid rgba(0,240,255,0.2);">[ACTIVE REACTOR NODES]</div>
+          <div style="padding: 14px; display: flex; flex-direction: column; gap: 12px;">
+            <div style="padding: 10px; background: rgba(245,158,11,0.1); border: 1px solid #f59e0b;">
+              <div style="color: #f59e0b; font-size: 12px; font-weight: bold;">bff-service // PORT 8080 (REALLOCATED)</div>
+              <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">PID 98214 · FLUX STABLE</div>
+            </div>
+            <div style="padding: 10px; background: rgba(0,240,255,0.08); border: 1px solid #00f0ff;">
+              <div style="color: #00f0ff; font-size: 12px; font-weight: bold;">frontend-web // PORT 5173</div>
+              <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">VITE HMR ONLINE</div>
+            </div>
+            <div style="background: #000; border: 1px solid #00f0ff; padding: 10px;">
+              <div style="font-size: 10px; color: #00f0ff; margin-bottom: 6px;">RECON OPTICAL FEED</div>
+              <div style="font-size: 11px; color: #a7f3d0;">TARGET: SF142857001 [LOCKED]</div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- VARIANT C: conversation + full evidence surface, rather than a narrow inspector -->
+    <div id="variant-c-root" class="variant-container variant-c">
+      <header class="fusion-topbar">
+        <div class="fusion-brand"><span class="fusion-mark">π</span> PiDock <span class="quiet">/ Neo</span></div>
+        <span class="fusion-breadcrumb">Atlas Web <span class="quiet">/</span> 对账单详情</span>
+        <div class="fusion-top-actions">
+          <button class="neo-btn" onclick="toggleRightPanel('c')">◨ 验证工作台</button>
+          <button class="neo-btn accent" data-new-task>＋ 新建任务</button>
+        </div>
+      </header>
+      <div class="fusion-body">
+        <aside class="fusion-sidebar">
+          <span class="fusion-mark">π</span>
+          <button class="rail-btn selected" aria-label="当前任务" title="当前任务">⌘</button>
+          <button class="rail-btn" aria-label="查看服务" data-open-evidence="services" title="查看服务">▤</button>
+          <button class="rail-btn" aria-label="查看变更" data-open-evidence="diff" title="查看变更">⑂</button>
+          <span class="rail-bottom">AW</span>
+        </aside>
+        <main class="fusion-center">
+          <header class="neo-task-header">
+            <div class="eyebrow">AGENT SESSION <span class="quiet">/ 03</span></div>
+            <h1>对账单详情·本地联调</h1>
+            <p class="quiet">feat/invoice-fix <span>·</span> 3 个隔离仓库</p>
+            <div class="neo-progress"><span>✓ 定位</span><span>✓ 修复</span><span>✓ 验证</span><span class="neo-status">等待你的下一步</span></div>
+          </header>
+          <div class="fusion-stream">
+            <div class="neo-user-message">运单号一直显示 null。帮我修复，并拉起本地服务验证。</div>
+            <article class="neo-agent-message">
+              <div class="agent-label"><span class="agent-orb">π</span><strong>Pi</strong><span class="quiet">已完成 · 42s</span></div>
+              <p>已修复字段映射，详情页现在可以正确展示运单号。</p>
+              <details class="review-details"><summary>执行摘要 <span>3 步 · 12s</span></summary><ol><li>比对 payment-core 返回字段与 BFF 映射。</li><li>为 trackingNo 添加兼容映射。</li><li>启动服务，检查详情页和浏览器控制台。</li></ol></details>
+              <button class="neo-result" data-open-evidence="diff"><span>⑂</span><span><strong>1 个文件已修改</strong><small>bill.mapper.ts</small></span><span class="diff-count">+3 −1 ↗</span></button>
+              <button class="neo-result" data-open-evidence="browser"><span>◎</span><span><strong>页面验证通过</strong><small>运单号正常 · 控制台 0 报错</small></span><span>↗</span></button>
+              <p class="quiet">右侧保留了本次变更和验证结果，可以继续检查。</p>
+            </article>
+          </div>
+          <div class="fusion-composer">
+            <div class="neo-input">
+              <textarea aria-label="发送给 Pi 的消息" placeholder="继续这个任务…"></textarea>
+              <div class="neo-input-footer"><span class="quiet">＋ 附件 <span>·</span> 默认模型</span><button class="neo-send" aria-label="发送消息">↑</button></div>
+            </div>
+          </div>
+        </main>
+        <aside class="fusion-right" id="panel-c">
+          <header class="evidence-header"><span class="eyebrow">验证工作台</span><span class="live-indicator">● 本地环境</span><button class="close-evidence" aria-label="关闭验证工作台" onclick="toggleRightPanel('c')">×</button></header>
+          <div class="evidence-tabs" role="tablist" aria-label="验证内容">
+            <button role="tab" id="tab-c-browser" aria-controls="evidence-browser" aria-selected="true" data-evidence="browser">◎ 浏览器</button>
+            <button role="tab" id="tab-c-diff" aria-controls="evidence-diff" aria-selected="false" tabindex="-1" data-evidence="diff">⑂ 代码变更 <span>1</span></button>
+            <button role="tab" id="tab-c-services" aria-controls="evidence-services" aria-selected="false" tabindex="-1" data-evidence="services">▤ 服务 <span>3</span></button>
+          </div>
+          <section class="evidence-pane" id="evidence-browser" role="tabpanel" aria-labelledby="tab-c-browser">
+            <div class="mock-address"><span>↶ &nbsp; ↻</span><span>127.0.0.1:5173/bills/10023</span><span>↗</span></div>
+            <div class="mock-browser">
+              <div class="bill-nav"><strong>Atlas</strong><span>财务中心</span><span class="mock-avatar">A</span></div>
+              <div class="bill-content"><p class="bill-back">← 对账单列表</p><div class="bill-heading"><h2>对账单详情</h2><span>已核对</span></div><p class="bill-number">BILL-2026-10023</p>
+                <div class="bill-total"><small>本期应付金额</small><strong>¥ 12,480<span>.00</span></strong><span>2026.10.01 — 2026.10.21</span></div>
+                <div class="bill-row"><span>客户名称</span><strong>Atlas 示例客户</strong></div><div class="bill-row"><span>结算方式</span><strong>月结</strong></div>
+                <div class="bill-highlight"><span>运单号</span><strong>SF142857001 <small>✓</small></strong></div>
+                <div class="verified-note">✓ 字段已正确渲染</div>
+              </div>
+            </div>
+            <footer class="evidence-footer"><span>✓ 页面验证通过</span><span>控制台 0 报错 <span class="quiet">· 示例快照</span></span></footer>
+          </section>
+          <section class="evidence-pane" id="evidence-diff" role="tabpanel" aria-labelledby="tab-c-diff" hidden>
+            <div class="diff-filename">bff-service / src / mappers / <strong>bill.mapper.ts</strong></div>
+            <div class="neo-code"><div class="code-context">24 &nbsp; export function mapBill(bill) {</div><div class="code-removed">25 − &nbsp;return { id: bill.id, trackingNumber: bill.trackingNumber };</div><div class="code-added">25 + &nbsp;// 兼容上游字段命名</div><div class="code-added">26 + &nbsp;const tracking = bill.trackingNumber || bill.trackingNo || null;</div><div class="code-added">27 + &nbsp;return { id: bill.id, trackingNumber: tracking };</div><div class="code-context">28 &nbsp; }</div></div>
+            <footer class="evidence-footer"><span>1 个文件</span><span class="diff-count">+3 −1</span></footer>
+          </section>
+          <section class="evidence-pane" id="evidence-services" role="tabpanel" aria-labelledby="tab-c-services" hidden>
+            <div class="neo-services"><div class="service-heading"><h2>本地服务</h2><button class="neo-btn" data-toggle-services>停止服务</button></div>
+              <div class="neo-service"><span class="service-light">●</span><div><strong>bff-service</strong><small>8000 → 8080 · 已自动改址</small></div><code>:8080</code></div>
+              <div class="neo-service"><span class="service-light">●</span><div><strong>frontend-web</strong><small>Vite HMR 已连接</small></div><code>:5173</code></div>
+              <div class="neo-service"><span class="service-light">●</span><div><strong>payment-core</strong><small>健康检查通过</small></div><code>:8090</code></div>
+              <div class="port-note">端口冲突已处理<br><span>原端口 8000 被占用，BFF 改为 8080，前端代理已同步更新。</span></div>
+              <div class="worktree-note"><span class="eyebrow">隔离工作区</span><p>3 个仓库 · feat/invoice-fix</p><small>frontend-web / bff-service / payment-core</small></div>
+            </div>
+            <footer class="evidence-footer"><span class="service-summary">● 3/3 服务运行中</span><span>仅演示状态</span></footer>
+          </section>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prototype Switcher Bar (Bottom Center) -->
+  <div class="prototype-switcher">
+    <button class="nav-arrow" onclick="cycleVariant(-1)" title="上一个风格 (←)">◀</button>
+    <div style="display: flex; gap: 4px;">
+      <button id="btn-a" class="switch-btn active" onclick="switchVariant('A')">
+        <span>🍏</span> 风格 A: Apple 原生极简工作台
+      </button>
+      <button id="btn-b" class="switch-btn" onclick="switchVariant('B')">
+        <span>⚡</span> 风格 B: 二次元战术机能终端 (Anime)
+      </button>
+      <button id="btn-c" class="switch-btn" onclick="switchVariant('C')">
+        <span>✦</span> 风格 C: Neo-Cyber 融合风
+      </button>
+    </div>
+    <div class="divider"></div>
+    <span class="tag-info">[按 ← → 切换]</span>
+    <button class="nav-arrow" onclick="cycleVariant(1)" title="下一个风格 (→)">▶</button>
+  </div>
+
+  <script>
+    const VARIANTS = ['A', 'B', 'C'];
+    let currentVariant = 'A';
+    function initVariant() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const v = (urlParams.get('variant') || 'A').toUpperCase();
+      if (VARIANTS.includes(v)) currentVariant = v;
+      applyVariant(currentVariant, false);
+    }
+    function switchVariant(v) { currentVariant = v; applyVariant(v, true); }
+    function applyVariant(v, updateUrl) {
+      VARIANTS.forEach(item => {
+        const root = document.getElementById(`variant-${item.toLowerCase()}-root`);
+        const btn = document.getElementById(`btn-${item.toLowerCase()}`);
+        if (item === v) { root.classList.add('active-variant'); btn.classList.add('active'); }
+        else { root.classList.remove('active-variant'); btn.classList.remove('active'); }
+      });
+      if (updateUrl) {
+        const url = new URL(window.location);
+        url.searchParams.set('variant', v);
+        window.history.replaceState({}, '', url);
+      }
+    }
+    function cycleVariant(dir) {
+      const idx = VARIANTS.indexOf(currentVariant);
+      const next = (idx + dir + VARIANTS.length) % VARIANTS.length;
+      switchVariant(VARIANTS[next]);
+    }
+    function toggleRightPanel(v) {
+      const p = document.getElementById(`panel-${v}`);
+      if (p) p.style.display = p.style.display === 'none' ? 'flex' : 'none';
+    }
+    window.addEventListener('keydown', (e) => {
+      if (document.activeElement.closest('input, textarea, select, [contenteditable], dialog')) return;
+      if (e.key === 'ArrowLeft') cycleVariant(-1);
+      if (e.key === 'ArrowRight') cycleVariant(1);
+    });
+    initVariant();
+  </script>
+  <script src="redesign-review.js"></script>
+</body>
+</html>
