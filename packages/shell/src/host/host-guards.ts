@@ -408,6 +408,31 @@ function isStringMap(value: unknown): value is Record<string, string> {
  * the embedded guards; cancel/approve/reject keep an opaque object payload.
  * Unknown ops can never reach here (isHostTaskParams rejects them).
  */
+/**
+ * [#117 第 5 项] Main stamps `browserState` on the ops that report or remove
+ * browser data; the Host validates the shape so a caller that reaches it
+ * without main (a direct Host test, a future route) cannot pass an arbitrary
+ * object off as an observation. `retained` is tri-state: `true`/`false` are
+ * observations, `null` means "not observed".
+ */
+function checkBrowserState(op: string, payload: Record<string, unknown>): { ok: true } | { ok: false; error: string } {
+  const browserState = payload["browserState"];
+  if (browserState === undefined) return { ok: true };
+  if (!isRecord(browserState)) {
+    return { ok: false, error: `invalid-payload: ${op}.browserState must be an object` };
+  }
+  for (const key of Object.keys(browserState)) {
+    if (key !== "retained") {
+      return { ok: false, error: `invalid-payload: ${op}.browserState.${key} is not accepted` };
+    }
+  }
+  const retained = browserState["retained"];
+  if (retained !== true && retained !== false && retained !== null) {
+    return { ok: false, error: `invalid-payload: ${op}.browserState.retained must be true, false or null` };
+  }
+  return { ok: true };
+}
+
 export function validateHostTaskOp(
   op: string,
   payload: unknown,
@@ -1499,6 +1524,14 @@ export function validateHostTaskOp(
     if (label !== undefined && typeof label !== "string") {
       return { ok: false, error: `invalid-payload: ${op}.label must be a string` };
     }
+    if (op === "task/archive" && payload !== undefined) {
+      const browserState = checkBrowserState(op, payload);
+      if (!browserState.ok) return browserState;
+    }
+    // Restoring never reopens a page, so it takes no browser observation at all.
+    if (op === "task/restore" && payload !== undefined && payload["browserState"] !== undefined) {
+      return { ok: false, error: "invalid-payload: task/restore.browserState is not accepted" };
+    }
     return { ok: true };
   }
   if (op === "task/quit") {
@@ -1530,6 +1563,8 @@ export function validateHostTaskOp(
     if (label !== undefined && typeof label !== "string") {
       return { ok: false, error: `invalid-payload: ${op}.label must be a string` };
     }
+    const browserState = checkBrowserState(op, payload);
+    if (!browserState.ok) return browserState;
     return { ok: true };
   }
   // [PiDock 17] (#19) execution state + attention reads.

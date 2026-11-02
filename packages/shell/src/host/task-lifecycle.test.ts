@@ -34,7 +34,6 @@ interface FakeState {
   paths: Record<string, { isSymlink: boolean; isDirectory: boolean; currentTarget: string | null } | undefined>;
   keepOk: { codeCopyOk: boolean; exportsOk: boolean; retainedPosition: string | null };
   delegated: Record<string, { ok: boolean; reason: string }>;
-  browserPages: { pageId: string; url: string }[];
 }
 
 function fakeState(overrides: Partial<FakeState> = {}): FakeState {
@@ -51,7 +50,6 @@ function fakeState(overrides: Partial<FakeState> = {}): FakeState {
     paths: {},
     keepOk: { codeCopyOk: true, exportsOk: true, retainedPosition: KEEP_ROOT },
     delegated: { terminals: { ok: true, reason: "终端记录仅在内存中，已随 Host 生命周期结束" } },
-    browserPages: [],
     ...overrides,
   };
 }
@@ -83,7 +81,6 @@ function build(state: FakeState, store = memoryTaskStore()) {
     originalCheckoutPaths: () => ["/Users/dev/work/apiserver"],
     otherTaskDirs: () => ["/Users/dev/pidock/tasks/task-bbbbbbbb"],
     delivery: () => ({ uncommitted: false, undelivered: false }),
-    browserPages: () => state.browserPages,
     availableFiles: () => ["src/api.ts"],
     availableSkills: () => ["skills/code-review/SKILL.md"],
     liveProcesses: () => state.processes,
@@ -277,17 +274,31 @@ describe("cleanup run", () => {
     expect(state.calls.some((call) => call.startsWith("remove:"))).toBe(false);
   });
 
-  it("fails closed for a delegated effect the Host does not own", () => {
+  // [#117 第 5 项] Before this slice the Host answered "browser" with an
+  // always-failing stub and never even listed the item (the page probe was
+  // `() => []`). Now main's observation decides, and a retained partition is
+  // reported as KEPT with the reason — never as removed, never as an error.
+  it("keeps main's browser partition with a named reason instead of a stub failure", () => {
     const state = fakeState({
-      browserPages: [{ pageId: "page-1", url: "http://127.0.0.1:5173" }],
       paths: { [`${TASK_DIR}/dir-51cd20bb`]: { isSymlink: true, isDirectory: false, currentTarget: "/Users/dev/work/invoice-docs" } },
     });
     const { lifecycle } = build(state);
-    lifecycle.archive();
-    const result = lifecycle.runCleanup({ selection: NO_EXPORT });
-    expect(result.recovery.map((entry) => entry.item)).toEqual(["browser"]);
-    expect(result.recovery[0]!.reason).toContain("未接线");
-    expect(result.record.projectReleased).toBe(false);
+    lifecycle.archive({ retained: true });
+    const result = lifecycle.runCleanup({ selection: NO_EXPORT, browserState: { retained: true } });
+    expect(result.items.find((item) => item.id === "browser")).toMatchObject({ disposition: "keep" });
+    expect(result.recovery.map((entry) => entry.item)).toEqual([]);
+    expect(result.receipt?.removed).not.toContain("browser");
+    expect(result.record.projectReleased).toBe(true);
+  });
+
+  it("says browser state was not observed instead of showing zero pages", () => {
+    const { lifecycle } = build(fakeState());
+    lifecycle.archive({ retained: null });
+    const result = lifecycle.runCleanup({ selection: NO_EXPORT, browserState: { retained: null } });
+    expect(result.items.find((item) => item.id === "browser")).toBeUndefined();
+    expect(result.items.length + result.recovery.length).toBeGreaterThan(0);
+    expect(lifecycle.cleanupPreview({ selection: NO_EXPORT, browserState: { retained: null } }).warnings.join(" "))
+      .toContain("浏览器持久分区状态未读取");
   });
 });
 

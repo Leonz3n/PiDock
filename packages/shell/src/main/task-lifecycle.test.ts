@@ -222,7 +222,7 @@ describe("planArchive", () => {
         { scheduleId: "daily", enabled: true },
         { scheduleId: "weekly", enabled: false },
       ],
-      kept: { worktrees: 2, protocolBindings: 3, browserPages: 4, templateVersion: "v12" },
+      kept: { worktrees: 2, protocolBindings: 3, browserRetained: true, templateVersion: "v12" },
       usageDetails: 7,
     });
     expect(plan.stoppedSessions).toEqual(["main"]);
@@ -233,6 +233,24 @@ describe("planArchive", () => {
     expect(plan.kept.map((entry) => entry.label)).toEqual(["代码工作副本", "会话与草稿", "模板版本", "生成绑定记录", "浏览器状态"]);
     expect(plan.kept.find((entry) => entry.label === "模板版本")?.detail).toContain("v12");
   });
+
+  // [#117 第 5 项] Browser state is main's persistent partition: the archive
+  // record states only what main observed, and an unreadable observation is
+  // never reported as "kept".
+  it("states browser retention only from main's observation", () => {
+    const archive = (browserRetained: boolean | null) =>
+      planArchive({
+        taskId: "task-aaaaaaaa",
+        sessions: [{ sessionId: "main", runState: "running" }],
+        pendingApprovals: [],
+        schedules: [],
+        kept: { worktrees: 1, protocolBindings: 0, browserRetained, templateVersion: null },
+        usageDetails: 0,
+      }).kept.find((entry) => entry.label === "浏览器状态")?.detail;
+    expect(archive(true)).toContain("保留在磁盘");
+    expect(archive(false)).toBe("本任务没有浏览器持久分区，无需保留");
+    expect(archive(null)).toBe("浏览器持久分区状态未读取：不主张已保留");
+  });
 });
 
 describe("cleanup", () => {
@@ -240,7 +258,7 @@ describe("cleanup", () => {
   const base = {
     archived: true,
     code: { uncommitted: true, undelivered: false },
-    counts: { sessions: 2, drafts: 1, usageRecords: 5, browserPages: 1, terminals: 1 },
+    counts: { sessions: 2, drafts: 1, usageRecords: 5, browserRetained: true, terminals: 1 },
     worktree: true,
     links: [{ linkName: "dir-51cd20bb", sourcePath: "/Users/dev/work/invoice-docs" }],
   };
@@ -258,6 +276,29 @@ describe("cleanup", () => {
     expect(preview.items.find((item) => item.id === "usage")?.detail).toContain("5 条用量记录");
     expect(preview.recordsWillBeRemoved).toBe(true);
     expect(preview.warnings.join(" ")).toContain("将被移除");
+  });
+
+  // [#117 第 5 项] The Host cannot remove main's persistent partition, so the
+  // preview keeps it (with the reason) instead of claiming a removal.
+  it("keeps browser state with a named reason instead of claiming a removal", () => {
+    const preview = previewCleanup({ ...base, selection });
+    const browser = preview.items.find((item) => item.id === "browser");
+    expect(browser?.disposition).toBe("keep");
+    expect(browser?.detail).toContain("不移除浏览器数据");
+    expect(browser?.detail).toContain("#117 第 5 项");
+    expect(preview.warnings.join(" ")).not.toContain("浏览器持久分区状态未读取");
+  });
+
+  it("warns instead of showing zero pages when main did not report the partition", () => {
+    const preview = previewCleanup({ ...base, counts: { ...base.counts, browserRetained: null }, selection });
+    expect(preview.items.find((item) => item.id === "browser")).toBeUndefined();
+    expect(preview.warnings.join(" ")).toContain("浏览器持久分区状态未读取");
+  });
+
+  it("says nothing about browser state when main observed no partition", () => {
+    const preview = previewCleanup({ ...base, counts: { ...base.counts, browserRetained: false }, selection });
+    expect(preview.items.find((item) => item.id === "browser")).toBeUndefined();
+    expect(preview.warnings.join(" ")).not.toContain("浏览器");
   });
 
   it("does not warn about removal once every record is exported", () => {
@@ -372,7 +413,6 @@ describe("planRelaunch", () => {
       {
         taskId: "task-aaaaaaaa",
         archived: false,
-        browserPages: [{ pageId: "page-1", url: "http://127.0.0.1:5173/invoices" }],
         services: [{ serviceId: "invoice-service", running: true }],
         sessions: [
           {
@@ -401,11 +441,14 @@ describe("planRelaunch", () => {
     ],
   };
 
-  it("restores tasks/sessions/browser, never auto-connects services and never sends drafts", () => {
+  it("restores tasks/sessions, never claims to restore browser pages, never auto-connects services and never sends drafts", () => {
     const plan = planRelaunch(input);
     expect(plan.autoConnectServices).toBe(false);
     const task = plan.tasks[0]!;
-    expect(task.browser).toEqual([{ pageId: "page-1", url: "http://127.0.0.1:5173/invoices", restored: true }]);
+    // [#117 第 5 项] Page identity lives in main's persistent partition and
+    // cannot be enumerated, so restore reports `false` instead of listing pages
+    // as "restored" from an input the Host never observed.
+    expect(task.browserRestored).toBe(false);
     expect(task.services).toEqual([
       { serviceId: "invoice-service", action: "start-on-demand", autoConnect: false, detail: expect.stringContaining("不自动连接业务环境") },
     ]);

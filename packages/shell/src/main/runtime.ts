@@ -29,6 +29,7 @@ import {
   resolveTaskRoot,
 } from "./task-provision.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
+import { BROWSER_OBSERVATION_OPS, observeTaskBrowserState } from "./task-browser-observation.js";
 import {
   createNodePrepScanDeps,
   createPrepScanAuthority,
@@ -2682,6 +2683,13 @@ export function registerIpc(
         );
         if (!derived.ok) return { ok: false as const, error: derived.error };
         opPayload = derived.payload;
+      }
+      // [#117 第 5 项] Browser state lives in main's persistent partition, so
+      // main stamps the observation itself and OVERWRITES anything the page
+      // sent: a page-reported `retained:false` (or an omitted key) must not be
+      // able to hide browser data from the cleanup scope it is asking for.
+      if (BROWSER_OBSERVATION_OPS.includes(op)) {
+        opPayload = { ...opPayload, browserState: observeTaskBrowserState({ workspaceId: sender.workspaceId, taskId }) };
       }
       const perOp = validateHostTaskOp(op, opPayload);
       if (!perOp.ok) {

@@ -1086,6 +1086,24 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/runCleanup", { selection, keepRoot: "  " }).ok).toBe(false);
     expect(validateHostTaskOp("task/runCleanup", { selection, label: 7 }).ok).toBe(false);
   });
+
+  // [#117 第 5 项] `browserState` is main's observation; the Host validates its
+  // shape so nothing else can pass an arbitrary object off as one.
+  it("[#117 第 5 项] accepts only a tri-state browser observation on the lifecycle ops", () => {
+    const selection = { exportSessions: false, exportDrafts: false, exportUsage: false };
+    for (const retained of [true, false, null]) {
+      expect(validateHostTaskOp("task/cleanupPreview", { selection, browserState: { retained } })).toEqual({ ok: true });
+      expect(validateHostTaskOp("task/runCleanup", { selection, browserState: { retained } })).toEqual({ ok: true });
+      expect(validateHostTaskOp("task/archive", { browserState: { retained } })).toEqual({ ok: true });
+    }
+    for (const bad of [{}, { retained: "yes" }, { retained: 1 }, { retained: null, pages: [] }, []]) {
+      expect(validateHostTaskOp("task/cleanupPreview", { selection, browserState: bad }).ok).toBe(false);
+      expect(validateHostTaskOp("task/runCleanup", { selection, browserState: bad }).ok).toBe(false);
+      expect(validateHostTaskOp("task/archive", { browserState: bad }).ok).toBe(false);
+    }
+    // Restore carries no browser observation: restoring starts no page.
+    expect(validateHostTaskOp("task/restore", { browserState: { retained: true } }).ok).toBe(false);
+  });
   it("[PiDock 17] (#19) requires a session id for the execution state read", () => {
     expect(validateHostTaskOp("task/executionState", { sessionId: "main" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/executionState", undefined).ok).toBe(false);

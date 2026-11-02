@@ -27,6 +27,7 @@ import {
   verifyProcessIdentity,
   type ArchivePlan,
   type CleanupItemPlan,
+  type TaskBrowserObservation,
   type CleanupPlan,
   type CleanupSelection,
   type GitResourceObservation,
@@ -85,7 +86,6 @@ export interface TaskLifecycleResources {
   originalCheckoutPaths(): readonly string[];
   otherTaskDirs(): readonly string[];
   delivery(): { uncommitted: boolean; undelivered: boolean };
-  browserPages(): readonly { pageId: string; url: string }[];
   availableFiles(): readonly string[];
   availableSkills(): readonly string[];
   liveProcesses(): readonly LiveProcessObservation[];
@@ -175,7 +175,7 @@ export class TaskLifecycleHost {
    * confirmations, pause scheduling and keep every record. Usage details are
    * never touched, so archiving can neither zero nor double count tokens.
    */
-  archive(): { plan: ArchivePlan; record: LifecycleRecord } {
+  archive(browserState?: TaskBrowserObservation): { plan: ArchivePlan; record: LifecycleRecord } {
     const current = this.record();
     const sessions = this.resources.sessions();
     const plan = planArchive({
@@ -190,7 +190,7 @@ export class TaskLifecycleHost {
       kept: {
         worktrees: this.resources.worktrees().length,
         protocolBindings: 0,
-        browserPages: this.resources.browserPages().length,
+        browserRetained: browserState?.retained ?? null,
         templateVersion: null,
       },
       usageDetails: this.resources.usageCount(),
@@ -226,7 +226,7 @@ export class TaskLifecycleHost {
   }
 
   /** Cleanup preview, including the retain root the code copy/exports will use. */
-  cleanupPreview(input: { selection: CleanupSelection; keepRoot?: string }): CleanupPreviewView {
+  cleanupPreview(input: { selection: CleanupSelection; keepRoot?: string; browserState?: TaskBrowserObservation }): CleanupPreviewView {
     const record = this.record();
     const gate = evaluateCleanupGate({ archived: record.archived });
     if (!gate.ok) throw new Error(gate.error);
@@ -237,7 +237,9 @@ export class TaskLifecycleHost {
         sessions: this.resources.sessions().length,
         drafts: this.resources.sessions().filter((session) => session.draft !== undefined).length,
         usageRecords: this.resources.usageCount(),
-        browserPages: this.resources.browserPages().length,
+        // Main's observation of its own persistent partition; `null` when main
+        // did not stamp one (the preview then says so instead of showing zero).
+        browserRetained: input.browserState?.retained ?? null,
         terminals: this.resources.terminals().length,
       },
       worktree: this.resources.worktrees().length > 0,
@@ -263,7 +265,7 @@ export class TaskLifecycleHost {
    * keeps the registration, the kept position and one recovery entry per
    * failed item.
    */
-  runCleanup(input: { selection: CleanupSelection; keepRoot?: string }): CleanupRunResult {
+  runCleanup(input: { selection: CleanupSelection; keepRoot?: string; browserState?: TaskBrowserObservation }): CleanupRunResult {
     const preview = this.cleanupPreview(input);
     const kept = this.resources.keepAndExport({ selection: input.selection, keepRoot: preview.keepRoot });
     const outcomes: { id: string; ok: boolean; reason?: string }[] = [];
@@ -463,7 +465,6 @@ export class TaskLifecycleHost {
             approvals: session.approvals,
           })),
           services: this.resources.services().map((service) => ({ serviceId: service.serviceId, running: service.running })),
-          browserPages: this.resources.browserPages(),
         },
       ],
       availableFiles: this.resources.availableFiles(),

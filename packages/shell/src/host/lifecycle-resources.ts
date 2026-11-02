@@ -264,10 +264,10 @@ export function createLifecycleResources(input: LifecycleResourceInput): TaskLif
     },
     otherTaskDirs: () => otherTaskDirs(input),
     delivery: () => deliveryOf(input),
-    // Browser persistent partitions are owned by main; the Host cannot
-    // enumerate this task's pages, so the cleanup scope shows none here until
-    // main supplies them (recorded residual, never a silent pass).
-    browserPages: () => [],
+    // [#117 第 5 项] No `browserPages` probe: the persistent partition is
+    // main's, so page/retention facts reach the lifecycle state machine as an
+    // injected observation (`TaskBrowserObservation`) on the calls that need
+    // them, never as a Host-side `() => []` that reads like "nothing there".
     availableFiles: () => [],
     availableSkills: () => [],
     liveProcesses: () => (input.liveProcesses ?? readLiveProcesses)(),
@@ -285,9 +285,6 @@ export function createLifecycleResources(input: LifecycleResourceInput): TaskLif
         // Terminal records live in memory only (no spawner yet): quitting drops
         // them, so there is no persisted terminal data left for cleanup.
         return { ok: true, reason: "终端记录只在内存中，随 Host 生命周期结束，无持久数据可移除" };
-      }
-      if (itemId === "browser") {
-        return { ok: false, reason: "浏览器持久分区数据由 main 侧持有，本切片未接线移除，保留任务登记与恢复入口" };
       }
       return { ok: false, reason: `未接线：${itemId}` };
     },

@@ -304,6 +304,20 @@ function terminalSessionsFor(taskId: string): TaskTerminalSessions | { error: st
 // task's folder or a renderer-chosen path.
 let taskLifecycle: TaskLifecycleHost | null = null;
 
+/**
+ * [#117 第 5 项] Browser state belongs to main's persistent partition, so the
+ * Host only ever forwards an observation main stamped onto the op
+ * (`task/archive` / `task/cleanupPreview` / `task/runCleanup`). A missing or
+ * malformed observation becomes `null` = "not observed", which keeps the
+ * lifecycle wording from claiming data it never saw.
+ */
+function browserStateOf(record: Record<string, unknown>): { retained: boolean | null } {
+  const value = record["browserState"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return { retained: null };
+  const retained = (value as Record<string, unknown>)["retained"];
+  return { retained: retained === true || retained === false ? retained : null };
+}
+
 function lifecycleFor(taskId: string): TaskLifecycleHost | { error: string } {
   const host = taskHostFor(taskId);
   if ("error" in host) return host;
@@ -2176,7 +2190,7 @@ async function performTaskOp(
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         try {
           if (op === "task/archive") {
-            const archived = lifecycle.archive();
+            const archived = lifecycle.archive(browserStateOf(record));
             // [PiDock 18] (#20) box 6: archiving pauses this task's schedules too.
             const pausedSchedules = host.pauseSchedulesForArchive();
             return { ok: true, payload: { lifecycle: archived.record, plan: archived.plan, pausedSchedules } };
@@ -2249,7 +2263,7 @@ async function performTaskOp(
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         const selection = record["selection"] as { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
         try {
-          return { ok: true, payload: { preview: lifecycle.cleanupPreview({ selection, keepRoot: record["keepRoot"] as string | undefined }) } };
+          return { ok: true, payload: { preview: lifecycle.cleanupPreview({ selection, keepRoot: record["keepRoot"] as string | undefined, browserState: browserStateOf(record) }) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -2264,7 +2278,7 @@ async function performTaskOp(
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         const selection = record["selection"] as { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
         try {
-          return { ok: true, payload: { cleanup: lifecycle.runCleanup({ selection, keepRoot: record["keepRoot"] as string | undefined }) } };
+          return { ok: true, payload: { cleanup: lifecycle.runCleanup({ selection, keepRoot: record["keepRoot"] as string | undefined, browserState: browserStateOf(record) }) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }

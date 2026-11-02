@@ -398,6 +398,24 @@ export function planExplicitQuit(input: {
   return { steps, failures, retainedTasks: [...new Set(retainedTasks)].sort() };
 }
 
+/**
+ * Main's observation of one task's persistent browser partition ([PiDock 14]
+ * #17 box 6/#117 第 5 项). Main owns the Electron partition, so the Host reads
+ * retention only as an injected observation: it never enumerates pages itself
+ * and never claims data it did not observe (`null` = main could not read the
+ * partition path, which is not the same as "nothing retained").
+ */
+export interface TaskBrowserObservation {
+  readonly retained: boolean | null;
+}
+
+/** Archive wording for browser state: only what main actually observed. */
+export function archiveBrowserKept(retained: boolean | null): string {
+  if (retained === true) return "浏览器持久分区数据保留在磁盘（持久分区由 main 持有；页面身份不可枚举）";
+  if (retained === false) return "本任务没有浏览器持久分区，无需保留";
+  return "浏览器持久分区状态未读取：不主张已保留";
+}
+
 export interface VersionedRecordKeep {
   label: string;
   detail: string;
@@ -411,7 +429,8 @@ export interface ArchiveInput {
   kept: {
     worktrees: number;
     protocolBindings: number;
-    browserPages: number;
+    /** Main's observation of this task's persistent browser partition. */
+    browserRetained: boolean | null;
     templateVersion: string | null;
   };
   usageDetails: number;
@@ -453,7 +472,7 @@ export function planArchive(input: ArchiveInput): ArchivePlan {
       { label: "会话与草稿", detail: `${input.sessions.length} 个会话及其结构化草稿保留` },
       { label: "模板版本", detail: input.kept.templateVersion === null ? "未记录模板版本" : `保留模板版本 ${input.kept.templateVersion}` },
       { label: "生成绑定记录", detail: `${input.kept.protocolBindings} 条协议生成／消费者绑定记录保留` },
-      { label: "浏览器状态", detail: `${input.kept.browserPages} 个任务页面的持久状态保留` },
+      { label: "浏览器状态", detail: archiveBrowserKept(input.kept.browserRetained) },
     ],
     usage: { detailsBefore: input.usageDetails, detailsAfter: input.usageDetails, preserved: true },
     scheduleResumedOnRestore: false,
@@ -582,7 +601,7 @@ export function cleanupSelectionLabels(selection: CleanupSelection): string[] {
 export function previewCleanup(input: {
   archived: boolean;
   code: { uncommitted: boolean; undelivered: boolean };
-  counts: { sessions: number; drafts: number; usageRecords: number; browserPages: number; terminals: number };
+  counts: { sessions: number; drafts: number; usageRecords: number; browserRetained: boolean | null; terminals: number };
   worktree: boolean;
   links: readonly { linkName: string; sourcePath: string }[];
   selection: CleanupSelection;
@@ -634,13 +653,20 @@ export function previewCleanup(input: {
         : `处理范围为这 ${input.counts.usageRecords} 条用量记录；未选择导出时将被移除，且不会静默改写其他任务的统计`,
     });
   }
-  if (input.counts.browserPages > 0) {
+  // #117 第 5 项: browser data lives in main's persistent partition, so the
+  // cleanup preview never claims a removal the Host cannot perform. A real
+  // observation (main stamps `browserState`) either reports the partition as
+  // KEPT with the reason, or states that it was not observed at all — never a
+  // silent zero for data that may well be on disk.
+  if (input.counts.browserRetained === true) {
     items.push({
       id: "browser",
-      resource: `浏览器状态（${input.counts.browserPages} 个页面）`,
-      disposition: "remove",
-      detail: "移除该任务持久分区页面数据；任务页与 PiDock 自有界面分属不同信任范围",
+      resource: "浏览器持久分区数据",
+      disposition: "keep",
+      detail: "持久分区由 main 持有：本次清理不移除浏览器数据（移除由 main 执行，尚未接线，ref #117 第 5 项），任务登记仍会解除",
     });
+  } else if (input.counts.browserRetained === null) {
+    warnings.push("浏览器持久分区状态未读取（持久分区由 main 持有）：本次清理不处理浏览器数据，也不主张它已被移除");
   }
   if (input.counts.terminals > 0) {
     items.push({ id: "terminals", resource: `终端（${input.counts.terminals} 个）`, disposition: "remove", detail: "终端记录随任务清理移除" });
@@ -824,7 +850,6 @@ export interface RelaunchInput {
     archived: boolean;
     sessions: readonly RelaunchSessionInput[];
     services: readonly { serviceId: string; running: boolean }[];
-    browserPages: readonly { pageId: string; url: string }[];
   }[];
   availableFiles: readonly string[];
   availableSkills: readonly string[];
@@ -859,7 +884,13 @@ export interface RelaunchPlan {
     taskId: string;
     archived: boolean;
     sessions: RestoredSession[];
-    browser: { pageId: string; url: string; restored: true }[];
+    /**
+     * Restore never reopens browser pages: page identity lives in main's
+     * persistent partition and cannot be enumerated ([PiDock 14] #17 box 6,
+     * #117 第 5 项). Reported as an explicit `false`, never as an empty list of
+     * "restored" pages.
+     */
+    browserRestored: false;
     services: { serviceId: string; action: "start-on-demand"; autoConnect: false; detail: string }[];
   }[];
   warnings: string[];
@@ -954,7 +985,7 @@ export function planRelaunch(input: RelaunchInput): RelaunchPlan {
       taskId: task.taskId,
       archived: task.archived,
       sessions,
-      browser: task.browserPages.map((page) => ({ pageId: page.pageId, url: page.url, restored: true as const })),
+      browserRestored: false as const,
       services: task.services.map((service) => ({
         serviceId: service.serviceId,
         action: "start-on-demand" as const,
