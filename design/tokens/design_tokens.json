@@ -1,0 +1,539 @@
+{
+  "$schema": "https://www.designtokens.org/schemas/2025.10/format.json",
+  "$description": "A calm, factual desktop workbench for running coding agents across projects, tasks and sessions. Warm paper surfaces, ink-blue interaction, text-first status.",
+  "color": {
+    "$type": "color",
+    "canvas": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.969,
+          0.969,
+          0.957
+        ],
+        "hex": "#f7f7f4"
+      }
+    },
+    "surface": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          1,
+          1,
+          1
+        ],
+        "hex": "#ffffff"
+      }
+    },
+    "surface-sunken": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.937,
+          0.937,
+          0.918
+        ],
+        "hex": "#efefea"
+      }
+    },
+    "sidebar": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.945,
+          0.945,
+          0.925
+        ],
+        "hex": "#f1f1ec"
+      }
+    },
+    "code-surface": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.953,
+          0.953,
+          0.937
+        ],
+        "hex": "#f3f3ef"
+      }
+    },
+    "ink": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.09,
+          0.098,
+          0.11
+        ],
+        "hex": "#17191c"
+      }
+    },
+    "ink-secondary": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.243,
+          0.278,
+          0.314
+        ],
+        "hex": "#3e4750"
+      }
+    },
+    "muted": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.4,
+          0.439,
+          0.478
+        ],
+        "hex": "#66707a"
+      }
+    },
+    "line": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.89,
+          0.886,
+          0.863
+        ],
+        "hex": "#e3e2dc"
+      }
+    },
+    "line-strong": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.812,
+          0.812,
+          0.78
+        ],
+        "hex": "#cfcfc7"
+      }
+    },
+    "primary": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.169,
+          0.29,
+          0.796
+        ],
+        "hex": "#2b4acb"
+      }
+    },
+    "primary-hover": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.122,
+          0.227,
+          0.659
+        ],
+        "hex": "#1f3aa8"
+      }
+    },
+    "primary-soft": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.914,
+          0.933,
+          0.988
+        ],
+        "hex": "#e9eefc"
+      }
+    },
+    "on-primary": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          1,
+          1,
+          1
+        ],
+        "hex": "#ffffff"
+      }
+    },
+    "attention": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.541,
+          0.325,
+          0
+        ],
+        "hex": "#8a5300"
+      }
+    },
+    "attention-soft": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.984,
+          0.941,
+          0.863
+        ],
+        "hex": "#fbf0dc"
+      }
+    },
+    "danger": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.663,
+          0.212,
+          0.188
+        ],
+        "hex": "#a93630"
+      }
+    },
+    "danger-soft": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.984,
+          0.918,
+          0.91
+        ],
+        "hex": "#fbeae8"
+      }
+    },
+    "settled": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.184,
+          0.282,
+          0.345
+        ],
+        "hex": "#2f4858"
+      }
+    },
+    "settled-soft": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.91,
+          0.929,
+          0.941
+        ],
+        "hex": "#e8edf0"
+      }
+    },
+    "overlay": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.09,
+          0.098,
+          0.11
+        ],
+        "hex": "#17191cbd"
+      }
+    },
+    "focus": {
+      "$value": {
+        "colorSpace": "srgb",
+        "components": [
+          0.306,
+          0.42,
+          0.878
+        ],
+        "hex": "#4e6be0"
+      }
+    }
+  },
+  "spacing": {
+    "$type": "dimension",
+    "xxs": {
+      "$value": {
+        "value": 4,
+        "unit": "px"
+      }
+    },
+    "xs": {
+      "$value": {
+        "value": 8,
+        "unit": "px"
+      }
+    },
+    "sm": {
+      "$value": {
+        "value": 12,
+        "unit": "px"
+      }
+    },
+    "md": {
+      "$value": {
+        "value": 16,
+        "unit": "px"
+      }
+    },
+    "lg": {
+      "$value": {
+        "value": 24,
+        "unit": "px"
+      }
+    },
+    "xl": {
+      "$value": {
+        "value": 32,
+        "unit": "px"
+      }
+    },
+    "2xl": {
+      "$value": {
+        "value": 40,
+        "unit": "px"
+      }
+    },
+    "3xl": {
+      "$value": {
+        "value": 56,
+        "unit": "px"
+      }
+    },
+    "4xl": {
+      "$value": {
+        "value": 72,
+        "unit": "px"
+      }
+    }
+  },
+  "rounded": {
+    "$type": "dimension",
+    "xs": {
+      "$value": {
+        "value": 4,
+        "unit": "px"
+      }
+    },
+    "sm": {
+      "$value": {
+        "value": 6,
+        "unit": "px"
+      }
+    },
+    "md": {
+      "$value": {
+        "value": 8,
+        "unit": "px"
+      }
+    },
+    "lg": {
+      "$value": {
+        "value": 10,
+        "unit": "px"
+      }
+    },
+    "xl": {
+      "$value": {
+        "value": 14,
+        "unit": "px"
+      }
+    },
+    "full": {
+      "$value": {
+        "value": 9999,
+        "unit": "px"
+      }
+    }
+  },
+  "typography": {
+    "display": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 30,
+          "unit": "px"
+        },
+        "fontWeight": 600,
+        "letterSpacing": {
+          "value": -0.02,
+          "unit": "em"
+        },
+        "lineHeight": 38
+      }
+    },
+    "title-lg": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 24,
+          "unit": "px"
+        },
+        "fontWeight": 600,
+        "letterSpacing": {
+          "value": -0.01,
+          "unit": "em"
+        },
+        "lineHeight": 32
+      }
+    },
+    "title-md": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 20,
+          "unit": "px"
+        },
+        "fontWeight": 600,
+        "letterSpacing": {
+          "value": -0.01,
+          "unit": "em"
+        },
+        "lineHeight": 28
+      }
+    },
+    "title-sm": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 16,
+          "unit": "px"
+        },
+        "fontWeight": 600,
+        "letterSpacing": {
+          "value": 0,
+          "unit": "em"
+        },
+        "lineHeight": 24
+      }
+    },
+    "body": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 14,
+          "unit": "px"
+        },
+        "fontWeight": 400,
+        "letterSpacing": {
+          "value": 0,
+          "unit": "em"
+        },
+        "lineHeight": 22
+      }
+    },
+    "body-strong": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 14,
+          "unit": "px"
+        },
+        "fontWeight": 500,
+        "letterSpacing": {
+          "value": 0,
+          "unit": "em"
+        },
+        "lineHeight": 22
+      }
+    },
+    "meta": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 12,
+          "unit": "px"
+        },
+        "fontWeight": 400,
+        "letterSpacing": {
+          "value": 0,
+          "unit": "em"
+        },
+        "lineHeight": 18
+      }
+    },
+    "label": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 12,
+          "unit": "px"
+        },
+        "fontWeight": 500,
+        "letterSpacing": {
+          "value": 0.01,
+          "unit": "em"
+        },
+        "lineHeight": 16
+      }
+    },
+    "eyebrow": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 11,
+          "unit": "px"
+        },
+        "fontWeight": 600,
+        "letterSpacing": {
+          "value": 0.08,
+          "unit": "em"
+        },
+        "lineHeight": 16
+      }
+    },
+    "button": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+        "fontSize": {
+          "value": 13,
+          "unit": "px"
+        },
+        "fontWeight": 500,
+        "letterSpacing": {
+          "value": 0,
+          "unit": "em"
+        },
+        "lineHeight": 20
+      }
+    },
+    "mono": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "JetBrains Mono, SFMono-Regular, Menlo, monospace",
+        "fontSize": {
+          "value": 12,
+          "unit": "px"
+        },
+        "fontWeight": 400,
+        "letterSpacing": {
+          "value": 0,
+          "unit": "em"
+        },
+        "lineHeight": 18
+      }
+    },
+    "mono-strong": {
+      "$type": "typography",
+      "$value": {
+        "fontFamily": "JetBrains Mono, SFMono-Regular, Menlo, monospace",
+        "fontSize": {
+          "value": 12,
+          "unit": "px"
+        },
+        "fontWeight": 500,
+        "letterSpacing": {
+          "value": 0,
+          "unit": "em"
+        },
+        "lineHeight": 18
+      }
+    }
+  }
+}
