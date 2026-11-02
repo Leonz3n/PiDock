@@ -40,6 +40,17 @@ Electron 自带 Node，不能将两者独立升级。2026-09-22 官方 npm lates
 
 首个实现应锁定经过验证的 44.x 补丁版；44+ 不写成无限制依赖范围。后续主版本升级须核对内置 Node、pi engines、SQLite/PTY 等原生依赖，以及两平台安装包。记录 main 和 utilityProcess 的实际 process.versions。
 
+## Pi 1.4 接入约束（2026-11-02）
+
+Pi 直接依赖同步精确固定为 `@earendil-works/pi-coding-agent@1.4.0` 与 `@earendil-works/pi-ai@1.4.0`，随项目 lockfile 分发。完整依据与验证见 [Pi 更新适配报告](pi-1.4-upgrade-review.md)；本节覆盖旧 Pi 调研中与其冲突的技术假设。
+
+- 保持 main / 每任务 Agent Host / 隔离 SDK 模型 worker / sandbox renderer 的现有边界。Pi 的 TUI、终端状态报告与全局 CLI 更新不进入 PiDock 产品界面；按 #95 已撤销的内置终端不因上游变化恢复。
+- MCP 协议接入优先复用 Pi 原生扩展，撤销自建 MCP bridge 的旧方案。SDK 需要显式装配扩展并绑定会话生命周期；当前生产仍使用空资源 loader 与 Host 受管工具集合，未自动启用 MCP、codemode 或第三方扩展。
+- 继续核对全部注册工具与活跃工具。以后启用 deferred/codemode 时，嵌套调用也必须经过同一权限门禁、任务协调和资源回收；不能仅依赖顶层工具名过滤。
+- 以 `agent_settled` / `waitForIdle` 作为运行结束边界，采纳 `aborted` 标志区分取消。最终 `length` 回复保留文本与 usage，但回合标为 `sdk-output-truncated`，不自动重放。
+- Pi JSONL 继续承载会话树与模型上下文，PiDock 承载绑定、ACK、幂等与展示投影；SDK 新增的模型、工具内调用和摘要 usage 不自动等同于已接通 PiDock 账本。
+- Pi 1.2 已删除旧实验 server/client/plugin，未来远程接入仍须走 PiDock 领域 API 与设备授权。远程访问已按 #126 移出首版，本次升级不恢复桌面入口与 `task/remote*` 通道；SDK/stdio RPC 只作为本机适配边界。
+
 ## 固定进程边界
 
 **AgentSession 放 Node utility process，Chromium/CDP 管理留 Electron main，React renderer 完全 sandbox。** Chromium 网页本身在 Chromium 渲染子进程运行；main 管的是视图/session 生命周期和调试连接。

@@ -22,7 +22,7 @@ import {
 type SdkTextEventData =
   | { type: "delta"; text: string }
   | { type: "message_end"; text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null; error?: string }
-  | { type: "agent_settled" };
+  | { type: "agent_settled"; aborted?: boolean };
 
 export type SdkTextEvent = SdkTextEventData & {
   taskId: string;
@@ -272,12 +272,13 @@ export class PiSdkTextKernel {
         emit({ type: "delta", text: event.assistantMessageEvent.delta });
       } else if (event.type === "message_end" && event.message.role === "assistant") {
         textResult = event.message.content.filter((part) => part.type === "text").map((part) => part.text).join("");
-        responseError = event.message.errorMessage;
+        responseError = event.message.errorMessage ?? (event.message.stopReason === "length" ? "sdk-output-truncated" : undefined);
         const { input, output, cacheRead, cacheWrite } = event.message.usage;
         emit({ type: "message_end", text: textResult, usage: { input, output, cacheRead, cacheWrite }, ...(responseError ? { error: responseError } : {}) });
       } else if (event.type === "agent_settled") {
         settled = true;
-        emit({ type: "agent_settled" });
+        cancelled = event.aborted;
+        emit({ type: "agent_settled", aborted: event.aborted });
       }
     });
     const run = (async () => {
@@ -287,7 +288,8 @@ export class PiSdkTextKernel {
     this.active.set(sessionId, run);
     try {
       await run;
-      cancelled = session.messages.some((message) => message.role === "assistant" && message.stopReason === "aborted" && message === session.messages.at(-1));
+      // Pi 1.1+ reports cancellation at the run boundary, including aborts
+      // during preflight that never produced an assistant message.
       const error = deliveryError ? "sdk-event-delivery-failed" : cancelled ? undefined : responseError ?? (!settled ? "sdk-not-settled" : !textResult.trim() ? "sdk-empty-response" : undefined);
       return { state: error ? "failed" : cancelled ? "cancelled" : "done", text: textResult, events, ...(error ? { error } : {}) };
     } catch (error) {

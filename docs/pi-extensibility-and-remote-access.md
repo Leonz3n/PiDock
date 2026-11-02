@@ -1,5 +1,7 @@
 # Pi 扩展管理与远程访问能力调研
 
+> 2026-11-02 更新：实现基线已升级为 Pi **1.4.0**。完整更新影响、实际代码变更与验证边界见 [Pi 1.4 适配报告](pi-1.4-upgrade-review.md)。下列旧提交链接保留作历史依据；MCP 与实验远程栈的当前结论已在本文更正。远程访问已按 [#126](https://github.com/Leonz3n/PiDock/issues/126) 移出首版，本文的远程方案与“推荐 MVP”等旧表述仅作未来设计参考，不恢复正式桌面入口或通道。
+
 调研日期：2026-09-21。本文只读核对 `badlogic/pi-mono` 的官方文档与源码，固定到提交 [`890f920`](https://github.com/badlogic/pi-mono/tree/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8)。当前源码中的 npm 包名为 `@earendil-works/pi-coding-agent`。本文未安装第三方包、未连接 MCP Server，也未运行实验性远程 harness；实现时应固定 Pi 版本并做兼容性测试。
 
 ## 结论
@@ -9,12 +11,12 @@
 | Skills | **原生支持**。Pi 实现 Agent Skills 标准，可从用户、项目、package、settings 和 CLI 路径发现技能，并支持 `/skill:name` 与 reload；技能内容可带脚本并指示模型执行任意动作。[Skills](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/docs/skills.md) | 可以做来源、作用域、启停、校验错误和冲突可见的管理界面；编辑/创建仍是 PiDock 提供的文件管理体验，不是 Pi 已有的桌面管理器。 |
 | Extensions | **原生支持**。TypeScript extension 可注册工具、命令、Provider，拦截生命周期和工具调用，并能动态启停工具；extension 以当前用户的完整系统权限执行任意代码。[Extensions](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/docs/extensions.md) | 可以管理安装、作用域、启停、状态和 reload；必须把它视为可执行软件，而不是无害配置。 |
 | Packages / “Plugins” | **原生支持 Pi Packages**，可通过 npm、git 或本地路径安装、移除、更新和列出，并可组合 extensions、skills、prompts、themes 及逐类过滤。[Pi Packages](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/docs/packages.md) | 产品术语建议用“扩展包（Pi Package）”，不要把稳定 Pi Package 与源码中的实验性 presentation plugin 混为一谈。 |
-| MCP | **无内置 MCP**。官方 README 明确写明 “No MCP”，并建议通过 extension 增加 MCP 支持。[Philosophy](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/README.md#philosophy) | 可实现，但应由 PiDock 提供一个受控 MCP bridge extension；不能把“MCP 原生支持”写进产品说明。 |
+| MCP | **自 0.99 起原生支持** stdio / Streamable HTTP、OAuth、工具与资源；SDK 需显式装配 `createMcpExtension()`，不是默认加载。[MCP 1.4](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/mcp.md) | 复用上游协议实现，PiDock 提供受控配置、授权和生命周期接入；当前生产空资源 loader 尚未启用 MCP，不能写成已交付。 |
 | 本机嵌入 | **原生支持**进程内 `AgentSession` SDK；官方推荐同一 Node.js/TypeScript 进程直接使用 SDK。[SDK](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/docs/sdk.md) | PiDock 后端优先直接嵌入 SDK，并在自己的领域层管理项目、任务和多个会话。 |
 | 子进程接入 | **原生支持**基于 stdin/stdout 的 JSONL RPC，可发起对话、读取消息/会话树、排队、取消、压缩、切换会话和查询命令。[RPC mode](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/docs/rpc.md) | 可作为 worker 进程隔离边界，但它不是 HTTP/WebSocket 服务，也不包含网络认证、设备管理或项目/任务 API。 |
-| 远程/服务器模式 | **目前无可依赖的稳定成品**。官方 remote harness 明确为 development-only，只在源码 checkout 的 `source` condition 下提供，且不进入 npm 包和独立二进制。[Development](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/docs/development.md#experimental-remote-harness) | 手机远程访问需要 PiDock 自己的 Agent Host、Web API、实时通道、认证授权和代理服务，不能直接暴露 Pi RPC 或依赖实验 harness。 |
+| 远程/服务器模式 | **1.2 已删除旧实验 server/client/plugin 栈及相关包**。稳定 SDK 和 stdio RPC 继续支持本机集成；没有可直接替代 PiDock 设备与任务 API 的发布接口。[Changelog](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/CHANGELOG.md#120---2026-10-12) | 手机远程访问继续由 PiDock 的 Host、领域 API、认证授权和 Gateway 承担；不能依赖旧实验 harness。 |
 
-因此，用户提出的两组功能都能实现，但含义不同：资源管理主要是对 Pi 稳定 SDK/包机制做产品化；MCP 和手机远程控制则是 PiDock 新增的系统能力。
+资源管理和 MCP 接入应优先复用 Pi 稳定 SDK 与内置扩展，并由 PiDock 做桌面产品化；手机远程控制继续属于 PiDock 自身的系统能力。
 
 ## 资源管理应如何接入
 
@@ -33,9 +35,11 @@ Pi 已经暴露了足够的程序化接口，不需要通过解析 CLI 文本来
 
 ## MCP 实现边界
 
-Pi 没有 MCP client、MCP Server 配置模型或 MCP 管理 UI。可行方案是一个由 PiDock 维护的 MCP bridge extension：连接配置由 PiDock 保存；extension 按 MCP 协议发现工具，把 JSON Schema 映射为 `pi.registerTool()`，调用时转发给对应 Server。Pi 支持启动后动态注册工具以及用 `setActiveTools()` 启停，适合在连接变化后更新当前会话的工具集合。[Dynamic tools](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/docs/extensions.md#dynamic-tool-loading)
+Pi 1.4 已提供 MCP client、`mcp.json`、`/mcp` 管理与 `createMcpExtension()`。撤销早期自建 MCP 协议 bridge 的方案，优先复用官方 [SDK 装配示例](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/examples/sdk/14-codemode-mcp.ts)。PiDock 仍负责明确的配置来源、凭据、门禁、资源归属与退出回执；不能直接将 CLI 的全局/项目资源发现接入当前隔离 worker。
 
-首版只桥接 MCP tools。MCP prompts、resources、sampling、elicitation 等不是 Pi 工具注册的同义概念，应逐项设计，不能宣称自动兼容全部 MCP 能力。传输和生命周期应遵循 MCP 的 client-host-server 边界，由 PiDock 作为 host 隔离 Server，并明确本地 `stdio` 与远程 Streamable HTTP 的凭据和信任差异。[MCP architecture](https://modelcontextprotocol.io/specification/2025-06-18/architecture)
+启停工具的可见性不能代替执行授权：codemode 可以调用不在活跃集合里的工具，MCP 的 deferred 工具可经搜索加载。未来所有直接、延迟与嵌套调用均须进入统一权限路径。当前生产继续使用空资源 loader 和精确注册/活跃工具校验，未启用 MCP/codemode。
+
+Pi 1.4 已有 MCP tools 与 resources 支持，包括资源列表、模板列表和读取；它不渲染 MCP Apps。PiDock 接入时仍应逐项验收，不能据此宣称 prompts、sampling、elicitation 等全部协议能力或桌面 UI 已自动兼容。传输和生命周期遵循 MCP 的 client-host-server 边界，并明确本地 stdio 与远程 Streamable HTTP 的凭据和信任差异。[MCP 1.4](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/docs/mcp.md)
 
 每个 MCP Server 配置至少包含稳定 ID、显示名、传输、启动命令或 URL、凭据引用、工作目录、环境变量白名单、全局/项目作用域、启用状态、超时和可用工具清单。工具名需要加 Server 命名空间并检测冲突；Server 断开时立即停用对应工具，不能让模型继续看到不可调用的旧 schema。
 
@@ -59,6 +63,8 @@ PiDock Agent Host（桌面常驻控制面）
 桌面端主动建立出站连接可以穿过多数 NAT，避免让用户开放本机端口。Relay 只负责认证后的路由、短期离线信令和连接状态；项目目录、Provider 凭据、MCP secret、完整文件内容和 extension 代码默认留在桌面。若 Relay 需要缓存消息，应把保存范围、保留期和加密边界做成明确策略，而不是默认同步所有会话。
 
 稳定 Pi RPC 已经具备远程 UI 所需的部分会话原语，例如 `get_state`、`get_messages`、`get_entries`、`get_tree`、`prompt`、`steer`、`follow_up`、`abort` 和事件流。[RPC commands](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/docs/rpc.md#commands) 但项目、任务、工作区、设备、权限和审计属于 PiDock；应由 PiDock API 聚合后向手机提供稳定 DTO，不让移动端依赖 Pi 的内部 session 格式。
+
+以下两段是旧实验栈的历史取舍记录；该栈自 Pi 1.2 起已删除，不能作为后续实现候选。
 
 官方实验 harness 即使已有 Unix socket 和可选 relay 代码，也不适合作为捷径：它被明确排除在发布物外；其服务清单还把“authenticated workspace authorization”和“authenticated plugin policy”列为后续工作。[Experimental service status](https://github.com/badlogic/pi-mono/blob/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8/packages/coding-agent/src/experimental/services/README.md)
 

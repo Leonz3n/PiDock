@@ -90,7 +90,7 @@ async function kernel(dir: string, onPrompt?: (texts: string[]) => string, selec
         partial.content.push(text);
         if (response) stream.push({ type: "text_delta", contentIndex: 0, delta: response, partial });
         stream.push({ type: "text_end", contentIndex: 0, content: response, partial });
-        stream.push({ type: "done", reason: "stop", message: { ...partial, stopReason: "stop" } });
+        stream.push({ type: "done", reason: response === "length" ? "length" : "stop", message: { ...partial, stopReason: response === "length" ? "length" : "stop" } });
       });
       return stream;
     },
@@ -303,6 +303,21 @@ it("does not replay an interrupted user entry on cold reopen", async () => {
   }
 });
 
+it("preserves a token-limited reply but records the turn as incomplete across reopen", async () => {
+  const dir = task("task-truncated");
+  const fake = await kernel(dir, () => "length");
+  const transport = new SdkTurnTransport("task-truncated", dir, fake.instance);
+  await transport.start("main", "limited", "hello", () => {});
+  await vi.waitFor(() => expect(transport.status("main", "limited")).toMatchObject({
+    state: "failed", error: "sdk-output-truncated",
+  }));
+  expect(transport.projection("main").messages.at(-1)).toMatchObject({ role: "assistant", text: "length" });
+  await fake.instance.dispose();
+  const cold = new SdkTurnTransport("task-truncated", dir, new PiSdkTextKernel("task-truncated", dir));
+  expect(cold.status("main", "limited")).toMatchObject({ state: "failed", error: "sdk-output-truncated" });
+  expect(cold.projection("main").messages.at(-1)).toMatchObject({ role: "assistant", text: "length" });
+});
+
 it("binds every callback event to an ordered unique turn and exact task session", async () => {
   const dir = task("task-a");
   const fake = await kernel(dir);
@@ -336,6 +351,7 @@ it("streams real SDK events, persists exact context and never enables tools", as
   expect(events).toContain("delta");
   expect(events).toContain("message_end");
   expect(events).toContain("agent_settled");
+  expect(first.events.find((event) => event.type === "agent_settled")).toMatchObject({ aborted: false });
   expect(first.events.find((event) => event.type === "message_end")).toMatchObject({ usage: { input: 4, output: 2 } });
   await one.instance.dispose();
   const two = await kernel(dir, () => "reply-again");
@@ -457,6 +473,7 @@ it("aborts a pending SDK stream, guards concurrent task prompts and surfaces cal
   await pending.instance.cancel("main");
   const aborted = await run;
   expect(aborted.state).toBe("cancelled");
+  expect(aborted.events.find((event) => event.type === "agent_settled")).toMatchObject({ aborted: true });
   expect(observed).toEqual(aborted.events);
   expect(new Set(aborted.events.map((event) => event.turnId)).size).toBe(1);
   for (const event of aborted.events) expect(event).toMatchObject({ taskId: "task-a", sessionId: "main", turnId: aborted.events[0]?.turnId });
