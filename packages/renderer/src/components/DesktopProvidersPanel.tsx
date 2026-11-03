@@ -3,12 +3,17 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import {
   CREDENTIAL_TEXT,
+  COST_FIELDS,
+  COST_LABELS,
+  EMPTY_COST,
   EMPTY_PROVIDER_DRAFT,
   LEVEL_TEXT,
   NATIVE_STATE_TEXT,
   PROVIDER_PROTOCOLS,
   PROVIDER_STATE_TEXT,
   REASONING_LEVELS,
+  defaultThinkingLevel,
+  discoveryMisses,
   draftFromView,
   draftIssues,
   draftRequest,
@@ -41,8 +46,9 @@ const mono = "font-mono text-[11px] break-all";
 
 /** Presets only fill the form; the protocol is always the one shown in the select. */
 type Preset = { key: string; name: string; notes: string; protocol: string; baseUrl: string; models: Row[] };
+const emptyRow = (): Row => ({ ...EMPTY_PROVIDER_DRAFT.models[0]!, cost: { ...EMPTY_COST } });
 const presetRow = (id: string, reasoning = false, levels: string[] = []): Row =>
-  ({ id, name: id, contextWindow: "128000", maxTokens: "8192", reasoning, levels, cost: "" });
+  ({ id, name: id, contextWindow: "128000", maxTokens: "8192", reasoning, levels, cost: { ...EMPTY_COST } });
 const PRESETS: Preset[] = [
   { key: "deepseek", name: "DeepSeek", notes: "OpenAI 兼容端点 · 官方预设", protocol: "openai-completions", baseUrl: "https://api.deepseek.com/v1",
     models: [presetRow("deepseek-chat"), presetRow("deepseek-reasoner", true, ["low", "medium", "high"])] },
@@ -85,8 +91,15 @@ export function DesktopProvidersPanel({
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [conflict, setConflict] = useState<{ state: string; draft: ProviderDraft } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<Record<string, string>>({});
+  /** Set when the list already names an external edit: deleting needs a second, explicit act. */
+  const [deleteConflict, setDeleteConflict] = useState<{ id: string; state: string } | null>(null);
+  /** The model/level the user picked per profile, before 选用 is pressed. */
+  const [choice, setChoice] = useState<Record<string, { modelId: string; level: string }>>({});
   const formRef = useRef<HTMLFormElement | null>(null);
+  // Reentrancy guard: `busy` is React state, so two handlers firing in the same
+  // event (the window shortcut and the form's own ⌘↵) would both see `false`
+  // and send two `save` requests. A ref flips synchronously.
+  const busyRef = useRef(false);
 
   const occupied = useMemo(() => new Set((status?.profiles ?? []).map((view) => view.baseUrl)), [status]);
   const issueFor = (name: string) => issues.find((issue) => issue.field === name)?.message;
@@ -99,13 +112,13 @@ export function DesktopProvidersPanel({
     setDraft((current) => ({
       ...(current ?? EMPTY_PROVIDER_DRAFT),
       name: preset.name, notes: preset.notes, protocol: preset.protocol as ProviderDraft["protocol"], baseUrl: preset.baseUrl,
-      models: preset.models.map((row) => ({ ...row })), modelId: preset.models[0]?.id ?? "",
+      models: preset.models.map((row) => ({ ...row, cost: { ...row.cost } })), modelId: preset.models[0]?.id ?? "",
     }));
     setIssues([]);
   };
 
   const openCreate = () => {
-    setDraft({ ...EMPTY_PROVIDER_DRAFT, models: EMPTY_PROVIDER_DRAFT.models.map((row) => ({ ...row })) });
+    setDraft({ ...EMPTY_PROVIDER_DRAFT, models: [emptyRow()] });
     setPresetKey(null);
     setIssues([]); setDiscovery(null); setProbe(null); setConflict(null); setNotice(""); setShowKey(false);
   };
@@ -137,6 +150,8 @@ export function DesktopProvidersPanel({
   }, [draft, onBack]);
 
   const save = async (current: ProviderDraft, reconcile: boolean) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       // A defining edit changes what Pi is told; the reply carries the new
@@ -155,12 +170,12 @@ export function DesktopProvidersPanel({
       await onReload();
     } catch (caught) {
       setNotice(caught instanceof Error ? caught.message : "Provider 保存失败");
-    } finally { setBusy(false); }
+    } finally { busyRef.current = false; setBusy(false); }
   };
 
   function submit() {
-    if (draft === null || busy) return;
-    const found = draftIssues(draft, status?.profiles ?? [], discovery);
+    if (draft === null || busyRef.current) return;
+    const found = draftIssues(draft, status?.profiles ?? []);
     setIssues(found);
     if (found.length > 0) { formRef.current?.querySelector<HTMLElement>("[data-invalid='true']")?.focus(); return; }
     void save(draft, false);
@@ -209,6 +224,26 @@ export function DesktopProvidersPanel({
     } finally { setBusy(false); }
   };
 
+  /**
+   * Deleting destroys the managed entry — including a version someone edited in
+   * `models.json` — so an externally changed/removed entry is named and needs a
+   * second, explicit act (main refuses it without `reconcile` anyway).
+   */
+  const requestDelete = (view: ProviderView) => {
+    setDeleteConflict(null);
+    if (view.native.state === "modified" || view.native.state === "removed") {
+      setDeleteConflict({ id: view.id, state: view.native.state });
+      setPendingDelete(null);
+      return;
+    }
+    setPendingDelete(view.id);
+  };
+  const confirmDelete = async (view: ProviderView, reconcile: boolean) => {
+    await act({ op: "remove", profileId: view.id, ...(taskId === null ? {} : { taskId }), ...(reconcile ? { reconcile: true } : {}) }, "Provider 删除失败");
+    setPendingDelete(null);
+    setDeleteConflict(null);
+  };
+
   if (draft !== null) return <ProviderForm
     draft={draft} presetKey={presetKey} issues={issues} notice={notice} conflict={conflict} busy={busy} showKey={showKey}
     discovery={discovery} probe={probe} formRef={formRef} issueFor={issueFor}
@@ -221,7 +256,7 @@ export function DesktopProvidersPanel({
       if (!row) return;
       patchRow(index, { levels: row.levels.includes(level) ? row.levels.filter((item) => item !== level) : [...row.levels, level] });
     }}
-    onAddRow={() => setDraft((current) => current === null ? current : { ...current, models: [...current.models, { ...EMPTY_PROVIDER_DRAFT.models[0]! }] })}
+    onAddRow={() => setDraft((current) => current === null ? current : { ...current, models: [...current.models, emptyRow()] })}
     onRemoveRow={(index) => setDraft((current) => {
       if (current === null) return current;
       const models = current.models.filter((_row, at) => at !== index);
@@ -230,7 +265,7 @@ export function DesktopProvidersPanel({
     onAddCandidate={(id) => {
       setDraft((current) => {
         if (current === null || current.models.some((row) => row.id === id)) return current;
-        return { ...current, models: [...current.models, { ...EMPTY_PROVIDER_DRAFT.models[0]!, id, name: id }],
+        return { ...current, models: [...current.models, { ...emptyRow(), id, name: id }],
           modelId: current.modelId === "" ? id : current.modelId };
       });
     }}
@@ -271,7 +306,17 @@ export function DesktopProvidersPanel({
           ? <p data-testid="providers-empty" className="mt-2 border border-line bg-paper px-4 py-8 text-center text-xs leading-6 text-muted">
             还没有 Provider。添加一份真实端点后，它会同时出现在这里与 Pi 的 models.json 中。
           </p>
-          : <ul className="mt-2 divide-y divide-line border-y border-line bg-paper">{status.profiles.map((view) => <li key={view.id}
+          : <ul className="mt-2 divide-y divide-line border-y border-line bg-paper">{status.profiles.map((view) => {
+              // The level shown is the one a 选用 would send: the user's pick, or
+              // main's own default (`high` when declared) — never a guess and
+              // never silently the weakest tier.
+              const chosenModelId = choice[view.id]?.modelId ?? view.modelId;
+              const chosen = view.models.find((model) => model.id === chosenModelId) ?? view.models[0]!;
+              const defaultLevel = defaultThinkingLevel(chosen.reasoningLevels);
+              const level = choice[view.id]?.level ?? defaultLevel ?? "";
+              const chosenLevel = chosen.reasoningLevels.includes(level) ? level : defaultLevel;
+              const isCurrent = status.profileId === view.id && status.state !== "not-configured";
+              return <li key={view.id}
               data-testid={`provider-card-${view.id}`} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -284,36 +329,62 @@ export function DesktopProvidersPanel({
                 <span className={`text-[10px] ${view.native.state === "synced" ? "text-muted" : "text-[#8d3b36]"}`}>
                   {NATIVE_STATE_TEXT[view.native.state]}
                 </span>
+                {isCurrent ? <span data-testid={`provider-current-${view.id}`} className="text-[10px] text-muted">
+                  当前任务已选用 · {status.modelId} · 推理 {status.thinkingLevel ? levelText(status.thinkingLevel) : "无"}
+                </span> : null}
               </div>
               {view.notes ? <p className="mt-1 text-[11px] text-muted">{view.notes}</p> : null}
               <p className={`mt-1 text-muted ${mono}`}>{view.baseUrl}</p>
               <p className="mt-1 flex flex-wrap gap-1 text-[11px] text-muted">
                 {view.models.slice(0, 4).map((model) => <span key={model.id} className="border border-line px-1.5">
-                  {model.id}{model.reasoning ? " · 推理" : ""}{model.cost === null ? "" : " · 已声明价格"}
+                  {model.id}{model.reasoning ? " · 推理" : ""}{
+                    model.reasoning && model.reasoningLevels.length === 0 ? " · 无可用档位" : ""}{
+                    model.cost === null ? "" : " · 已声明价格"}
                 </span>)}
                 {view.models.length > 4 ? <span>+{view.models.length - 4}</span> : null}
               </p>
-              <p className="mt-1 text-[10px] text-muted">默认模型：{view.modelId} · 上下文 {view.contextWindow.toLocaleString("en-US")} tokens · 最大输出 {view.maxTokens.toLocaleString("en-US")}</p>
+              <p className="mt-1 text-[10px] text-muted">默认模型：{view.modelId} · 上下文 {view.contextWindow.toLocaleString("en-US")} tokens · 最大输出 {view.maxTokens.toLocaleString("en-US")} · 默认推理档位：{defaultThinkingLevel(view.models.find((model) => model.id === view.modelId)?.reasoningLevels ?? []) === null ? "无可用档位" : levelText(defaultThinkingLevel(view.models.find((model) => model.id === view.modelId)?.reasoningLevels ?? [])!)}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <select aria-label={`选用模型（${view.name}）`} className={field} value={selectedModel[view.id] ?? view.modelId}
-                onChange={(event) => setSelectedModel((current) => ({ ...current, [view.id]: event.target.value }))}>
+              <select aria-label={`选用模型（${view.name}）`} className={field} value={chosenModelId}
+                onChange={(event) => {
+                  const model = view.models.find((row) => row.id === event.target.value);
+                  setChoice((current) => ({ ...current, [view.id]: {
+                    modelId: event.target.value,
+                    level: defaultThinkingLevel(model?.reasoningLevels ?? []) ?? "",
+                  } }));
+                }}>
                 {view.models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
               </select>
-              <Button type="button" disabled={busy || taskId === null}
-                title={taskId === null ? "请先打开一个任务" : undefined}
-                onClick={() => void act({ op: "select", ...(taskId === null ? {} : { taskId }), profileId: view.id, modelId: selectedModel[view.id] ?? view.modelId }, "Provider 选用失败")}>
+              {chosen.reasoningLevels.length === 0
+                ? <span data-testid={`provider-levels-missing-${view.id}`} className="text-[10px] text-[#8d3b36]">无可用档位</span>
+                : <select aria-label={`推理档位（${view.name}）`} className={field} value={chosenLevel ?? ""}
+                    onChange={(event) => setChoice((current) => ({ ...current, [view.id]: { modelId: chosenModelId, level: event.target.value } }))}>
+                    {chosen.reasoningLevels.map((option) => <option key={option} value={option}>{levelText(option)}</option>)}
+                  </select>}
+              <Button type="button" disabled={busy || taskId === null || chosen.reasoningLevels.length === 0}
+                title={taskId === null ? "请先打开一个任务" : chosen.reasoningLevels.length === 0 ? "这个模型没有可用推理档位，无法选用" : undefined}
+                onClick={() => void act({ op: "select", ...(taskId === null ? {} : { taskId }), profileId: view.id, modelId: chosenModelId,
+                  ...(chosenLevel === null ? {} : { thinkingLevel: chosenLevel }) }, "Provider 选用失败")}>
                 选用
               </Button>
               <Button type="button" onClick={() => openEdit(view)}>编辑</Button>
               {pendingDelete === view.id
                 ? <>
-                  <Button type="button" disabled={busy} onClick={() => void act({ op: "remove", profileId: view.id, ...(taskId === null ? {} : { taskId }) }, "Provider 删除失败").then(() => setPendingDelete(null))}>确认删除</Button>
+                  <Button type="button" disabled={busy} onClick={() => void confirmDelete(view, false)}>确认删除</Button>
                   <Button type="button" onClick={() => setPendingDelete(null)}>取消</Button>
                 </>
-                : <Button type="button" onClick={() => setPendingDelete(view.id)}>删除</Button>}
+                : <Button type="button" onClick={() => requestDelete(view)}>删除</Button>}
             </div>
-          </li>)}</ul>}
+            {deleteConflict?.id === view.id ? <div role="alert" className="mt-2 basis-full border border-[#c9a486] bg-[#fdf7f1] px-3 py-2 text-[11px] text-[#7a4b25]">
+              <p>models.json 里的 <code className={mono}>pidock-{view.id}</code> 已被外部{NATIVE_STATE_TEXT[deleteConflict.state as keyof typeof NATIVE_STATE_TEXT] ?? "修改"}：
+                确认删除会连同外部版本一起移除。</p>
+              <div className="mt-2 flex gap-2">
+                <Button type="button" disabled={busy} onClick={() => void confirmDelete(view, true)}>确认删除外部版本</Button>
+                <Button type="button" onClick={() => setDeleteConflict(null)}>保留它</Button>
+              </div>
+            </div> : null}
+          </li>; })}</ul>}
     </section>
 
     <section className="mt-6" aria-label="可添加">
@@ -349,6 +420,8 @@ function ProviderForm({
     const message = issueFor(name);
     return message ? <p className="mt-1 text-[10px] text-[#8d3b36]">{message}</p> : null;
   };
+  // Ids the last successful listing did not contain: informational only.
+  const misses = discoveryMisses(draft, discovery);
   const nextPreset = () => {
     const at = PRESETS.findIndex((preset) => preset.key === presetKey);
     onApplyPreset(PRESETS[(at + 1) % PRESETS.length]!);
@@ -375,7 +448,7 @@ function ProviderForm({
     </div> : <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border border-line bg-soft px-3 py-2">
       <p className="text-xs text-muted">已载入预设 <strong>{PRESETS.find((preset) => preset.key === presetKey)?.name}</strong>：协议与地址已填入，仍可修改。</p>
       <div className="flex gap-2"><Button type="button" onClick={nextPreset}>更换预设</Button>
-        <Button type="button" onClick={() => onPatch({ name: "", notes: "", baseUrl: "", models: [{ id: "", name: "", contextWindow: "128000", maxTokens: "8192", reasoning: false, levels: [], cost: "" }], modelId: "" })}>清空</Button></div>
+        <Button type="button" onClick={() => onPatch({ name: "", notes: "", baseUrl: "", models: [{ id: "", name: "", contextWindow: "128000", maxTokens: "8192", reasoning: false, levels: [], cost: { ...EMPTY_COST } }], modelId: "" })}>清空</Button></div>
     </div>}
 
     {notice ? <p role="alert" className="mt-3 border border-[#c98a86] bg-[#fdf2f1] px-3 py-2 text-xs text-[#8d3b36]">{notice}</p> : null}
@@ -444,6 +517,10 @@ function ProviderForm({
           {discovery.candidates.map((id) => <li key={id}><button type="button" onClick={() => onAddCandidate(id)}
             className="border border-line bg-paper px-1.5 py-0.5 text-[11px] hover:bg-bg">＋ {id}</button></li>)}
         </ul> : null}
+        {/* A miss is a note, not an error: a manually typed id stays saveable. */}
+        {misses.length > 0 ? <p data-testid="discovery-misses" className="mt-2 text-muted">
+          以下模型 ID 不在这次列表里，仍可手动保存：{misses.join("、")}
+        </p> : null}
       </div> : null}
       <div className="mt-2 overflow-x-auto">
         <table className="w-full min-w-[720px] border-y border-line text-[11px]">
@@ -468,15 +545,19 @@ function ProviderForm({
             <td className="py-1.5 pr-2">{row.reasoning ? <div className="flex flex-wrap gap-1">{REASONING_LEVELS.map((level) =>
               <label key={level} className={`cursor-pointer border px-1 ${row.levels.includes(level) ? "border-[#5773ae] text-ink" : "border-line text-muted"}`}>
                 <input type="checkbox" className="sr-only" aria-label={`${levelText(level)}档位 ${index + 1}`} checked={row.levels.includes(level)}
-                  onChange={() => onToggleLevel(index, level)} />{levelText(level)}</label>)}</div>
+                  onChange={() => onToggleLevel(index, level)} />{levelText(level)}</label>)}
+              {row.levels.length === 0 ? <p className="mt-1 text-[10px] text-[#8d3b36]">无可用档位</p> : null}</div>
               : <span className="text-muted">仅关闭</span>}</td>
-            <td className="py-1.5 pr-2"><input aria-label={`输入价格 ${index + 1}`} className={field} value={row.cost} placeholder="未声明"
-              onChange={(event) => onPatchRow(index, { cost: event.target.value })} />{error(`models.${index}.cost`)}</td>
+            <td className="py-1.5 pr-2"><div className="grid grid-cols-2 gap-1">
+              {COST_FIELDS.map((key) => <input key={key} aria-label={`${COST_LABELS[key]} ${index + 1}`} className={field} value={row.cost[key]}
+                placeholder={COST_LABELS[key]}
+                onChange={(event) => onPatchRow(index, { cost: { ...row.cost, [key]: event.target.value } })} />)}
+            </div>{error(`models.${index}.cost`)}</td>
             <td className="py-1.5"><Button type="button" disabled={draft.models.length === 1} onClick={() => onRemoveRow(index)}>移除</Button></td>
           </tr>)}</tbody>
         </table>
       </div>
-      <p className="mt-1 text-[10px] text-muted">价格留空表示「未声明」，不会被当成 0；推理档位来自模型自己声明的能力。
+      <p className="mt-1 text-[10px] text-muted">价格四项全部填写才会写入，任一未填就保持「未声明」——不会有任何一栏被当成 0；推理档位来自模型自己声明的能力。
         上下文窗口与最大输出同样是本机声明值：Pi 不会向端点探测模型能力，端点拒绝时会在会话里给出真实错误。</p>
       <label className="mt-3 block max-w-[320px]"><span className={label}>默认模型</span>
         <select aria-label="默认模型" className={field} value={draft.modelId} onChange={(event) => onPatch({ modelId: event.target.value })}>

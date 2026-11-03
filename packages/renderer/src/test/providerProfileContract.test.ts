@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  EMPTY_COST,
   EMPTY_PROVIDER_DRAFT,
+  defaultThinkingLevel,
+  discoveryMisses,
   draftFromView,
   draftIssues,
   draftRequest,
@@ -22,7 +25,10 @@ import {
  */
 
 const row = (patch: Partial<ProviderDraft["models"][number]> = {}) =>
-  ({ id: "m-1", name: "", contextWindow: "128000", maxTokens: "8192", reasoning: false, levels: [], cost: "", ...patch });
+  ({ id: "m-1", name: "", contextWindow: "128000", maxTokens: "8192", reasoning: false, levels: [], cost: { ...EMPTY_COST }, ...patch });
+/** All four price fields, the only shape PiDock writes. */
+const priced = (input: string, output = "10", cacheRead = "0", cacheWrite = "0") =>
+  ({ input, output, cacheRead, cacheWrite });
 
 const draft = (patch: Partial<ProviderDraft> = {}): ProviderDraft => ({
   ...EMPTY_PROVIDER_DRAFT,
@@ -33,7 +39,7 @@ const view: ProviderView = {
   id: "p-11111111-2222-3333-4444-555555555555", name: "Gateway", notes: null, protocol: "openai-completions",
   baseUrl: "https://models.example.test/v1",
   models: [{ id: "m-1", name: "m-1", contextWindow: 128000, maxTokens: 8192, reasoning: true, reasoningLevels: ["off", "low", "high"], cost: null }],
-  modelId: "m-1", contextWindow: 128000, maxTokens: 8192, credentialSource: "store", credentialAvailable: true,
+  modelId: "m-1", thinkingLevel: "high", contextWindow: 128000, maxTokens: 8192, credentialSource: "store", credentialAvailable: true,
   authRef: "p-11111111-2222-3333-4444-555555555555", generation: 1,
   native: { providerId: "pidock-p-11111111-2222-3333-4444-555555555555", state: "synced" },
 };
@@ -42,7 +48,7 @@ const fields = (issues: { field: string }[]) => issues.map((issue) => issue.fiel
 
 describe("provider draft validation", () => {
   it("accepts a complete draft and sends only the fields main accepts", () => {
-    expect(draftIssues(draft(), [], null)).toEqual([]);
+    expect(draftIssues(draft(), [])).toEqual([]);
     expect(draftRequest(draft({ notes: "  " }))).toEqual({
       profile: { name: "Gateway", notes: null, protocol: "openai-completions", baseUrl: "https://models.example.test/v1",
         credential: { kind: "store" }, models: [{ id: "m-1", name: "m-1", contextWindow: 128000, maxTokens: 8192, reasoning: false }], modelId: "m-1" },
@@ -71,8 +77,9 @@ describe("provider draft validation", () => {
     // A reasoning map without the capability would offer levels Pi cannot honour.
     expect(fields(draftIssues(draft({ models: [row({ levels: ["high"] })] })))).toEqual(["models.0.reasoning"]);
     expect(draftIssues(draft({ models: [row({ reasoning: true, levels: ["high"] })] }))).toEqual([]);
-    expect(fields(draftIssues(draft({ models: [row({ reasoning: true, levels: [] })] })))).toEqual(["models.0.reasoning"]);
-    expect(fields(draftIssues(draft({ models: [row({ cost: "-1" })] })))).toEqual(["models.0.cost"]);
+    expect(fields(draftIssues(draft({ models: [row({ cost: priced("-1") })] })))).toEqual(["models.0.cost"]);
+    // A partly declared price would have to invent the missing fields as 0.
+    expect(fields(draftIssues(draft({ models: [row({ cost: priced("1.5", "") })] })))).toEqual(["models.0.cost"]);
   });
 
   it("reports a duplicate name against the existing profiles by id", () => {
@@ -81,11 +88,15 @@ describe("provider draft validation", () => {
   });
 
   it("keeps an unknown cost out of the payload instead of sending 0", () => {
-    const payload = draftRequest(draft());
-    expect(payload.profile["models"]).toEqual([{ id: "m-1", name: "m-1", contextWindow: 128000, maxTokens: 8192, reasoning: false }]);
-    const priced = draftRequest(draft({ models: [row({ cost: "1.5" })] }));
-    expect(priced.profile["models"]).toEqual([{ id: "m-1", name: "m-1", contextWindow: 128000, maxTokens: 8192, reasoning: false,
-      cost: { input: 1.5, output: 0, cacheRead: 0, cacheWrite: 0 } }]);
+    // W5: nothing declared → no `cost` key at all (main stores `null`).
+    expect(draftRequest(draft()).profile["models"]).toEqual([{ id: "m-1", name: "m-1", contextWindow: 128000, maxTokens: 8192, reasoning: false }]);
+    // Only one of the four fields typed → still unknown, still no `cost`.
+    expect(draftRequest(draft({ models: [row({ cost: priced("1.5", "", "", "") })] })).profile["models"])
+      .toEqual([{ id: "m-1", name: "m-1", contextWindow: 128000, maxTokens: 8192, reasoning: false }]);
+    // All four declared → exactly those numbers travel; nothing is invented.
+    const complete = draftRequest(draft({ models: [row({ cost: priced("1.5", "6", "0.3", "0") })] }));
+    expect(complete.profile["models"]).toEqual([{ id: "m-1", name: "m-1", contextWindow: 128000, maxTokens: 8192, reasoning: false,
+      cost: { input: 1.5, output: 6, cacheRead: 0.3, cacheWrite: 0 } }]);
   });
 
   it("sends the declared reasoning set verbatim, including whether 关闭 is supported", () => {
@@ -100,7 +111,29 @@ describe("provider draft validation", () => {
   it("round-trips a view into a draft without the stored key", () => {
     const restored = draftFromView(view);
     expect(restored).toMatchObject({ id: view.id, name: "Gateway", credentialKind: "store", apiKey: "", hasStoredKey: true, modelId: "m-1" });
-    expect(restored.models[0]).toEqual({ id: "m-1", name: "m-1", contextWindow: "128000", maxTokens: "8192", reasoning: true, levels: ["off", "low", "high"], cost: "" });
+    expect(restored.models[0]).toEqual({ id: "m-1", name: "m-1", contextWindow: "128000", maxTokens: "8192", reasoning: true, levels: ["off", "low", "high"], cost: { ...EMPTY_COST } });
+  });
+});
+
+describe("discovery notes and level defaults", () => {
+  const discovered = { status: "ok" as const, candidates: ["a-model"], message: "发现 1 个候选模型" };
+
+  it("notes a manual model id instead of blocking the save", () => {
+    const manual = draft({ models: [row({ id: "manual-model" })], modelId: "manual-model" });
+    // C2: no inline issue — 发现 misses are a note, so the save still goes out.
+    expect(draftIssues(manual, [])).toEqual([]);
+    expect(discoveryMisses(manual, discovered)).toEqual(["manual-model"]);
+    // A listed id is not a miss, and no discovery means nothing to compare.
+    expect(discoveryMisses(draft({ models: [row({ id: "a-model" })], modelId: "a-model" }), discovered)).toEqual([]);
+    expect(discoveryMisses(manual, null)).toEqual([]);
+    expect(discoveryMisses(manual, { status: "empty", candidates: [], message: "" })).toEqual([]);
+  });
+
+  it("defaults a level to high when declared, never to the weakest tier", () => {
+    expect(defaultThinkingLevel(["off", "low", "medium", "high"])).toBe("high");
+    expect(defaultThinkingLevel(["minimal", "low"])).toBe("low");
+    expect(defaultThinkingLevel(["off"])).toBe("off");
+    expect(defaultThinkingLevel([])).toBeNull();
   });
 });
 
@@ -110,6 +143,7 @@ describe("provider status parsing", () => {
       profiles: [view], nativePath: "/home/u/.pi/agent/models.json", secretsAvailable: true });
     expect(status).toMatchObject({ state: "configured", modelId: "m-1", thinkingLevel: "high", nativePath: "/home/u/.pi/agent/models.json" });
     expect(status.profiles[0]?.models[0]?.cost).toBeNull();
+    expect(status.profiles[0]?.thinkingLevel).toBe("high");
   });
 
   it("refuses a shape a page must not render as configured", () => {
@@ -119,6 +153,8 @@ describe("provider status parsing", () => {
       profiles: [{ ...view, models: [{ ...view.models[0]!, reasoningLevels: ["ultra"] }] }] })).toThrow("Provider 模型返回异常");
     expect(() => parseProviderStatus({ state: "configured", profileId: null, generation: null,
       profiles: [{ ...view, models: [{ ...view.models[0]!, cost: { input: 1 } }] }] })).toThrow("Provider 模型价格返回异常");
+    expect(() => parseProviderStatus({ state: "configured", profileId: null, generation: null,
+      profiles: [{ ...view, thinkingLevel: "ultra" }] })).toThrow("Provider 推理档位返回异常");
     expect(() => parseProviderStatus({ state: "configured", profileId: null, generation: null,
       profiles: [{ ...view, native: { providerId: "pidock-x", state: "whatever" } }] })).toThrow("Provider 原生配置状态返回异常");
   });
@@ -130,6 +166,20 @@ describe("provider status parsing", () => {
     }] });
     expect(status.profiles[0]).toMatchObject({ protocol: "openai-completions", credentialSource: "env", credentialAvailable: false,
       models: [{ id: "old-model", reasoning: false, reasoningLevels: ["off"], cost: null }], native: { state: "never-written" } });
+  });
+
+  it("reads a reasoning model with no usable tier as 无可用档位 instead of throwing", () => {
+    // W6: one hand-edited row must not blank the whole Providers pane.
+    const status = parseProviderStatus({ state: "not-configured", profileId: null, generation: null, profiles: [{
+      ...view, thinkingLevel: null,
+      models: [{ ...view.models[0]!, reasoning: true, reasoningLevels: [] }],
+    }] });
+    expect(status.profiles[0]?.models[0]?.reasoningLevels).toEqual([]);
+    expect(status.profiles[0]?.thinkingLevel).toBeNull();
+    // A non-reasoning row still cannot claim an empty level set.
+    expect(() => parseProviderStatus({ state: "not-configured", profileId: null, generation: null, profiles: [{
+      ...view, models: [{ ...view.models[0]!, reasoning: false, reasoningLevels: [] }],
+    }] })).toThrow("Provider 模型返回异常");
   });
 
   it("parses discovery and probe outcomes strictly", () => {

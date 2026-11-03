@@ -25,6 +25,7 @@ const PROFILE = {
     { id: "gpt-5", name: "GPT-5", contextWindow: 400000, maxTokens: 128000, reasoning: true, reasoningLevels: ["off", "low", "medium", "high"], cost: { input: 1.25, output: 10, cacheRead: 0, cacheWrite: 0 } },
   ],
   modelId: "gpt-5-mini",
+  thinkingLevel: "off",
   contextWindow: 128000,
   maxTokens: 8192,
   credentialSource: "store",
@@ -302,6 +303,9 @@ describe("S03B provider form", () => {
     await user.keyboard("{Meta>}{Enter}{/Meta}");
     await waitFor(() => expect(calls.some((call) => call.op === "save")).toBe(true));
     expect(screen.queryByTestId("provider-form")).toBeNull();
+    // W3: the window shortcut and the form's own ⌘↵ handler both fire for one
+    // key press; without a synchronous guard that is two saves.
+    expect(calls.filter((call) => call.op === "save")).toHaveLength(1);
   });
 
   it("says a task is required for 选用 and never pretends to select without one", async () => {
@@ -326,8 +330,28 @@ describe("S03B provider form", () => {
     await user.selectOptions(within(card).getByLabelText("选用模型（Local gateway）"), "gpt-5");
     await user.click(within(card).getByRole("button", { name: "选用" }));
     await waitFor(() => expect(calls.some((call) => call.op === "select")).toBe(true));
-    expect(calls.find((call) => call.op === "select")).toEqual({ op: "select", taskId: "task-1", profileId: PROFILE.id, modelId: "gpt-5" });
+    // W9: the chosen level travels with the selection (main would otherwise
+    // resolve the model's own default) and the card shows what was chosen.
+    expect(calls.find((call) => call.op === "select")).toEqual({
+      op: "select", taskId: "task-1", profileId: PROFILE.id, modelId: "gpt-5", thinkingLevel: "high",
+    });
     await waitFor(() => expect(screen.getByTestId("providers-state")).toHaveTextContent("已配置"));
+    expect(screen.getByTestId(`provider-current-${PROFILE.id}`)).toHaveTextContent("当前任务已选用 · gpt-5 · 推理 高");
+  });
+
+  it("lets the user pick the level a 选用 carries, and defaults to high", async () => {
+    const { calls } = bridge({ list: { ...EMPTY_STATUS, profiles: [PROFILE] }, select: EMPTY_STATUS });
+    const user = userEvent.setup();
+    page();
+    await waitFor(() => expect(screen.getByTestId(`provider-card-${PROFILE.id}`)).toBeInTheDocument());
+    const card = screen.getByTestId(`provider-card-${PROFILE.id}`);
+    await user.selectOptions(within(card).getByLabelText("选用模型（Local gateway）"), "gpt-5");
+    // `high` is declared, so it is the default — never the weakest tier.
+    expect(within(card).getByLabelText("推理档位（Local gateway）")).toHaveValue("high");
+    await user.selectOptions(within(card).getByLabelText("推理档位（Local gateway）"), "low");
+    await user.click(within(card).getByRole("button", { name: "选用" }));
+    await waitFor(() => expect(calls.some((call) => call.op === "select")).toBe(true));
+    expect(calls.find((call) => call.op === "select")).toMatchObject({ modelId: "gpt-5", thinkingLevel: "low" });
   });
 
   it("removes a profile only after a second, explicit confirmation", async () => {
@@ -340,5 +364,91 @@ describe("S03B provider form", () => {
     await user.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(calls.some((call) => call.op === "remove")).toBe(true));
     expect(calls.find((call) => call.op === "remove")).toEqual({ op: "remove", profileId: PROFILE.id, taskId: "task-1" });
+  });
+});
+
+describe("S03B review fixes", () => {
+  const fillManual = async (form: HTMLElement, id: string) => {
+    const user = userEvent.setup();
+    await user.type(within(form).getByLabelText("名称"), "Manual");
+    await user.type(within(form).getByLabelText("Base URL"), "https://models.example.test/v1");
+    await user.type(within(form).getByLabelText(/^模型 ID 1/), id);
+    await user.selectOptions(within(form).getByLabelText("默认模型"), id);
+    await user.type(within(form).getByLabelText("API Key"), KEY);
+    return user;
+  };
+
+  it("saves a manually typed model id after a successful discovery", async () => {
+    // C2: discovery only ADDS candidates, so a miss is a note — the save must
+    // still go out with the manual id the user typed.
+    const { calls } = bridge({
+      discover: { status: "ok", candidates: ["deepseek-chat"], message: "发现 1 个候选模型" },
+      save: { profile: PROFILE, written: true, conflict: null },
+    });
+    page();
+    await screen.findByTestId("providers-panel");
+    await userEvent.click(screen.getByRole("button", { name: /添加供应商/ }));
+    const form = await screen.findByTestId("provider-form");
+    const user = await fillManual(form, "manual-model");
+    await user.click(within(form).getByRole("button", { name: "获取模型列表" }));
+    expect(await screen.findByTestId("discovery-misses")).toHaveTextContent("manual-model");
+    await user.click(within(form).getByRole("button", { name: "保存并写入 models.json" }));
+    await waitFor(() => expect(calls.some((call) => call.op === "save")).toBe(true));
+    expect(calls.find((call) => call.op === "save")).toMatchObject({ profile: { modelId: "manual-model" } });
+  });
+
+  it("writes a price only when all four fields are known", async () => {
+    const { calls } = bridge({ save: { profile: PROFILE, written: true, conflict: null } });
+    page();
+    await screen.findByTestId("providers-panel");
+    await userEvent.click(screen.getByRole("button", { name: /添加供应商/ }));
+    const form = await screen.findByTestId("provider-form");
+    const user = await fillManual(form, "gpt-5");
+    await user.type(within(form).getByLabelText("输入价格 1"), "1.5");
+    await user.click(within(form).getByRole("button", { name: "保存并写入 models.json" }));
+    // W5: a half-declared price would have to invent 0 for the rest.
+    expect(await within(form).findAllByText(/价格需要四项/)).not.toHaveLength(0);
+    expect(calls.some((call) => call.op === "save")).toBe(false);
+
+    await user.type(within(form).getByLabelText("输出价格 1"), "6");
+    await user.type(within(form).getByLabelText("缓存读价格 1"), "0");
+    await user.type(within(form).getByLabelText("缓存写价格 1"), "0");
+    await user.click(within(form).getByRole("button", { name: "保存并写入 models.json" }));
+    await waitFor(() => expect(calls.some((call) => call.op === "save")).toBe(true));
+    expect((calls.find((call) => call.op === "save") as { profile: { models: { cost?: unknown }[] } }).profile.models[0]!.cost)
+      .toEqual({ input: 1.5, output: 6, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it("shows 无可用档位 for a reasoning model with no usable tier", async () => {
+    // W6: the row is readable, and 选用 does not pretend a level exists.
+    const tierless = {
+      ...PROFILE, modelId: "gpt-5", thinkingLevel: null,
+      models: [{ id: "gpt-5", name: "GPT-5", contextWindow: 128000, maxTokens: 8192, reasoning: true, reasoningLevels: [], cost: null }],
+    };
+    const { calls } = bridge({ list: { ...EMPTY_STATUS, profiles: [tierless] } });
+    page();
+    await waitFor(() => expect(screen.getByTestId(`provider-card-${tierless.id}`)).toBeInTheDocument());
+    const card = screen.getByTestId(`provider-card-${tierless.id}`);
+    expect(card).toHaveTextContent("gpt-5 · 推理 · 无可用档位");
+    expect(within(card).getByTestId(`provider-levels-missing-${tierless.id}`)).toHaveTextContent("无可用档位");
+    expect(within(card).queryByLabelText("推理档位（Local gateway）")).toBeNull();
+    expect(within(card).getByRole("button", { name: "选用" })).toBeDisabled();
+    expect(calls.some((call) => call.op === "select")).toBe(false);
+  });
+
+  it("refuses to delete an externally modified entry until the user says so", async () => {
+    // W7: main refuses the removal without `reconcile`; the UI names the
+    // external version first and only then sends the explicit acknowledgement.
+    const modified = { ...PROFILE, native: { providerId: PROFILE.native.providerId, state: "modified" } };
+    const { calls } = bridge({ list: { ...EMPTY_STATUS, profiles: [modified] }, remove: EMPTY_STATUS });
+    page();
+    await waitFor(() => expect(screen.getByTestId(`provider-card-${modified.id}`)).toBeInTheDocument());
+    const card = screen.getByTestId(`provider-card-${modified.id}`);
+    await userEvent.click(within(card).getByRole("button", { name: "删除" }));
+    expect(calls.some((call) => call.op === "remove")).toBe(false);
+    expect(await within(card).findByText(/确认删除会连同外部版本一起移除/)).toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "确认删除外部版本" }));
+    await waitFor(() => expect(calls.some((call) => call.op === "remove")).toBe(true));
+    expect(calls.find((call) => call.op === "remove")).toEqual({ op: "remove", profileId: modified.id, taskId: "task-1", reconcile: true });
   });
 });

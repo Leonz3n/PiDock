@@ -55,6 +55,8 @@ export type ProviderView = {
   baseUrl: string;
   models: ProviderModel[];
   modelId: string;
+  /** The level a new selection of `modelId` starts on; `null` = no usable tier. */
+  thinkingLevel: string | null;
   contextWindow: number;
   maxTokens: number;
   credentialSource: "env" | "store";
@@ -75,7 +77,18 @@ export type ProviderStatus = {
   secretsAvailable: boolean;
 };
 
-export type Row = { id: string; name: string; contextWindow: string; maxTokens: string; reasoning: boolean; levels: string[]; cost: string };
+export type RowCost = { input: string; output: string; cacheRead: string; cacheWrite: string };
+export type Row = { id: string; name: string; contextWindow: string; maxTokens: string; reasoning: boolean; levels: string[]; cost: RowCost };
+/**
+ * Pi's price row has four required fields. PiDock only writes a price when all
+ * four are known: a half-declared price would have to invent `0` for the rest,
+ * and an unknown output/cache price rendered as "0" is a lie about spend.
+ */
+export const EMPTY_COST: RowCost = { input: "", output: "", cacheRead: "", cacheWrite: "" };
+export const COST_FIELDS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+export const COST_LABELS: Record<(typeof COST_FIELDS)[number], string> = {
+  input: "输入价格", output: "输出价格", cacheRead: "缓存读价格", cacheWrite: "缓存写价格",
+};
 export type ProviderDraft = {
   id?: string;
   name: string;
@@ -96,10 +109,23 @@ export const LEVEL_TEXT: Record<string, string> = {
   off: "关闭", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高",
 };
 
+/**
+ * The level a selection starts on when the user does not pick one. Mirrors
+ * main (`defaultThinkingLevel`): `high` whenever the model declares it, else the
+ * strongest declared tier — never the weakest one, and never `off` for a model
+ * that declares thinking. `null` = the model declares no usable tier.
+ */
+export function defaultThinkingLevel(levels: string[]): string | null {
+  const declared = REASONING_LEVELS.filter((level) => levels.includes(level));
+  if (declared.length === 0) return null;
+  if (declared.includes("high")) return "high";
+  return [...declared].reverse().find((level) => level !== "off") ?? declared[0]!;
+}
+
 export const EMPTY_PROVIDER_DRAFT: ProviderDraft = {
   name: "", notes: "", protocol: "openai-completions", baseUrl: "", credentialKind: "store",
   authRef: "PIDOCK_PROVIDER_", apiKey: "", hasStoredKey: false,
-  models: [{ id: "", name: "", contextWindow: "128000", maxTokens: "8192", reasoning: false, levels: [], cost: "" }], modelId: "",
+  models: [{ id: "", name: "", contextWindow: "128000", maxTokens: "8192", reasoning: false, levels: [], cost: { ...EMPTY_COST } }], modelId: "",
 };
 
 export function draftFromView(view: ProviderView): ProviderDraft {
@@ -114,7 +140,11 @@ export function draftFromView(view: ProviderView): ProviderDraft {
       // A non-reasoning model declares no levels at all (`["off"]` from main is
       // the SDK's "only off is available", not a level the user can configure).
       reasoning: model.reasoning, levels: model.reasoning ? model.reasoningLevels : [],
-      cost: model.cost === null ? "" : String(model.cost.input),
+      // All four prices or none: whatever was not declared stays unknown.
+      cost: model.cost === null ? { ...EMPTY_COST } : {
+        input: String(model.cost.input), output: String(model.cost.output),
+        cacheRead: String(model.cost.cacheRead), cacheWrite: String(model.cost.cacheWrite),
+      },
     })),
     modelId: view.modelId,
   };
@@ -130,7 +160,10 @@ function parseModel(value: unknown): ProviderModel {
       !Number.isSafeInteger(value.contextWindow) || (value.contextWindow as number) < 1 ||
       !Number.isSafeInteger(value.maxTokens) || (value.maxTokens as number) < 1 ||
       typeof value.reasoning !== "boolean" ||
-      !Array.isArray(value.reasoningLevels) || value.reasoningLevels.length === 0 ||
+      !Array.isArray(value.reasoningLevels) ||
+      // An empty list is a declared fact for a reasoning model that supports no
+      // usable tier; it must read as "无可用档位", not make the whole list throw.
+      (value.reasoningLevels.length === 0 && value.reasoning !== true) ||
       value.reasoningLevels.some((level) => typeof level !== "string" || !REASONING_LEVELS.includes(level as never))) {
     throw new Error("Provider 模型返回异常");
   }
@@ -161,6 +194,11 @@ function parseView(value: unknown): ProviderView {
     throw new Error("Provider 原生配置状态返回异常");
   }
   const modelId = value.modelId;
+  const thinkingLevel = value.thinkingLevel;
+  if (!(thinkingLevel === undefined || thinkingLevel === null ||
+      (typeof thinkingLevel === "string" && REASONING_LEVELS.includes(thinkingLevel as never)))) {
+    throw new Error("Provider 推理档位返回异常");
+  }
   // A profile saved before multi-model support carries exactly one model, no
   // cost declaration and no reasoning map. Those are read as declared-unknown,
   // never as a fabricated zero price or a guessed level.
@@ -173,6 +211,10 @@ function parseView(value: unknown): ProviderView {
     id: value.id, name: value.name, notes: typeof value.notes === "string" ? value.notes : null,
     protocol: typeof value.protocol === "string" ? value.protocol : "openai-completions",
     baseUrl: value.baseUrl, models, modelId,
+    // Absent only in a v1-shaped reply: the declared default for the active row.
+    thinkingLevel: typeof thinkingLevel === "string"
+      ? thinkingLevel
+      : defaultThinkingLevel(models.find((model) => model.id === modelId)?.reasoningLevels ?? []),
     contextWindow: value.contextWindow as number, maxTokens: value.maxTokens as number,
     credentialSource, credentialAvailable: value.credentialAvailable,
     authRef: value.authRef, generation: value.generation as number,
@@ -270,7 +312,7 @@ const positiveInteger = (value: string, label: string, field: string, issues: Fi
   return Number.isSafeInteger(parsed) ? parsed : null;
 };
 
-export function draftIssues(draft: ProviderDraft, existing: ProviderView[] = [], discovery?: DiscoveryResult | null): FieldIssue[] {
+export function draftIssues(draft: ProviderDraft, existing: ProviderView[] = []): FieldIssue[] {
   const issues: FieldIssue[] = [];
   const name = draft.name.trim();
   if (name.length === 0) issues.push({ field: "name", message: "请填写供应商名称" });
@@ -315,15 +357,15 @@ export function draftIssues(draft: ProviderDraft, existing: ProviderView[] = [],
       issues.push({ field: `${at}.maxTokens`, message: "最大输出不能大于上下文窗口" });
     }
     if (row.levels.length > 0 && !row.reasoning) issues.push({ field: `${at}.reasoning`, message: "只有声明支持思维链的模型才能设置推理档位" });
-    if (row.reasoning && row.levels.length === 0) issues.push({ field: `${at}.reasoning`, message: "请至少声明一个支持的推理档位（关闭也算一个）" });
-    if (row.cost.trim() !== "") {
-      const cost = Number(row.cost);
-      if (!Number.isFinite(cost) || cost < 0) issues.push({ field: `${at}.cost`, message: "输入价格需要是不小于 0 的数字" });
+    // A reasoning model may honestly declare no usable tier (W6); the form shows
+    // 无可用档位 instead of refusing to save the row at all.
+    const declaredCost = COST_FIELDS.filter((key) => row.cost[key].trim() !== "");
+    if (declaredCost.length > 0 && declaredCost.length < COST_FIELDS.length) {
+      issues.push({ field: `${at}.cost`, message: "价格需要四项（输入/输出/缓存读/缓存写）齐全，或全部留空表示未声明" });
     }
-    // A newly discovered row that the endpoint later stops listing is still
-    // saveable (discovery only ever ADDS candidates), but the user is told.
-    if (discovery && discovery.status === "ok" && !discovery.candidates.includes(id) && id.length > 0) {
-      issues.push({ field: `${at}.id`, message: `模型列表里没有 ${id}（仍可手动保存）`, });
+    for (const key of declaredCost) {
+      const cost = Number(row.cost[key].trim());
+      if (!Number.isFinite(cost) || cost < 0) issues.push({ field: `${at}.cost`, message: `${COST_LABELS[key]}需要是不小于 0 的数字` });
     }
   });
   if (!draft.models.some((row) => row.id.trim() === draft.modelId.trim()) || draft.modelId.trim().length === 0) {
@@ -334,15 +376,42 @@ export function draftIssues(draft: ProviderDraft, existing: ProviderView[] = [],
   return issues;
 }
 
+/**
+ * Rows whose id the endpoint's last successful listing did not contain. This is
+ * a *note*, never an error: discovery only ever adds candidates, so a manually
+ * typed id (or a row the endpoint stopped listing) stays saveable. Returns []
+ * when there is no successful discovery to compare against.
+ */
+export function discoveryMisses(draft: ProviderDraft, discovery: DiscoveryResult | null): string[] {
+  if (discovery === null || discovery.status !== "ok") return [];
+  return draft.models
+    .map((row) => row.id.trim())
+    .filter((id) => id.length > 0 && !discovery.candidates.includes(id));
+}
+
+/** The price row Pi will read, or `null` when any of its four fields is unknown. */
+export function declaredCost(row: Row): ProviderModel["cost"] {
+  const values = COST_FIELDS.map((key) => row.cost[key].trim());
+  if (values.some((value) => value === "")) return null;
+  const numbers = values.map(Number);
+  if (numbers.some((value) => !Number.isFinite(value) || value < 0)) return null;
+  return { input: numbers[0]!, output: numbers[1]!, cacheRead: numbers[2]!, cacheWrite: numbers[3]! };
+}
+
 /** The exact-key `save` payload: the profile fields plus, only when newly typed, the key. */
 export function draftRequest(draft: ProviderDraft): { profile: Record<string, unknown>; apiKey?: string } {
-  const models = draft.models.map((row) => ({
-    id: row.id.trim(), name: row.name.trim() || row.id.trim(),
-    contextWindow: Number(row.contextWindow), maxTokens: Number(row.maxTokens),
-    reasoning: row.reasoning,
-    ...(row.reasoning && row.levels.length > 0 ? { reasoningLevels: REASONING_LEVELS.filter((level) => row.levels.includes(level)) } : {}),
-    ...(row.cost.trim() === "" ? {} : { cost: { input: Number(row.cost), output: 0, cacheRead: 0, cacheWrite: 0 } }),
-  }));
+  const models = draft.models.map((row) => {
+    const cost = declaredCost(row);
+    return {
+      id: row.id.trim(), name: row.name.trim() || row.id.trim(),
+      contextWindow: Number(row.contextWindow), maxTokens: Number(row.maxTokens),
+      reasoning: row.reasoning,
+      ...(row.reasoning ? { reasoningLevels: REASONING_LEVELS.filter((level) => row.levels.includes(level)) } : {}),
+      // Only a complete, known price is sent; an unknown one is omitted, which
+      // main stores as `cost: null` and every surface renders as 未声明.
+      ...(cost ? { cost } : {}),
+    };
+  });
   return {
     profile: {
       ...(draft.id === undefined ? {} : { id: draft.id }),
