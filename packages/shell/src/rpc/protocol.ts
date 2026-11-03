@@ -103,6 +103,13 @@ export type HostTaskOp =
   | "task/filePreview"
   | "task/fileDiff"
   | "task/deliveryInfo"
+  // [Pencil T13] #148 explicit Git delivery: saved convention/remote, the
+  // per-repo preview, and the two explicit user actions (commit/push).
+  | "task/deliverySettings"
+  | "task/saveDeliverySettings"
+  | "task/deliveryPlan"
+  | "task/deliveryCommit"
+  | "task/deliveryPush"
   | "task/openEditor"
   | "task/planTerminal"
   | "task/terminalProfiles"
@@ -295,6 +302,12 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/filePreview",
   "task/fileDiff",
   "task/deliveryInfo",
+  // [Pencil T13] #148 explicit Git delivery ops.
+  "task/deliverySettings",
+  "task/saveDeliverySettings",
+  "task/deliveryPlan",
+  "task/deliveryCommit",
+  "task/deliveryPush",
   // [PiDock 10] (#15 box 28) external editor launch. Main-only entry
   // (`shell/openTaskEditor`): the renderer op set never names it and
   // `shell/taskOp` refuses it by name, so the program and the attested human

@@ -118,10 +118,25 @@ function deliveryOf(input: LifecycleResourceInput): { uncommitted: boolean; unde
   if (!record || repoDir === undefined) return { uncommitted: false, undelivered: false };
   try {
     const status = execFileSync("git", ["-C", repoDir, "status", "--porcelain"], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] });
-    // `undelivered` needs a delivery ledger this ticket does not own: cleanup
-    // keeps the worktree either way, so the flag stays false rather than
-    // guessing. The uncommitted state is read from the real working tree.
-    return { uncommitted: status.trim().length > 0, undelivered: false };
+    const uncommitted = status.trim().length > 0;
+    // [Pencil T13] #148: `undelivered` is read from real git, not a success
+    // ledger. A commit that NO remote-tracking ref contains is undelivered
+    // (`rev-list HEAD --not --remotes`), which is exactly "created/committed
+    // here but never pushed anywhere". No network call, no fabricated record:
+    // when the read fails the answer stays "unknown" and cleanup keeps the
+    // worktree either way.
+    let undelivered = false;
+    try {
+      const ahead = execFileSync("git", ["-C", repoDir, "rev-list", "--count", "HEAD", "--not", "--remotes"], {
+        encoding: "utf8",
+        timeout: 5_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      undelivered = Number.parseInt(ahead.trim(), 10) > 0;
+    } catch {
+      undelivered = false;
+    }
+    return { uncommitted, undelivered };
   } catch {
     return { uncommitted: false, undelivered: false };
   }

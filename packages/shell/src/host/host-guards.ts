@@ -1469,6 +1469,48 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [Pencil T13] #148 explicit Git delivery. Shape only here: which roots a
+  // task has, which branch a checkout is on, and whether the remote resolves
+  // are decided Host-side from real git reads, never from the page.
+  if (op === "task/deliverySettings" || op === "task/deliveryPlan") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
+    }
+    if (isRecord(payload) && Object.keys(payload).length > 0) {
+      return { ok: false, error: `invalid-payload: ${op} accepts no keys; the Host reads its own settings and repositories` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/saveDeliverySettings") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/saveDeliverySettings requires a payload object" };
+    const keys = Object.keys(payload).sort().join(",");
+    if (keys !== "branchTemplate,remote") {
+      return { ok: false, error: "invalid-payload: task/saveDeliverySettings requires exactly branchTemplate and remote" };
+    }
+    if (typeof payload["branchTemplate"] !== "string" || typeof payload["remote"] !== "string" ||
+        payload["branchTemplate"].length > 200 || payload["remote"].length > 100) {
+      return { ok: false, error: "invalid-payload: task/saveDeliverySettings values must be bounded strings" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/deliveryCommit" || op === "task/deliveryPush") {
+    if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    const allowed = op === "task/deliveryCommit" ? ["branch", "commitMessage", "repoIds"] : ["branch", "repoIds"];
+    const extra = Object.keys(payload).filter((key) => !allowed.includes(key));
+    if (extra.length > 0) return { ok: false, error: `invalid-payload: ${op} 不接受 ${extra.sort().join(",")}` };
+    if (!isSafeTaskBranchRef(payload["branch"])) {
+      return { ok: false, error: `invalid-payload: ${op}.branch must be a safe branch name` };
+    }
+    if (op === "task/deliveryCommit" && (typeof payload["commitMessage"] !== "string" || payload["commitMessage"].trim().length === 0 || payload["commitMessage"].length > 5000)) {
+      return { ok: false, error: "invalid-payload: task/deliveryCommit.commitMessage must be a bounded non-empty string" };
+    }
+    const repoIds = payload["repoIds"];
+    if (repoIds !== undefined && (!Array.isArray(repoIds) || repoIds.length > 30 ||
+        !repoIds.every((id) => typeof id === "string" && id.trim().length > 0 && id.length <= 200))) {
+      return { ok: false, error: `invalid-payload: ${op}.repoIds must be a bounded array of repository ids` };
+    }
+    return { ok: true };
+  }
   if (op === "task/openEditor") {
     // [PiDock 10] (#15 box 28) Only main's attested entry builds this payload
     // (`shell/openTaskEditor`); `shell/taskOp` refuses the op by name. The

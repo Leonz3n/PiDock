@@ -1004,6 +1004,23 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/fileRoots", "nope").ok).toBe(false);
   });
 
+  it("[Pencil T13] #148 keeps delivery settings/plan payload-free and the writes explicit", () => {
+    expect(validateHostTaskOp("task/deliverySettings", undefined)).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/deliveryPlan", {})).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/deliveryPlan", { branchTemplate: "x" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/saveDeliverySettings", { branchTemplate: "ticket/{taskId}", remote: "origin" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/saveDeliverySettings", { branchTemplate: "ticket/{taskId}" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/saveDeliverySettings", { branchTemplate: "ticket/{taskId}", remote: "origin", force: true }).ok).toBe(false);
+    expect(validateHostTaskOp("task/deliveryCommit", { branch: "ticket/148", commitMessage: "m" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/deliveryCommit", { branch: "ticket/148", commitMessage: "m", repoIds: ["repo-a"] })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/deliveryCommit", { branch: "ticket/148" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/deliveryCommit", { branch: "ticket/148", commitMessage: "m", force: true }).ok).toBe(false);
+    expect(validateHostTaskOp("task/deliveryCommit", { branch: "--force", commitMessage: "m" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/deliveryPush", { branch: "ticket/148" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/deliveryPush", { branch: "ticket/148", commitMessage: "m" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/deliveryPush", {}).ok).toBe(false);
+  });
+
   it("requires an instance id, a program, a root and env layers for a terminal plan", () => {
     const layers = { repoDefaults: [], shared: [], privateEntries: [], task: [] };
     expect(validateHostTaskOp("task/planTerminal", { instanceId: "term-1", rootId: "r", program: "bash", layers })).toEqual({ ok: true });
