@@ -37,6 +37,10 @@ export const ALLOWED_INVOKE_CHANNELS = [
   // names no path, no file and no unverified Pi action.
   "shell/preferencesOp",
   "shell/providerOp",
+  // [Pencil T15] #150 the MCP management surface over Pi's native mcp.json:
+  // list/save/remove/enable/disable/test only. The page names a server (or a
+  // form draft), never a file, a path or a credential value.
+  "shell/mcpOp",
   // [Pencil T18] #153 the scheduler phase (active / asleep / quitting) plus the
   // last unconfirmed quit. Read-only and main-owned; the page names no field.
   "shell/schedulerState",

@@ -40,6 +40,8 @@ export const SHELL_BRIDGE_SURFACE = [
   "hostPing",
   "importTaskRoot",
   "listTasks",
+  // [Pencil T15] #150 the MCP management surface.
+  "mcpOp",
   "onHostStatus",
   "onSdkTurnEvent",
   "openTaskEditor",
