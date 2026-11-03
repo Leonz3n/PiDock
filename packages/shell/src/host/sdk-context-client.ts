@@ -86,6 +86,12 @@ export interface SdkContextOptions {
    * still declares no tools, so nothing can execute (fail closed).
    */
   toolHost?: SdkToolHost;
+  /**
+   * [#151] The app-private Skills source document (`skill-sources.json`). The
+   * worker's kernel reads it when it creates a session, so a running session is
+   * never mutated: a toggle reaches the next session only.
+   */
+  skillSourcesFile?: string;
   /** Injected for tests; defaults to the compiled worker next to this file. */
   spawn?: (env: Record<string, string>, workerData: unknown) => SdkContextWorkerLike;
   /** Bound on the worker's bootstrap reply; a silent worker must not hang a turn. */
@@ -151,6 +157,7 @@ export class SdkContextClient implements SdkTextKernelPort {
         task: this.options.task, config: this.options.config, credential: this.options.credential,
         toolsEnabled: this.options.toolHost !== undefined,
         ...(this.options.thinkingLevel === undefined ? {} : { thinkingLevel: this.options.thinkingLevel }),
+        ...(this.options.skillSourcesFile === undefined ? {} : { skillSourcesFile: this.options.skillSourcesFile }),
       };
       const worker = this.options.spawn?.(env, workerData) ?? new Worker(new URL("./sdk-context-worker.js", import.meta.url), { env, workerData });
       this.worker = worker;
