@@ -890,6 +890,24 @@ export class ProjectTaskAppend {
       };
     }
 
+    // [Pencil T02] #137: a task whose recorded workspace mode is not `worktree`
+    // has no independent worktrees, so a repository append can never be
+    // honoured. Refuse it HERE, before the fetch below: the fetch writes
+    // `FETCH_HEAD` and remote-tracking refs into the source checkout, and an
+    // `existing-git` task promises its shared original is never touched by this
+    // flow (the Host refuses the same append later as a truth guard).
+    // Plain-directory appends stay allowed: shared dirs are a real source in
+    // every mode.
+    if (freshRepos.length > 0) {
+      const storedMode = stored.workspaceMode ??
+        ((stored.sharedRepos?.length ?? 0) > 0 ? "existing-git" : stored.repos.length > 0 ? "worktree" : "plain-dirs");
+      if (storedMode !== "worktree") {
+        throw new Error(
+          "workspace-mode-refusal: 该任务不是独立 Worktree 模式（已有 Git 目录 / 仅普通目录），不能追加独立 Worktree 仓库；请新建独立 Worktree 任务",
+        );
+      }
+    }
+
     for (const repo of freshRepos) {
       if (!isAbsolute(repo.checkout) || this.git.topLevel(repo.checkout) !== canonicalPath(repo.checkout)) {
         throw new Error(`repo-unusable: 仓库 ${repo.repoDir}（${repo.name}）的来源检出不可用: ${repo.checkout}`);

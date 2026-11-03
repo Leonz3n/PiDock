@@ -21,6 +21,8 @@ import { TaskWorkspaceFiles } from "../host/workspace-files.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import { performCreationOperation } from "./project-task-ipc.js";
+import { createNodeAppendGit, ProjectTaskAppend } from "./task-append.js";
+import { createNodePrepScanDeps, createPrepScanAuthority } from "./task-prep-scan.js";
 import { TaskRootIndex } from "./task-root-index.js";
 
 const homes: string[] = [];
@@ -44,8 +46,15 @@ async function setup() {
   const project = await projects.create({ name: "Real", description: "", repositories: [{ name: "source", path: repo }], directories: [] });
   const roots = new TaskRootIndex(profile, root), storage = new CreationIntentStore(profile);
   const host = {
-    routeTaskOp: async ({ taskId, payload }: { taskId: string; op: "task/provision"; payload: Record<string, unknown> }) => {
-      const instance = new TaskWorkspaceHost(taskId, join(payload.rootOverride as string, taskId), diskTaskStore);
+    routeTaskOp: async ({ taskId, op, payload }: { taskId: string; op: string; payload: Record<string, unknown> }) => {
+      const taskDir = payload["rootOverride"] !== undefined ? join(payload["rootOverride"] as string, taskId) : join(root, taskId);
+      const instance = new TaskWorkspaceHost(taskId, taskDir, diskTaskStore);
+      // Append ops are routed the way `host/host.ts` routes them, so the mode
+      // guards are exercised on the real Host record owner.
+      if (op === "task/appendDirs") {
+        const appended = instance.appendDirs({ plainDirs: payload["plainDirs"] as { directoryId: string; sourcePath: string }[] });
+        return { workspaceId: "test", taskId, op: "task/appendDirs" as const, payload: { ...appended.record, appended: appended.appended, skipped: appended.skipped } };
+      }
       instance.provision(payload as never);
       return { workspaceId: "test", taskId, op: "task/provision" as const, payload: {} };
     },
@@ -63,7 +72,7 @@ async function setup() {
     directoryIds: [] as string[], sharedWriteConfirmed: false, override: false, workspaceMode: "existing-git" as const,
   };
   const files = (taskDir: string) => new TaskWorkspaceFiles(taskDir.slice(taskDir.lastIndexOf("task-")), taskDir, diskTaskStore);
-  return { home, repo, root, profile, project, repository, projects, roots, storage, service, worktreeRequest, existingGitRequest, files };
+  return { home, repo, root, profile, project, repository, projects, roots, storage, service, host, worktreeRequest, existingGitRequest, files };
 }
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
@@ -218,6 +227,43 @@ describe("task workspace modes through the real creation path", { timeout: 30_00
     expect(record?.workspaceMode).toBe("plain-dirs");
     expect(record?.repos).toEqual([]);
     expect(env.files(prepared.taskDir).facts().map((root) => root.kind)).toEqual(["shared-dir"]);
+  });
+
+  it("refuses a worktree repo append on an existing-git task before any fetch", async () => {
+    const env = await setup();
+    const prepared = await env.service.prepare(env.existingGitRequest);
+    await env.service.commit(prepared.id);
+    const append = new ProjectTaskAppend(
+      env.host as never,
+      createPrepScanAuthority(env.projects, env.roots),
+      createNodePrepScanDeps(),
+      createNodeAppendGit(),
+    );
+    // The refusal must land BEFORE the append's fetch: a fetch would write
+    // `FETCH_HEAD` and remote-tracking refs into the shared original checkout,
+    // which existing-git mode promises never to touch.
+    await expect(append.append({ taskId: prepared.taskId,
+      repositories: [{ sourceId: env.repository.id, remote: "origin", remoteBranch: "main" }] }))
+      .rejects.toThrow("workspace-mode-refusal");
+    expect(existsSync(join(env.repo, ".git", "FETCH_HEAD"))).toBe(false);
+    expect(readFileSync(join(env.repo, "dirty.txt"), "utf8")).toBe("keep me\n");
+    expect(readTaskRecordOnDisk(prepared.taskDir)?.workspaceMode).toBe("existing-git");
+    // Plain-directory appends remain allowed in every mode (shared dirs are a
+    // real source), so the guard is scoped to repository appends only.
+    const shared = join(env.home, "extra-docs");
+    mkdirSync(shared);
+    const project = await env.projects.update(env.project.id, {
+      description: "", repositories: env.project.repositories, directories: [{ name: "extra", path: shared }],
+    });
+    const appended = await append.append({ taskId: prepared.taskId, directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true });
+    expect(appended.appendedDirs?.length ?? 1).toBe(1);
+    const afterDirAppend = readTaskRecordOnDisk(prepared.taskDir);
+    expect(afterDirAppend?.dirLinks?.[0]?.sourcePath).toBe(shared);
+    // The plain-directory append must not drop the existing-Git binding: the
+    // task still records its mode and its shared checkout.
+    expect(afterDirAppend?.workspaceMode).toBe("existing-git");
+    expect(afterDirAppend?.sharedRepos).toHaveLength(1);
+    expect(env.files(prepared.taskDir).facts().map((root) => root.kind)).toEqual(["existing-git", "shared-dir"]);
   });
 
   it("refuses Git modes without a repository and a legacy pure-directory intent stays recoverable", async () => {

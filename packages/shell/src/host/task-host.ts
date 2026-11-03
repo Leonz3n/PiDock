@@ -1928,6 +1928,11 @@ export class TaskWorkspaceHost {
         })),
       ],
       dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      // [Pencil T02] #137: a record rewrite carries the workspace mode and the
+      // shared checkouts it holds. Dropping them would silently re-derive the
+      // task's shape instead of keeping what the user created.
+      ...(stored.workspaceMode !== undefined ? { workspaceMode: stored.workspaceMode } : {}),
+      ...(stored.sharedRepos !== undefined ? { sharedRepos: stored.sharedRepos } : {}),
       repoPrepareErrors:
         stored.repoPrepareErrors !== undefined ? [...stored.repoPrepareErrors] : undefined,
       now: at,
@@ -2034,6 +2039,11 @@ export class TaskWorkspaceHost {
       repos: stored.repos,
       repoSources: stored.repoSources,
       dirLinks: [...existingLinks, ...appended],
+      // [Pencil T02] #137: appending a plain directory must not drop the task's
+      // recorded mode or its existing-Git sources — otherwise an `existing-git`
+      // task would silently lose its shared checkout binding on this write.
+      ...(stored.workspaceMode !== undefined ? { workspaceMode: stored.workspaceMode } : {}),
+      ...(stored.sharedRepos !== undefined ? { sharedRepos: stored.sharedRepos } : {}),
       repoPrepareErrors: stored.repoPrepareErrors,
       now: at,
     });
@@ -2400,6 +2410,8 @@ export class TaskWorkspaceHost {
       repos: [...stored.repos],
       repoSources: stored.repoSources !== undefined ? [...stored.repoSources] : undefined,
       dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      ...(stored.workspaceMode !== undefined ? { workspaceMode: stored.workspaceMode } : {}),
+      ...(stored.sharedRepos !== undefined ? { sharedRepos: stored.sharedRepos } : {}),
       repoPrepareErrors: nextErrors.length > 0 ? nextErrors : undefined,
       now: this.now(),
     });
