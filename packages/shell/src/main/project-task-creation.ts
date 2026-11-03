@@ -132,7 +132,9 @@ function gitCommonDir(path: string): string {
  * declared task branch; the observed values are what the record keeps.
  */
 function observeCheckout(target: string, branch: string): { targetRealPath: string; targetBranch: string; targetHead: string } {
-  const targetRealPath = realpathSync(target);
+  let targetRealPath: string;
+  try { targetRealPath = realpathSync(target); }
+  catch { throw new Error(`任务工作副本路径不可读取（${target}），未创建任务记录`); }
   const head = optionalGit(target, ["rev-parse", "--verify", "HEAD"]);
   if (head === null || !/^[a-f0-9]{40}$/.test(head)) throw new Error("任务工作副本 HEAD 不可读取，未创建任务记录");
   const actual = optionalGit(target, ["symbolic-ref", "--short", "-q", "HEAD"]);
