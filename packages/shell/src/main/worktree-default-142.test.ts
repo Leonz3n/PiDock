@@ -151,6 +151,12 @@ describe("[Pencil T07] #142 worktree-by-default through the real creation path",
     // fetch would have left it.
     git(env.repo, "update-ref", "refs/remotes/origin/main", "HEAD");
     expect(git(env.repo, "rev-parse", "refs/remotes/origin/main")).not.toBe(pushed);
+    // Uncommitted work the user left in the source checkout: 不覆盖来源未提交工作.
+    // The creation must neither move the source HEAD nor touch these bytes.
+    writeFileSync(join(env.repo, "README.md"), "user work in progress\n");
+    const sourceHead = git(env.repo, "rev-parse", "HEAD");
+    const sourceStatus = git(env.repo, "status", "--porcelain");
+    expect(sourceStatus).not.toBe("");
 
     const prepared = await env.prepare("Worktree work");
     expect(prepared.workspaceMode).toBe("worktree");
@@ -182,9 +188,13 @@ describe("[Pencil T07] #142 worktree-by-default through the real creation path",
       sourceRealPath: realpathSync(env.repo),
       workingBranch: { state: "observed", value: prepared.branch },
     });
-    // The source checkout itself was never moved to the fetched commit.
-    expect(git(env.repo, "rev-parse", "HEAD")).toBe(git(env.repo, "rev-parse", "HEAD~0"));
-    expect(git(env.repo, "rev-parse", "HEAD")).not.toBe(pushed);
+    // The source checkout itself was never moved to the fetched commit, and the
+    // uncommitted work it already carried is byte-for-byte what the user left:
+    // no checkout, no reset, no clean in the original.
+    expect(git(env.repo, "rev-parse", "HEAD")).toBe(sourceHead);
+    expect(sourceHead).not.toBe(pushed);
+    expect(git(env.repo, "status", "--porcelain")).toBe(sourceStatus);
+    expect(readFileSync(join(env.repo, "README.md"), "utf8")).toBe("user work in progress\n");
     expect(existsSync(join(env.repo, "next.txt"))).toBe(false);
 
     // An EXPLICIT worktree request produces the same shape.
