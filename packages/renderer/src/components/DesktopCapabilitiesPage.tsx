@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { DesktopProvidersPanel } from "./DesktopProvidersPanel";
+import { DesktopSkills } from "./DesktopSkills";
 import { DesktopMcpPanel } from "./DesktopMcpPanel";
 import { parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 
@@ -25,7 +25,7 @@ type Pane = "providers" | "mcp" | "skills";
 const NAV: { key: Pane; label: string; icon: string; hint: string }[] = [
   { key: "providers", label: "Providers", icon: "server", hint: "模型供应商与默认模型" },
   { key: "mcp", label: "MCP", icon: "link", hint: "Pi 原生 mcp.json · 工具与审批" },
-  { key: "skills", label: "Skills", icon: "book", hint: "技能来源（尚未接线）" },
+  { key: "skills", label: "Skills", icon: "book", hint: "本地技能来源与 SKILL.md" },
 ];
 
 export function DesktopCapabilitiesPage({
@@ -71,7 +71,7 @@ export function DesktopCapabilitiesPage({
             ? <span className="text-[10px] text-muted">{status === null ? "—" : status.profiles.length}</span>
             : item.key === "mcp"
               ? <span className="text-[10px] text-muted">{mcpCount === null ? "—" : mcpCount}</span>
-              : <span className="text-[10px] text-muted">未接线</span>}
+              : <span className="text-[10px] text-muted">—</span>}
         </button>
         <p className="px-2.5 pb-1 text-[10px] text-muted">{item.hint}</p>
       </li>)}</ul>
@@ -86,27 +86,8 @@ export function DesktopCapabilitiesPage({
       {pane === "providers" ? <DesktopProvidersPanel taskId={taskId} taskName={taskName} status={status} error={error}
         onReload={reload} onBack={() => onBack?.()} />
         : pane === "mcp" ? <DesktopMcpPanel onCount={onMcpCount} />
-        : <NotWired />}
+        : <DesktopSkills />}
     </div>
   </div>;
 }
 
-/**
- * Skills has no Host inventory yet. Naming what is missing (and what will not
- * be shipped) is the honest state: no invented counts, no sample rows.
- */
-function NotWired() {
-  const title = "Skills";
-  return <section data-testid="capabilities-skills" className="min-w-0">
-    <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
-      <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Agent Capabilities</p>
-        <h1 className="mt-1.5 text-[24px] font-semibold text-ink">{title}</h1></div>
-      <Badge variant="soft">尚未接线</Badge>
-    </header>
-    <p className="mt-4 border border-line bg-soft px-3 py-2 text-xs leading-6 text-muted">
-      Host 还没有 {title} 的真实清单、来源或运行时加载状态读取操作，因此这里不展示任何行，也不把未知数量显示为零。
-      技能的来源、安装与启停同样需要 Host 侧的真实接口，尚不在本机实现（后续工单 151）。
-    </p>
-    <p className="mt-2 text-[11px] text-muted">在此之前，Providers 与 MCP 是仅有的两个已接线能力。</p>
-  </section>;
-}

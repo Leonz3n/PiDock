@@ -159,17 +159,21 @@ export interface McpTestResult {
 }
 
 export function parseMcpTest(value: unknown): McpTestResult {
+  // [T19 / 154] main reports a connected test WITHOUT an `error` key and lists the
+  // tools Pi returned (`name`, optional `description`); the read-only hint is a
+  // tool annotation the connection test does not carry. Accepting the documented
+  // Host shape is what makes the real 测试 result render instead of failing to parse.
   if (!object(value) || !["connected", "failed", "disabled"].includes(String(value.state)) || !Array.isArray(value.tools) ||
-      !(value.error === null || (object(value.error) && typeof value.error.code === "string" && typeof value.error.message === "string"))) {
+      !(value.error === undefined || value.error === null || (object(value.error) && typeof value.error.code === "string" && typeof value.error.message === "string"))) {
     throw new Error("MCP 连接测试返回异常");
   }
   const tools = value.tools.map((tool) => {
-    if (!object(tool) || typeof tool.name !== "string" || typeof tool.description !== "string" || typeof tool.readOnly !== "boolean") throw new Error("MCP 工具清单返回异常");
-    return { name: tool.name, description: tool.description, readOnly: tool.readOnly };
+    if (!object(tool) || typeof tool.name !== "string" || (tool.description !== undefined && typeof tool.description !== "string")) throw new Error("MCP 工具清单返回异常");
+    return { name: tool.name, description: typeof tool.description === "string" ? tool.description : "", readOnly: tool.readOnly === true };
   });
   const refs = Array.isArray(value.credentialRefs) ? strings(value.credentialRefs, 200)
     : object(value.credentialRefs) ? { env: strings(value.credentialRefs.env, 100), headers: strings(value.credentialRefs.headers, 100) } : [];
-  return { state: value.state as McpTestResult["state"], tools, credentialRefs: refs, error: value.error as McpTestResult["error"], ...(typeof value.durationMs === "number" ? { durationMs: value.durationMs } : {}), ...(typeof value.name === "string" ? { name: value.name } : {}) };
+  return { state: value.state as McpTestResult["state"], tools, credentialRefs: refs, error: (value.error ?? null) as McpTestResult["error"], ...(typeof value.durationMs === "number" ? { durationMs: value.durationMs } : {}), ...(typeof value.name === "string" ? { name: value.name } : {}) };
 }
 
 export async function mcpCall(

@@ -90,10 +90,12 @@ describe("S03 capability nav", () => {
     expect(screen.getByTestId("mcp-empty")).toHaveTextContent("还没有 MCP Server");
     expect(mcpCalls[0]).toEqual({ op: "list" });
     await userEvent.click(screen.getByRole("button", { name: /^Skills/ }));
-    expect(await screen.findByTestId("capabilities-skills")).toHaveTextContent("后续工单 151");
-    // MCP is wired (count 0 is real); only Skills is marked 未接线.
+    // [#154] S09 Skills is the real local-source pane the desktop shell now mounts,
+    // not a placeholder: with no `skillsOp` bridge in this fixture it names the
+    // unwired shell state instead of inventing rows.
+    expect(await screen.findByTestId("skills-pane")).toHaveTextContent("Skills 来源尚未接线");
     const nav = screen.getByRole("navigation", { name: "能力管理" });
-    expect(within(nav).getAllByText("未接线")).toHaveLength(1);
+    expect(within(nav).queryByText("未接线")).toBeNull();
   });
 
   it("renders the real list, and an empty list stays empty", async () => {
