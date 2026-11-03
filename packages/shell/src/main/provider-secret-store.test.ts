@@ -24,7 +24,7 @@ it("encrypts a credential and decrypts the same value back", () => {
 });
 
 it("persists ciphertext only, with private file modes", () => {
-  const { dir, file, store: secrets } = store();
+  const { file, store: secrets } = store();
   secrets.set(PROFILE, SECRET);
   const raw = readFileSync(file, "utf8");
   expect(raw).not.toContain(SECRET);
@@ -65,7 +65,7 @@ it("refuses to store anything when the platform cannot encrypt", () => {
 });
 
 it("fails closed on an unreadable, foreign or corrupted document", () => {
-  const { dir, file, store: secrets } = store();
+  const { file, store: secrets } = store();
   secrets.set(PROFILE, SECRET);
   const good = readFileSync(file, "utf8");
 

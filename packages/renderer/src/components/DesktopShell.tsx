@@ -52,7 +52,6 @@ export type DesktopView =
   | { view: "project"; projectId: string }
   | { view: "unassigned" }
   | { view: "task"; taskId: string }
-  | { view: "providers" }
   | { view: "usage" }
   | { view: "schedules" }
   | { view: "archive" }
@@ -314,7 +313,6 @@ export function DesktopShell({
             <SidebarNavButton label="Token 用量" icon="chart" active={view.view === "usage"} onSelect={() => onNavigate({ view: "usage" })} />
             <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "capabilities"} onSelect={() => onNavigate({ view: "capabilities" })} />
             <SidebarNavButton label={LABELS.settings} icon="folder" active={view.view === "settings"} onSelect={() => onNavigate({ view: "settings" })} />
-            <SidebarNavButton label="模型与 Provider" icon="key" active={view.view === "providers"} onSelect={() => onNavigate({ view: "providers" })} />
             <div data-user-chip="local-workspace" title="本机工作区" className="flex items-center gap-[9px] px-2 py-[10px]">
               <LocalUserAvatar />
               <span className="truncate text-[11px] text-ink below-mid:hidden">本机工作区</span>

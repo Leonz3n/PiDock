@@ -6,7 +6,6 @@ import { DesktopTaskFacts } from "./DesktopTaskFacts";
 import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
 import { abandonCreation, commitCreation, currentCreation, CREATION_RETENTION_NOTICE, type CreationIntentView } from "../data/desktopCreation";
 import { DESKTOP_LABELS, DesktopRootErrors, DesktopShell, type DesktopLocalPageKey, type DesktopView } from "./DesktopShell";
-import { DesktopProvidersPage } from "./DesktopProvidersPage";
 import { DesktopProjectOverview } from "./DesktopProjectOverview";
 import { DesktopUnassignedTasks } from "./DesktopUnassignedTasks";
 import { DesktopWorkspaceDialog } from "./DesktopWorkspaceDialog";
@@ -89,10 +88,6 @@ export function DesktopInventory() {
   const [activeTask, setActiveTask] = useState<{ id: string; name: string; roots: string; association: string } | null>(null);
   /** 能力管理 and 本机设置 — the 系统 group's two local pages, each a real page (#24). */
   const [localPage, setLocalPage] = useState<DesktopLocalPageKey | null>(null);
-  // [UI 对齐 S8e] #47: real Model/Provider page. It keeps the active task as its
-  // selection context (选用 is recorded per task), like the prototype where the
-  // workspace stays selected while another page is shown.
-  const [providers, setProviders] = useState(false);
   // [UI 对齐 S8e] #47: 项目总览 is the project page; the create/claim/transfer/
   // unlink management surface it links to is a separate view (原型 A 的「项目管理」).
   const [manage, setManage] = useState(false);
@@ -394,9 +389,7 @@ export function DesktopInventory() {
   const activeTasks = lifecycleReady ? shellTasks.filter((task) => lifecycleIndex?.activeIds.has(task.taskId)) : [];
   const selectedProject = selection.kind === "project" ? shellProjects.find((project) => project.id === selection.id) : undefined;
   const environmentProject = selectedProject ?? shellProjects[0];
-  const shellView: DesktopView = providers
-    ? { view: "providers" }
-    : schedulesOpen
+  const shellView: DesktopView = schedulesOpen
       ? { view: "schedules" }
     : archiveOpen
       ? { view: "archive" }
@@ -406,10 +399,10 @@ export function DesktopInventory() {
       ? { view: "env" }
     : usageOpen
       ? { view: "usage" }
-    : activeTask
-      ? { view: "task", taskId: activeTask.id }
-      : localPage
-        ? { view: localPage }
+    : localPage
+      ? { view: localPage }
+      : activeTask
+        ? { view: "task", taskId: activeTask.id }
         : selection.kind === "project" && selectedProject
           ? { view: "project", projectId: selectedProject.id }
           : { view: "unassigned" };
@@ -426,24 +419,22 @@ export function DesktopInventory() {
       setAttentionOpen(false);
       setEnvironmentOpen(false);
       setUsageTaskId(null);
-      setProviders(false);
       void openTask(next.taskId);
       return;
     }
     entryEpoch.current++;
-    setProviders(next.view === "providers");
     setUsageOpen(next.view === "usage");
     setSchedulesOpen(next.view === "schedules");
     setArchiveOpen(next.view === "archive");
     setAttentionOpen(next.view === "attention");
     setEnvironmentOpen(next.view === "env");
-    if (next.view === "providers") return;
     if (next.view === "project" || next.view === "unassigned") setManage(false);
     if (next.view === "usage") { setUsageTaskId(activeTask?.id ?? (shellTasks[0]?.taskId ?? null)); return; }
     if (next.view === "schedules" || next.view === "archive" || next.view === "attention" || next.view === "env") { setActiveTask(null); setLocalPage(null); return; }
-    // Any other page leaves the usage view.
+    // Any other page leaves the usage view. 能力管理 keeps the task it was
+    // opened from: 选用 is recorded on that task and Esc returns to it.
     setUsageTaskId(null);
-    setActiveTask(null);
+    if (next.view !== "capabilities") setActiveTask(null);
     setLocalPage(next.view === "capabilities" || next.view === "settings" ? next.view : null);
     if (next.view === "project") { pinned.current = true; setSelection({ kind: "project", id: next.projectId }); }
     if (next.view === "unassigned") { pinned.current = true; setSelection({ kind: "unassigned" }); }
@@ -467,12 +458,10 @@ export function DesktopInventory() {
     ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: "定时任务" }
     : usageOpen
     ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "Token 用量" }
-    : providers
-    ? { ...(activeProject ? { project: activeProject.name } : selectedProject ? { project: selectedProject.name } : {}), page: "模型与 Provider" }
-    : activeTask
-    ? { ...(activeProject ? { project: activeProject.name } : {}), task: activeTask.name }
     : localPage
     ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: DESKTOP_LABELS[localPage] }
+    : activeTask
+    ? { ...(activeProject ? { project: activeProject.name } : {}), task: activeTask.name }
     : selectedProject
       ? { project: selectedProject.name, page: manage ? "项目管理" : "工作空间总览" }
       : selection.kind === "unassigned"
@@ -529,23 +518,23 @@ export function DesktopInventory() {
     taskId={usageTaskId}
     onSelectTask={(taskId) => { setActiveTask(null); setUsageTaskId(taskId); }}
   />);
-  if (providers) return shell(<DesktopProvidersPage
+  // [PiDock T03] #138: 能力管理 is the single Provider entry. It keeps the task
+  // it was opened from as its 选用 context, and Esc returns to that task.
+  if (localPage === "capabilities") return shell(<DesktopCapabilitiesPage
     taskId={activeTask?.id ?? null}
     taskName={activeTask?.name ?? null}
-    availableTasks={shellTasks}
-    onOpenTask={(taskId) => navigate({ view: "task", taskId })}
+    onBack={() => navigate(activeTask ? { view: "task", taskId: activeTask.id } : { view: "unassigned" })}
   />);
+  if (localPage === "settings") return shell(<DesktopSettingsPage />);
   // [Pencil T02] #137 / S08: a task opens on its workspace facts (one row per
   // source, mode badge, per-source verification) with the existing conversation
   // entry directly below — no invented sessions, no fixture roots.
   if (activeTask) return shell(<div className="flex h-full min-h-0 flex-col">
     <DesktopTaskFacts taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge} />
     <div className="min-h-0 flex-1">
-      <DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
+      <DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
     </div>
   </div>);
-  if (localPage === "capabilities") return shell(<DesktopCapabilitiesPage />);
-  if (localPage === "settings") return shell(<DesktopSettingsPage />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
     <div className="w-full max-w-[620px]">
       {/* A submitted write whose authoritative reread failed must stay visible: dropping

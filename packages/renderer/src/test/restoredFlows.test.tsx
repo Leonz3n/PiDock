@@ -75,47 +75,6 @@ describe("failed-run retry dialog", () => {
   });
 });
 
-describe("provider reasoning configuration", () => {
-  it("syncs example model candidates and keeps a custom display name", async () => {
-    const user = userEvent.setup();
-    renderApp("/providers");
-    await screen.findByRole("heading", { name: "模型与 Provider" });
-
-    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    const dialog = await screen.findByRole("dialog", { name: "编辑 Provider" });
-
-    // Syncing only refreshes candidates; it never overwrites configured models.
-    await user.click(within(dialog).getByRole("button", { name: "同步模型列表" }));
-    expect(await within(dialog).findByText("已同步 3 个候选")).toBeInTheDocument();
-    const candidates = Array.from(document.querySelectorAll("#provider-model-candidates option")).map((option) => (option as HTMLOptionElement).value);
-    expect(candidates).toEqual(["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"]);
-
-    // The display name follows the ID until the user edits it.
-    const idInput = within(dialog).getByLabelText("模型 ID 第 1 行");
-    await user.clear(idInput);
-    await user.type(idInput, "claude-sonnet-4-5");
-    expect(within(dialog).getByLabelText("模型显示名称 第 1 行")).toHaveValue("claude-sonnet-4-5");
-    await user.clear(within(dialog).getByLabelText("模型显示名称 第 1 行"));
-    await user.type(within(dialog).getByLabelText("模型显示名称 第 1 行"), "Sonnet 4.5");
-    await user.click(within(dialog).getByRole("button", { name: "保存" }));
-
-    expect(await screen.findByText("已保存 Provider 配置；凭据只保存引用，不写入共享模板与日志")).toBeInTheDocument();
-    expect(await screen.findByText("Sonnet 4.5")).toBeInTheDocument();
-  });
-
-  it("lets a model declare custom reasoning levels", async () => {
-    const user = userEvent.setup();
-    renderApp("/providers");
-    await screen.findByRole("heading", { name: "模型与 Provider" });
-
-    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    const dialog = await screen.findByRole("dialog", { name: "编辑 Provider" });
-    await user.selectOptions(within(dialog).getByLabelText("推理能力 第 1 行"), "custom");
-    expect(within(dialog).getByLabelText("推理档位 1 high")).toBeInTheDocument();
-    expect(within(dialog).getByLabelText("默认推理档位 第 1 行")).toBeInTheDocument();
-  });
-});
-
 describe("composer commands and candidates", () => {
   it("lists app commands, runs them, and inserts @ / $ references", async () => {
     const user = userEvent.setup();

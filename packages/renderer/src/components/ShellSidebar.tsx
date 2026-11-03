@@ -159,11 +159,6 @@ export function ShellSidebar() {
             active={route.view === "settings"}
             onSelect={() => navigate({ view: "settings" })}
           />
-          <SidebarNavButton
-            item={{ route: { view: "providers" }, icon: "key" }}
-            active={route.view === "providers"}
-            onSelect={() => navigate({ view: "providers" })}
-          />
           <div
             data-user-chip="local-workspace"
             title={`本机工作区 · ${localSettings?.workspaceRoot ?? "未设置"}`}
