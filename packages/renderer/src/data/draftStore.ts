@@ -78,9 +78,9 @@ export function draftFromHost(payload: unknown): { draft: HostDraft | null; skip
   return { draft: { text, references }, skipped, error: skipped > 0 ? `已跳过 ${skipped} 项无法读取的引用；草稿文字已恢复` : null };
 }
 
-export async function readHostDraft(taskId: string): Promise<{ draft: HostDraft | null; error: string | null }> {
+export async function readHostDraft(taskId: string, sessionId: string = SDK_SESSION_ID): Promise<{ draft: HostDraft | null; error: string | null }> {
   try {
-    const result = await shellTaskOp(taskId, "task/readDraft", { sessionId: SDK_SESSION_ID });
+    const result = await shellTaskOp(taskId, "task/readDraft", { sessionId });
     if (!result.ok) {
       return { draft: null, error: `草稿读取失败：${result.error}；仍可编辑和发送，请单独核验草稿记录` };
     }
@@ -92,13 +92,13 @@ export async function readHostDraft(taskId: string): Promise<{ draft: HostDraft 
 }
 
 /** `null` means the Host confirmed the save; any string is a named refusal. */
-export async function saveHostDraft(taskId: string, draft: HostDraft): Promise<string | null> {
+export async function saveHostDraft(taskId: string, draft: HostDraft, sessionId: string = SDK_SESSION_ID): Promise<string | null> {
   if (bytes(draft.text) > MAX_DRAFT_BYTES) {
     return "草稿未保存：文字超过 16 KiB；原记录保留，仍可编辑，发送遵循 SDK 消息上限";
   }
   try {
     const result = await shellTaskOp(taskId, "task/saveDraft", {
-      sessionId: SDK_SESSION_ID,
+      sessionId,
       text: draft.text,
       ...(draft.references.length > 0 ? { references: draft.references } : {}),
     });

@@ -86,6 +86,8 @@ export function DesktopInventory() {
   const [creationNotice, setCreationNotice] = useState<{ taskId: string; message: string } | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [activeTask, setActiveTask] = useState<{ id: string; name: string; roots: string; association: string } | null>(null);
+  /** [#139] The session the sidebar asked the open task page to show; `undefined` = the task's active session. */
+  const [sessionFocus, setSessionFocus] = useState<string | undefined>(undefined);
   /** 能力管理 and 本机设置 — the 系统 group's two local pages, each a real page (#24). */
   const [localPage, setLocalPage] = useState<DesktopLocalPageKey | null>(null);
   // [UI 对齐 S8e] #47: 项目总览 is the project page; the create/claim/transfer/
@@ -412,6 +414,9 @@ export function DesktopInventory() {
     setDraft(null);
     setEditNeedsReview(false);
     if (next.view === "task") {
+      // [#139] The sidebar's session rows name a session; opening the task from
+      // anywhere else clears the focus so the Host's active session is shown.
+      setSessionFocus(next.sessionId);
       setLocalPage(null);
       setUsageOpen(false);
       setSchedulesOpen(false);
@@ -532,7 +537,7 @@ export function DesktopInventory() {
   if (activeTask) return shell(<div className="flex h-full min-h-0 flex-col">
     <DesktopTaskFacts taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge} />
     <div className="min-h-0 flex-1">
-      <DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
+      <DesktopConversation key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
     </div>
   </div>);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">

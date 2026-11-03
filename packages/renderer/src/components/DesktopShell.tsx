@@ -21,13 +21,14 @@
  * - The window width tiers match prototype A (1180/960/850/720 via `below-*` variants).
  */
 
-import type { ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Icon, type IconName } from "./Icon";
 import { BrandMark, LocalUserAvatar } from "./ui";
 import { desktopSummarySegments, type DesktopSummarySegment } from "../data/desktopShellSummary";
 import { hostText } from "../data/workspaceFiles";
+import { readTaskSessions, type SessionList } from "../data/taskSessions";
 
 export interface DesktopShellTask {
   taskId: string;
@@ -51,7 +52,9 @@ export interface DesktopShellProject {
 export type DesktopView =
   | { view: "project"; projectId: string }
   | { view: "unassigned" }
-  | { view: "task"; taskId: string }
+  // [#139] A task page may name the session it opens; omitting it opens the
+  // task's active session (the Host's own pointer).
+  | { view: "task"; taskId: string; sessionId?: string }
   | { view: "usage" }
   | { view: "schedules" }
   | { view: "archive" }
@@ -118,6 +121,39 @@ function TaskNavCard({ task, selected, onSelect }: { task: DesktopShellTask; sel
       </span>
     </Button>
   );
+}
+
+/**
+ * [#139] S01's session rows: the sessions the Host reports under ONE task
+ * (the selected one), with the active marker. A failure is stated, never
+ * hidden — and the rows are read from the Host's index, not guessed.
+ */
+function TaskSessionRows({ taskId, activeSessionId, onOpen }: { taskId: string; activeSessionId: string | null; onOpen: (sessionId: string) => void }) {
+  const [state, setState] = useState<{ phase: "reading" } | { phase: "read"; list: SessionList } | { phase: "failed"; error: string }>({ phase: "reading" });
+  useEffect(() => {
+    let live = true;
+    setState({ phase: "reading" });
+    void readTaskSessions(taskId).then((result) => {
+      if (!live) return;
+      setState(result.ok ? { phase: "read", list: result.list } : { phase: "failed", error: result.error });
+    });
+    return () => { live = false; };
+  }, [taskId]);
+  if (state.phase === "reading") return <p className="mb-1 ml-[27px] text-[10px] text-muted">正在读取会话…</p>;
+  if (state.phase === "failed") return <p role="status" className="mb-1 ml-[27px] text-[10px] text-[#9a6032]">会话列表读取失败：{state.error}</p>;
+  const visible = state.list.sessions.filter((session) => !session.archived);
+  return <div data-session-tree={taskId} className="mb-1 ml-[27px] border-l border-line pl-2">
+    {visible.length === 0 && <p className="text-[10px] text-muted">暂无会话</p>}
+    {visible.map((session) => {
+      const current = (activeSessionId ?? state.list.activeSessionId) === session.id;
+      return <button key={session.id} type="button" data-session-nav={session.id} aria-current={current ? "true" : undefined}
+        onClick={() => onOpen(session.id)}
+        className={`flex w-full min-w-0 items-center gap-1.5 rounded-[5px] px-1.5 py-1 text-left text-[11px] ${current ? "bg-[#e3e6ec] font-semibold text-[#283c6c]" : "text-[#69737a] hover:bg-[#eaebec]"}`}>
+        <span aria-hidden className={`h-1 w-1 shrink-0 rounded-full ${current ? "bg-[#283c6c]" : "bg-[#b6bcc4]"}`} />
+        <span className="truncate">{session.name}</span>
+      </button>;
+    })}
+  </div>;
 }
 
 type DesktopRoot = { label: string; state: "ready" | "error"; message?: string };
@@ -300,7 +336,12 @@ export function DesktopShell({
             <div className="flex min-h-0 flex-col overflow-y-auto below-mid:hidden">
               {tasks.length === 0 ? <p className="px-[10px] pb-2 text-[10px] text-muted">{lifecycleUnverified ? "任务归档状态未核验完整。" : "已检查的任务根暂无进行中任务。"}</p> : null}
               {tasks.map((task) => (
-                <TaskNavCard key={task.taskId} task={task} selected={task.taskId === activeTaskId} onSelect={() => onNavigate({ view: "task", taskId: task.taskId })} />
+                <Fragment key={task.taskId}>
+                  <TaskNavCard task={task} selected={task.taskId === activeTaskId} onSelect={() => onNavigate({ view: "task", taskId: task.taskId })} />
+                  {task.taskId === activeTaskId && (
+                    <TaskSessionRows taskId={task.taskId} activeSessionId={view.view === "task" ? view.sessionId ?? null : null} onOpen={(sessionId) => onNavigate({ view: "task", taskId: task.taskId, sessionId })} />
+                  )}
+                </Fragment>
               ))}
             </div>
             <SidebarNavButton label="已归档" icon="archive" active={view.view === "archive"} onSelect={() => onNavigate({ view: "archive" })} />

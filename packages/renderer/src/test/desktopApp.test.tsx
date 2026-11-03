@@ -21,7 +21,13 @@ const project = { id: "bcedc870-22bd-474e-ac55-78d30a9d763d", name: "真实项�
 const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?: string } = {}): PidockBridge => ({
   listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })),
   importTaskRoot: vi.fn(async () => ({ ok: true, payload: { canceled: false, count: 1 } })),
-  taskOp: vi.fn(async (taskId, op) => ({ ok: true, payload: { lifecycle: { taskId, archived: false, archivedAt: null }, op } })),
+  // [#139] The production route reads a task's sessions and one session's readout;
+  // this default answers the migrated single session, `main`.
+  taskOp: vi.fn(async (taskId, op) => {
+    if (op === "task/sessionList") return { ok: true, payload: { activeSessionId: "main", sessions: [{ id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: null }], provider: null } };
+    if (op === "task/sessionReadout") return { ok: true, payload: { session: { id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: null }, active: true, model: null, reasoningLevels: [], context: { used: null, window: null, source: "unknown" }, usage: null, turns: 0, transcriptModel: null, pending: false, interrupted: false } };
+    return { ok: true, payload: { lifecycle: { taskId, archived: false, archivedAt: null }, op } };
+  }),
   projectOp: vi.fn(async (request) => {
     if (settings.fail) return { ok: false, error: settings.fail };
     if (request.op === "list") return { ok: true, payload: { initialized: settings.projectPresent ?? true, projects: settings.projectPresent === false ? [] : [project] } };
@@ -831,7 +837,7 @@ describe("Desktop production data", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查看 main 会话" }));
     const conversation = await screen.findByTestId("desktop-conversation");
     expect(await within(conversation).findByText("SDK main 完成结果")).toBeInTheDocument();
-    expect(within(conversation).getByRole("tab", { name: "main" })).toBeInTheDocument();
+    expect(within(conversation).getByRole("tab", { name: "主会话" })).toBeInTheDocument();
     expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("真实任务")).toBeInTheDocument();
     expect(sdkTurn).toHaveBeenCalledWith({ action: "subscribe", taskId: "real-1", sessionId: "main" });
     expect(sdkTurn).not.toHaveBeenCalledWith(expect.objectContaining({ action: "start" }));
@@ -907,15 +913,18 @@ describe("Desktop production data", () => {
     await waitFor(() => expect(sdkTurn).toHaveBeenCalledWith({ action: "unsubscribe", taskId: "real-1", sessionId: "main" }));
   });
 
-  it("reads the composer's reasoning tier and occupancy from the Host on the production route", async () => {
+  it("reads the composer's reasoning level and context usage from this session's readout on the production route", async () => {
     const sdkTurn = vi.fn(async (request: Record<string, unknown>) => ({ ok: true, payload: request.action === "subscribe" ?
       { taskId: "real-1", sessionId: "main", snapshot: { source: "sdk-jsonl", sessionId: "main", messages: [], pending: false, interrupted: false }, turn: null } :
       { unsubscribed: true } }));
     const shell = bridge({ assigned: true });
-    // The Host answers with its own session readout; the composer must show THAT
-    // tier and THAT occupancy — `xhigh` is nobody's default here.
-    const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: { providerId: "provider-loopback", providerName: "Loopback", model: "issue47-model", modelName: null, availability: { status: "available" }, window: 200, used: 24.8, source: "estimated", tokens: 4321, percent: 12.4, thinking: "xhigh", thinkingCatalog: "declared" } } }
+    // [#139] The Host answers with THIS SESSION's readout, derived from the real SDK
+    // session; the composer must show that level and that usage — `xhigh` is
+    // nobody's default here, and the window comes from the bound model.
+    const session = { id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: { profileId: "p-1", modelId: "issue47-model", thinkingLevel: "xhigh", generation: 1 } };
+    const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionList"
+      ? { ok: true, payload: { activeSessionId: "main", sessions: [session], provider: { profileId: "p-1", modelId: "issue47-model", generation: 1, models: [{ id: "issue47-model", name: "Issue47", contextWindow: 200000, maxTokens: 8192, reasoning: true, reasoningLevels: ["medium", "xhigh"] }] } } }
+      : op === "task/sessionReadout" ? { ok: true, payload: { session, active: true, model: { id: "issue47-model", name: "Issue47", contextWindow: 200000, maxTokens: 8192, reasoning: true }, reasoningLevels: ["medium", "xhigh"], context: { used: 24800, window: 200000, source: "sdk-usage" }, usage: { input: 24800, output: 400, cacheRead: 0, cacheWrite: 0 }, turns: 1, transcriptModel: { provider: "pidock-p-1", modelId: "issue47-model" }, pending: false, interrupted: false } }
       : { ok: true, payload: { lifecycle: { taskId: "real-1", archived: false, archivedAt: null } } });
     window.pidock = { ...shell, taskOp, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
     render(<App />);
@@ -924,12 +933,14 @@ describe("Desktop production data", () => {
     fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
     const conversation = await screen.findByTestId("desktop-conversation");
 
-    const reasoning = await within(conversation).findByTestId("composer-thinking");
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 极高（xhigh）"));
-    expect(reasoning).not.toBeDisabled();
+    const reasoning = await within(conversation).findByTestId("composer-reasoning");
+    // Only the levels this model declares are offered, and the stored one is pressed.
+    await waitFor(() => expect(within(reasoning).getByRole("button", { name: "很高" })).toHaveAttribute("aria-pressed", "true"));
+    expect(within(reasoning).getAllByRole("button").map((button) => button.textContent)).toEqual(["中", "很高"]);
     expect(within(conversation).queryByText("推理（未接线）")).toBeNull();
-    await waitFor(() => expect(within(conversation).getByTestId("composer-context")).toHaveTextContent("上下文 24.8k / 200k · 12.4% · 估算"));
-    expect(taskOp).toHaveBeenCalledWith("real-1", "task/sessionContext", { sessionId: "main" });
+    await waitFor(() => expect(within(conversation).getByTestId("composer-context")).toHaveTextContent("上下文 24.8k / 200k"));
+    expect(taskOp).toHaveBeenCalledWith("real-1", "task/sessionReadout", { sessionId: "main" });
+    expect(within(conversation).getByTestId("composer-model-name")).toHaveTextContent("Issue47");
   });
 
   it("fails visibly without bridge and retains native task root import", async () => {

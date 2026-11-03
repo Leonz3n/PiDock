@@ -45,9 +45,13 @@ const facts = {
 
 function bridge() {
   let created = false;
+  // [#139] The Host's session index for this task: one migrated session, `main`.
+  const session = { id: "main", name: "主会话", createdAt: "2026-10-20T00:00:00.000Z", updatedAt: "2026-10-20T00:00:00.000Z", archived: false, permission: "default", binding: null };
   const taskOp = vi.fn(async (taskId: string, op: string) => {
     if (op === "task/lifecycleState") return { ok: true as const, payload: { lifecycle: { taskId, archived: false, archivedAt: null } } };
     if (op === "task/fileRoots") return { ok: true as const, payload: facts };
+    if (op === "task/sessionList") return { ok: true as const, payload: { activeSessionId: "main", sessions: [session], provider: null } };
+    if (op === "task/sessionReadout") return { ok: true as const, payload: { session, active: true, model: null, reasoningLevels: [], context: { used: null, window: null, source: "unknown" }, usage: null, turns: 0, transcriptModel: null, pending: false, interrupted: false } };
     return { ok: true as const, payload: { op } };
   });
   const host = {
@@ -98,8 +102,8 @@ describe("[Pencil T07] #142 post-create landing", () => {
     expect(await screen.findByTestId("desktop-task-facts")).toBeInTheDocument();
     expect(await screen.findByTestId("desktop-conversation")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("task-facts-mode")).toHaveTextContent("独立 Worktree"));
-    // The existing single session entry is `main` and it is the one subscribed.
-    expect(screen.getByRole("tab", { name: "main" })).toBeInTheDocument();
+    // The Host's own session entry is shown by NAME, and its id is what is subscribed.
+    expect(await screen.findByRole("tab", { name: "主会话" })).toBeInTheDocument();
     expect(sdkTurn).toHaveBeenCalledWith(expect.objectContaining({ action: "subscribe", taskId: TASK_ID, sessionId: "main" }));
     expect(taskOp.mock.calls.some(([, op]) => op === "task/fileRoots")).toBe(true);
     // No Provider is configured: the entry asks for configuration and routes to
