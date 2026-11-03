@@ -18,7 +18,7 @@
 | --- | --- |
 | 桌面 | Electron 44.x；窗口、原生集成、Host 生命周期与受控桥接 |
 | 本机运行时 | Electron 随包 Node 24；用户无需额外安装 Node / Bun |
-| Agent | Pi AgentSession；直接依赖精确固定 `pi-coding-agent@1.4.0` 和 `pi-ai@1.4.0` |
+| Agent | Pi AgentSession；目标同步精确固定 `pi-coding-agent@1.5.0` 和 `pi-ai@1.5.0`，当前清单与 lockfile 仍为 1.4.0；实际升级归 #134 |
 | Host | 每任务工作区独立 Node utilityProcess；隔离模型 worker 承载 SDK 执行 |
 | Renderer | React 19 / TypeScript / Vite；sandbox、contextIsolation，关闭 Node 集成 |
 | 界面状态 | Zustand；仅管理 UI 与 Host 数据投影 |
@@ -51,9 +51,14 @@ renderer 使用 `sandbox:true`、`contextIsolation:true`、`nodeIntegration:fals
 
 定时任务只在应用运行期间调度，关窗可后台运行，明确退出 / 休眠不执行、不补跑。同任务已有未结束执行时跳过，每次触发创建独立会话，沿用固定任务工作区。退出先中止 Agent，再回收所属子进程和 SDK；恢复不重放副作用。既有归档按 #117 的已交付口径只停止 Agent 回合，不把历史服务 / 终端进程伪装成已停止；清理与明确退出分别执行资源回收。
 
-## Pi 1.4 接入
+## Pi 1.5 目标基线与接入
 
-已交付升级与验证边界见 [适配报告](pi-1.4-upgrade-review.md) 和 [#134](https://github.com/Leonz3n/PiDock/issues/134)。
+本轮仅调整设计与工单，实际依赖仍为 1.4.0。1.5 的破坏性变更、设计差额和验收分配见 [Pi 1.5 升级设计](pi-1.5-upgrade-design.md)，升级由 [#134](https://github.com/Leonz3n/PiDock/issues/134) 承接并阻塞 #138 及其 SDK 下游。1.4 已交付证据保留在 [历史适配报告](pi-1.4-upgrade-review.md)。
+
+- 工具参数使用 pi-schema 的 JSON Schema 校验与转换；Host 保留严格语义校验，审批、指纹与执行绑定同一份实际参数。普通 SDK 不依赖扩展 loader 的 TypeBox 兼容别名。
+- 模型与推理档位按 1.5 实际能力提供，显式选择不被上游新默认覆盖。保留请求／响应模型与费用来源；展示费用时区分实报总额、估算及未知。
+- MCP 使用 stdio／Streamable HTTP，保留原生 OAuth 注册模式和凭据归属；首版显式配置 direct 受管工具子集，不自动引入 codemode。项目资源信任不等同于工作空间登记。
+- 升级核验会话写失败、命令取消／截断／UTF-8、Windows 路径去重和真实 renderer 流式负载；上游 TUI 或 pi.exec 修复不证明 PiDock 自有路径已经通过。
 
 - MCP 优先复用 Pi 原生扩展，撤销自建协议 bridge 的旧依据。SDK 仍需显式装配扩展并绑定会话；已记录的生产空资源 loader 与 Host 受管工具集合不代表真实 MCP / Skills 已接通，恢复接入前核对实际代码。
 - 核对注册工具与活跃工具；若启用 deferred / codemode，间接调用同样经过 Host 授权、凭据绑定、任务协调及资源回收。首版不要求启用 codemode 或虚拟模型。

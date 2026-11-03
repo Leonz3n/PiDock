@@ -24,7 +24,7 @@
 
 ## Pi 接口与能力
 
-旧接口结论使用前对照 [固定 Pi 1.4 适配报告](../architecture/pi-1.4-upgrade-review.md)。
+旧接口结论使用前对照 [Pi 1.5 目标设计](../architecture/pi-1.5-upgrade-design.md)；实际依赖仍为 1.4.0，历史验证见 [Pi 1.4 适配报告](../architecture/pi-1.4-upgrade-review.md)。
 
 - [Provider、上下文与用量](pi-provider-usage.md)
 - [输入、引用与命令](pi-composer-capabilities.md)
