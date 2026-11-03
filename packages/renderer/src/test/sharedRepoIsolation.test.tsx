@@ -151,6 +151,14 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
       expect(within(row).queryByTestId(`row-diff-${taskId}`)).not.toBeInTheDocument();
     }
     expect(within(group).getByTestId(`shared-dir-group-note-${LINK_ROOT}`)).toHaveTextContent("共享原目录，文件未隔离，写入会互相影响");
+    // [Pencil T06] #141 受管保护只在真实接线完成后出现，并且必须同时说出外部编辑器豁免。
+    const protection = within(group).getByTestId(`shared-dir-managed-protection-${LINK_ROOT}`);
+    expect(protection).toHaveTextContent("受管保护");
+    expect(protection).toHaveTextContent("真实路径");
+    expect(protection).toHaveTextContent("lock-owner-dead");
+    expect(protection).toHaveTextContent("ADR 0006");
+    // 不是安全承诺：受管保护不得被读成文件已隔离。
+    expect(protection).not.toHaveTextContent("文件已隔离");
   });
 
   /**

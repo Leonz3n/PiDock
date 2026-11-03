@@ -114,11 +114,30 @@ describe("ticket 140 会话内审批卡", () => {
     expect(screen.getByTestId("desktop-approval-operation")).toHaveTextContent("pnpm test");
     expect(screen.getByTestId("desktop-approval-version")).toHaveTextContent("v3");
     expect(screen.getByTestId("desktop-approval-session")).toHaveTextContent("main");
-    // 影响与边界必须写出来：一次性授权、共享原目录真实影响、ticket 141 之前的跨任务边界。
+    // 影响与边界必须写出来：一次性授权、共享原目录真实影响、跨任务互斥与外部编辑器豁免。
     expect(screen.getByTestId("desktop-approval-impact")).toHaveTextContent("仅授权这一次");
-    expect(screen.getByTestId("desktop-approval-shared")).toHaveTextContent("ticket 141");
+    expect(screen.getByTestId("desktop-approval-shared")).toHaveTextContent("互斥");
+    expect(screen.getByTestId("desktop-approval-shared")).toHaveTextContent("ADR 0006");
+    // Host 未解析真实路径时不猜。
+    expect(screen.getByTestId("desktop-approval-real-target")).toHaveTextContent("Host 未解析该目标");
     expect(screen.getByTestId("desktop-approval-expiry")).toHaveTextContent("有效期由 Host 判定");
     expect(screen.getByTestId("desktop-approval-approve")).toBeTruthy();
+  });
+
+  it("真实目标按 Host 的 realpath 读数展示，并区分共享原目录与任务私有路径", async () => {
+    setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow({
+      target: "dir-aaaa1111/spec.txt", realTarget: "/srv/docs/spec.txt", sharedOriginal: "/srv/docs",
+    })] } }) });
+    mount();
+    const real = await screen.findByTestId("desktop-approval-real-target");
+    expect(real).toHaveTextContent("/srv/docs/spec.txt");
+    expect(real).toHaveTextContent("共享原目录 /srv/docs");
+    cleanup();
+    setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow({
+      target: "repo-a/notes.txt", realTarget: "/srv/task/repo-a/notes.txt",
+    })] } }) });
+    mount();
+    expect(await screen.findByTestId("desktop-approval-real-target")).toHaveTextContent("任务私有路径（不是共享原目录）");
   });
 
   it("批准只发 task/approve + {sessionId, approvalId}，之后重读记录而非自称已执行", async () => {

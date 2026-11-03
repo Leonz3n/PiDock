@@ -22,6 +22,10 @@ export type TaskApproval = {
   sessionId: string;
   tool: string;
   target: string;
+  /** [T06 #141] Host-resolved REAL path of `target`; `null` = Host could not resolve it (say so, never guess). */
+  realTarget: string | null;
+  /** [T06 #141] the linked original a shared-directory write really changes; `null` = not a linked original. */
+  sharedOriginal: string | null;
   /** 真实际命令（`exec.run`），目标字段放不下时由 Host 记录。 */
   operation: string | null;
   payloadVersion: string;
@@ -75,6 +79,8 @@ export function parseTaskApprovals(payload: unknown, taskId: string, sessionId: 
       sessionId: rowSession,
       tool,
       target,
+      realTarget: text(entry["realTarget"]) ? (entry["realTarget"] as string) : null,
+      sharedOriginal: text(entry["sharedOriginal"]) ? (entry["sharedOriginal"] as string) : null,
       operation: text(entry["operation"]) ? (entry["operation"] as string) : null,
       payloadVersion,
       status: status as TaskApprovalStatus,
@@ -110,13 +116,27 @@ export function approvalRefusal(approval: TaskApproval): string | null {
  * 三条必须让读者看到的影响，按真实语义分开写：
  * - 批准只授权**这一次**，不授权未来；
  * - 普通目录链接不是副本，写入直接改动原始目录的真实文件；
- * - `ticket 141` 之前跨任务共享写入仍由 Host 拒绝，此处不宣称已跨进程协调。
+ * - [T06 #141] 跨任务／跨 Host 进程的共享真实路径由 Host 的写协调互斥（已接线），
+ *   外部编辑器的写入按 ADR 0006 明确豁免。
  */
 export const APPROVAL_IMPACT_TEXT =
   "批准仅授权这一次操作，不自动授权未来执行；拒绝、过期和停止都不产生副作用。";
 export const SHARED_ROOT_IMPACT_TEXT =
-  "本任务的普通目录链接不是副本：写入直接改动原始目录的真实文件；跨任务共享写入在 ticket 141 完成前仍由 Host 拒绝，界面不宣称已跨进程协调。";
+  "本任务的普通目录链接不是副本：写入直接改动原始目录的真实文件。共享真实路径（含祖先／后代重叠）的受管写入在任务之间与 Host 进程之间互斥，被拒时 Host 说明实际持有者；外部编辑器的写入不受此约束（ADR 0006）。";
 export const APPROVAL_EXPIRY_TEXT = "有效期由 Host 判定；过期后批准不会执行。";
+
+/**
+ * 批准的**真实目标**：批准前必须看得到按 `realpath` 解析后的路径，以及它是否
+ * 是某个共享原目录（写入真的改那里）。Host 未解析时不猜、不显示词法路径充当真实路径。
+ */
+export function approvalRealTargetText(approval: TaskApproval): string {
+  const real = approval.realTarget;
+  if (real === null) return "真实路径：Host 未解析该目标；批准前无法确认它落到哪里";
+  if (approval.sharedOriginal !== null) {
+    return `真实路径（解析后）：${real} · 位于共享原目录 ${approval.sharedOriginal}（不是副本，写入直接改动原文件）`;
+  }
+  return `真实路径（解析后）：${real} · 任务私有路径（不是共享原目录）`;
+}
 
 /**
  * Host 拒绝一段确认时给出的具名原因（`task/approve|reject` 的 `{ok:false,error}`）。

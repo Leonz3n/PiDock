@@ -43,6 +43,11 @@ describe("task workspace facts (S08)", () => {
     expect(screen.getByText(new RegExp(`HEAD ${HEAD}（实测）`))).toBeInTheDocument();
     expect(screen.getByText(/本地真实路径: \/work\/common-configs/)).toBeInTheDocument();
     expect(screen.getAllByText(/已核验/)).toHaveLength(2);
+    // [Pencil T06] #141: a task with a shared plain directory says what the
+    // managed write coordination actually covers (and the editor exemption).
+    const protection = screen.getByTestId("shared-dir-managed-protection");
+    expect(protection).toHaveTextContent("受管保护");
+    expect(protection).toHaveTextContent("ADR 0006");
     // [#139] The session count is the Host's own read; a fixture that cannot
     // answer names that failure instead of asserting "one session".
     expect(screen.getByTestId("task-facts-sessions")).toHaveTextContent("会话 列表读取失败：会话列表返回异常");
