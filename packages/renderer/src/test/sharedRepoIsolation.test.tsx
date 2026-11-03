@@ -504,6 +504,8 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
           description: "",
           repositories: [{ id: "11111111-1111-1111-1111-111111111111", name: "source", path: "/work/source" }],
           directories: [{ id: "22222222-2222-2222-2222-222222222222", name: "invoice-docs", path: "/work/invoice-docs" }],
+          environment: [],
+          branchTemplate: "feature/{task-name}",
         }}
         tasks={tasks.map((task) => ({ ...task, branch: `task/${task.taskId}`, repoCount: 1, updatedAt: "2026-09-22", projectId: "project-1" }))}
         lifecyclePending={false}
@@ -514,6 +516,12 @@ describe("[PiDock 03] (#6 盒子 6) two tasks sharing one project repository", (
         onManage={() => {}}
         onCreateTask={() => {}}
         onManageDirectories={() => {}}
+        onEdit={() => {}}
+        onRepairSource={() => {}}
+        onDelete={() => {}}
+        sourceStatus={null}
+        sourceStatusError={null}
+        unassignedCounts={{ claimable: 0, unavailable: 0 }}
         creationIncompleteTaskId={null}
       />,
     );

@@ -6,7 +6,8 @@ import type { PidockBridge } from "../data/shellBridge";
 
 const project: DesktopProject = { id: "bcedc870-22bd-474e-ac55-78d30a9d763d", name: "Real", description: "", repositories: [
   { id: "dad5fcb4-c91f-4ab0-bc33-fbb82053f871", name: "Web", path: "/local/web" },
-], directories: [{ id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "Documents", path: "/local/documents" }] };
+], directories: [{ id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "Documents", path: "/local/documents" }],
+  environment: [], branchTemplate: "feature/{task-name}" };
 const intent = { id: "a01fe61e-d112-487e-a7e8-113943b91072", taskId: "task-abc", name: "Work", projectId: project.id,
   root: "/local/tasks", taskDir: "/local/tasks/task-abc", branch: "task/abc", state: "pending", sharedWriteConfirmed: true,
   repos: [{ id: project.repositories[0]!.id, name: "Web", remote: "origin", remoteBranch: "main", commit: "a".repeat(40), repoDir: "repo-web" }],
@@ -185,6 +186,7 @@ describe("Desktop task creation", () => {
     const noRepoProject: DesktopProject = {
       id: "c1de0000-0000-4000-8000-000000000001", name: "Docs only", description: "",
       repositories: [], directories: [{ id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "Documents", path: "/local/documents" }],
+      environment: [], branchTemplate: "feature/{task-name}",
     };
     const pureIntent = { id: "b01fe61e-d112-487e-a7e8-113943b91072", taskId: "task-pure", name: "Docs work", projectId: noRepoProject.id,
       root: "/local/tasks", taskDir: "/local/tasks/task-pure", branch: "task/pure", state: "pending", sharedWriteConfirmed: true,

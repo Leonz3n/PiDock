@@ -27,6 +27,8 @@ function projectWith(name: string, description: string, source: { name: string; 
     description,
     repositories: [{ id: "dad5fcb4-c91f-4ab0-bc33-fbb82053f871", ...source }],
     directories: [],
+    environment: [],
+    branchTemplate: "feature/{task-name}",
   };
 }
 
@@ -83,29 +85,29 @@ describe("[PiDock 03] (#6 box 12) blank Project and source names", () => {
       [{ taskId: TASK_ID, name: "真实任务", branch: "", repoCount: 1, updatedAt: "" }]);
     render(<App />);
     const overview = await screen.findByTestId("desktop-project-overview");
-    const card = await waitFor(() => {
-      const element = overview.querySelector(`[data-overview-task="${TASK_ID}"]`);
+    const row = await waitFor(() => {
+      const element = within(overview).getByText("真实任务").closest("li");
       if (!element) throw new Error("任务行尚未渲染");
       return element as HTMLElement;
     });
-    const branchLine = card.querySelectorAll("p")[0] as HTMLElement;
-    // The exact line, so a trailing bare `· ` cannot hide behind the guard text.
-    expect(branchLine.textContent).toBe("1 仓库 · Host 未上报分支");
-    expect(card).toHaveTextContent("Host 未上报更新时间");
+    // The exact branch cell, so a trailing bare `· ` cannot hide behind the guard text.
+    expect(row.textContent).toContain("Host 未上报分支");
+    expect(row.textContent).toContain("1 个仓库");
+    expect(row).toHaveTextContent("Host 未上报更新时间");
+    expect(within(overview).getByRole("columnheader", { name: "分支与仓库" })).toBeInTheDocument();
   });
 
   it("names a blank project name in the delete confirmation instead of an empty 「」 pair", async () => {
     window.pidock = bridge(projectWith("", "", { name: "Web", path: "/private/work/web" }));
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<App />);
     await screen.findByTestId("desktop-project-overview");
     fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
     const inventory = within(await screen.findByTestId("desktop-inventory"));
     fireEvent.click(inventory.getByRole("button", { name: "Host 未上报项目名称" }));
     fireEvent.click(inventory.getByRole("button", { name: "删除" }));
-    // The confirmation names the project it deletes; `project.name` alone is a
-    // blank, so guessing which project is being removed was the reader's job.
-    expect(confirm).toHaveBeenCalledWith("删除项目「Host 未上报项目名称」？关联任务必须先解绑或转移。");
+    // The delete dialog names the workspace it removes; a blank `project.name`
+    // used to leave the reader to guess with an empty 「」 pair.
+    expect(await screen.findByRole("dialog", { name: "删除工作空间「Host 未上报项目名称」" })).toBeInTheDocument();
   });
 
   it("names the blank project a reassignment list offers instead of an empty choice", async () => {

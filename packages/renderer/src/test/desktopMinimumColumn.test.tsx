@@ -55,7 +55,9 @@ function mountShell(breadcrumb: { project?: string; task?: string }) {
     <DesktopShell
       view={{ view: "task", taskId: "task-a" }}
       onNavigate={vi.fn()}
-      projects={[{ id: "p-1", name: "Adder", description: "微服务开发工作台" }]}
+      projects={[{ id: "p-1", name: "Adder", description: "微服务开发工作台", taskCount: 0 }]}
+      projectsInitialized
+      unassignedCount={0}
       tasks={[]}
       allTaskCount={0}
       lifecyclePending={false}
