@@ -119,8 +119,12 @@ export function DesktopTaskFacts({ taskId, taskName, bridge }: {
     document.querySelector('[data-testid="desktop-conversation"]')?.scrollIntoView?.({ block: "start" });
   };
 
+  // [T19 layout blocker] On a 560px-tall window the facts panel is the tallest
+  // `shrink-0` sibling of the conversation. It caps itself there and scrolls, so
+  // the conversation keeps a real height and the composer stays inside the
+  // viewport (measured in the T19 harness at 720x560).
   return <section aria-label="任务工作区事实" data-testid="desktop-task-facts"
-    className="shrink-0 border-b border-line bg-paper px-4 py-3 text-ink below-mid:px-3">
+    className="shrink-0 border-b border-line bg-paper px-4 py-3 text-ink below-mid:px-3 short:max-h-[32vh] short:overflow-y-auto">
     <div className="flex flex-wrap items-start justify-between gap-2">
       <div className="min-w-0">
         <h2 className="text-[12px] font-semibold tracking-[0.2px]">任务工作区访问来源</h2>

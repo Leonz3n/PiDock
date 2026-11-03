@@ -23,6 +23,15 @@
 @custom-variant below-mid (@media (max-width: 960px));
 @custom-variant below-narrow (@media (max-width: 850px));
 @custom-variant below-stack (@media (max-width: 720px));
+/**
+ * [T19 layout blocker] A HEIGHT tier, which the prototype never needed: at
+ * 720x560 the task-facts panel kept its full natural height (~550-780px,
+ * because the 720px width wraps every row) as a `shrink-0` sibling, so the
+ * conversation column collapsed to 0px and the composer sat at y=848-957 —
+ * outside the 560px viewport with nothing scrollable reaching it. `short`
+ * lets the facts panel cap itself and scroll instead.
+ */
+@custom-variant short (@media (max-height: 640px));
 
 @theme {
   /* 日间 (appearance.tokens.json → mode light). */
