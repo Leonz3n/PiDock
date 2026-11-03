@@ -39,7 +39,8 @@ const EMPTY_STATUS = { state: "not-configured", profileId: null, modelId: null, 
   profiles: [], nativePath: "/Users/test/.pi/agent/models.json", secretsAvailable: true };
 
 type Reply = unknown | ((request: Record<string, unknown>) => unknown);
-function bridge(replies: Record<string, Reply> = {}) {
+const EMPTY_MCP = { servers: [], path: "/Users/test/.pi/agent/mcp.json", sessionBoundary: { appliesTo: "new-session", openSessionsMutated: false, note: "保存、启用或停用只修改 mcp.json；已打开的会话保留启动时加载的 Server 与工具，新会话才读取新配置。" } };
+function bridge(replies: Record<string, Reply> = {}, mcpReplies: Record<string, Reply> = { list: EMPTY_MCP }) {
   const calls: Record<string, unknown>[] = [];
   const providerOp = vi.fn(async (request: Record<string, unknown>) => {
     calls.push(request);
@@ -50,8 +51,18 @@ function bridge(replies: Record<string, Reply> = {}) {
       return { ok: false, error: error instanceof Error ? error.message : "failed" };
     }
   });
-  (window as unknown as { pidock?: unknown }).pidock = { providerOp };
-  return { calls, providerOp };
+  const mcpCalls: Record<string, unknown>[] = [];
+  const mcpOp = vi.fn(async (request: Record<string, unknown>) => {
+    mcpCalls.push(request);
+    const reply = mcpReplies[String(request.op)];
+    try {
+      return { ok: true, payload: typeof reply === "function" ? (reply as (r: Record<string, unknown>) => unknown)(request) : reply };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "failed" };
+    }
+  });
+  (window as unknown as { pidock?: unknown }).pidock = { providerOp, mcpOp };
+  return { calls, providerOp, mcpCalls, mcpOp };
 }
 
 const page = (props: { taskId?: string | null; taskName?: string | null } = {}) =>
@@ -70,18 +81,19 @@ describe("S03 capability nav", () => {
     await waitFor(() => expect(screen.getByTestId("native-path")).toHaveTextContent("/Users/test/.pi/agent/models.json"));
   });
 
-  it("keeps MCP and Skills honest instead of showing counts or sample rows", async () => {
-    bridge();
+  it("renders the real MCP list and keeps Skills honest instead of showing counts or sample rows", async () => {
+    const { mcpCalls } = bridge();
     page();
     await screen.findByTestId("providers-panel");
     await userEvent.click(screen.getByRole("button", { name: /^MCP/ }));
-    expect(await screen.findByTestId("capabilities-mcp")).toHaveTextContent("Host 还没有 MCP Servers 的真实清单");
-    expect(screen.getByTestId("capabilities-mcp")).toHaveTextContent("后续工单 150");
+    expect(await screen.findByTestId("capabilities-mcp")).toHaveTextContent("MCP Servers");
+    expect(screen.getByTestId("mcp-empty")).toHaveTextContent("还没有 MCP Server");
+    expect(mcpCalls[0]).toEqual({ op: "list" });
     await userEvent.click(screen.getByRole("button", { name: /^Skills/ }));
     expect(await screen.findByTestId("capabilities-skills")).toHaveTextContent("后续工单 151");
-    // No MCP/Skills row count is invented: the nav marks them 未接线 instead.
+    // MCP is wired (count 0 is real); only Skills is marked 未接线.
     const nav = screen.getByRole("navigation", { name: "能力管理" });
-    expect(within(nav).getAllByText("未接线")).toHaveLength(2);
+    expect(within(nav).getAllByText("未接线")).toHaveLength(1);
   });
 
   it("renders the real list, and an empty list stays empty", async () => {

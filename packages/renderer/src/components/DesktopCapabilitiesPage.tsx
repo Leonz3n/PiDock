@@ -2,16 +2,19 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { DesktopProvidersPanel } from "./DesktopProvidersPanel";
+import { DesktopMcpPanel } from "./DesktopMcpPanel";
 import { parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 
 /**
  * [PiDock T03] #138 — 能力管理, the single entry for Pi's capabilities.
  *
- * Structure follows the S03 prototype: a 240px vertical nav with exactly three
- * entries (Providers / MCP / Skills), a file-mapping footer that names the real
- * `models.json` path, and the selected pane on the right. Providers is a real
- * management surface (#138); MCP and Skills are honest "尚未接线" states until
- * tickets 150/151 wire them — they show no counts and no sample rows.
+ * Structure follows the S03/S09 prototype: a 240px vertical nav with exactly
+ * three entries (Providers / MCP / Skills), a file-mapping footer that names the
+ * real `models.json` path, and the selected pane on the right. Providers (#138)
+ * and MCP (issue 150) are real management surfaces: MCP lists Pi's native
+ * `mcp.json`, edits only the `pidock-mcp-<uuid>` namespace, tests the real
+ * connection and states that a save applies to the next session. Skills stays an
+ * honest "尚未接线" state (issue 151) — no counts, no sample rows. No Extensions page.
  *
  * The old duplicate 模型与 Provider route is gone: this page is the only place
  * a provider is managed, and the task's 选用 is recorded here for the task the
@@ -21,7 +24,7 @@ import { parseProviderStatus, providerCall, type ProviderStatus } from "../data/
 type Pane = "providers" | "mcp" | "skills";
 const NAV: { key: Pane; label: string; icon: string; hint: string }[] = [
   { key: "providers", label: "Providers", icon: "server", hint: "模型供应商与默认模型" },
-  { key: "mcp", label: "MCP", icon: "link", hint: "MCP Servers（尚未接线）" },
+  { key: "mcp", label: "MCP", icon: "link", hint: "Pi 原生 mcp.json · 工具与审批" },
   { key: "skills", label: "Skills", icon: "book", hint: "技能来源（尚未接线）" },
 ];
 
@@ -38,6 +41,9 @@ export function DesktopCapabilitiesPage({
   const [pane, setPane] = useState<Pane>("providers");
   const [status, setStatus] = useState<ProviderStatus | null>(null);
   const [error, setError] = useState("");
+  // `null` = the MCP list could not be read (never rendered as zero).
+  const [mcpCount, setMcpCount] = useState<number | null>(null);
+  const onMcpCount = useCallback((count: number | null) => setMcpCount(count), []);
 
   // With a task the list also reports that task's live selection (configured /
   // pending / credential-missing); without one it is the global config list.
@@ -63,7 +69,9 @@ export function DesktopCapabilitiesPage({
           <span>{item.label}</span>
           {item.key === "providers"
             ? <span className="text-[10px] text-muted">{status === null ? "—" : status.profiles.length}</span>
-            : <span className="text-[10px] text-muted">未接线</span>}
+            : item.key === "mcp"
+              ? <span className="text-[10px] text-muted">{mcpCount === null ? "—" : mcpCount}</span>
+              : <span className="text-[10px] text-muted">未接线</span>}
         </button>
         <p className="px-2.5 pb-1 text-[10px] text-muted">{item.hint}</p>
       </li>)}</ul>
@@ -76,18 +84,20 @@ export function DesktopCapabilitiesPage({
     </nav>
     <div className="min-w-0 flex-1 overflow-auto bg-paper px-[34px] py-[26px] below-narrow:px-5">
       {pane === "providers" ? <DesktopProvidersPanel taskId={taskId} taskName={taskName} status={status} error={error}
-        onReload={reload} onBack={() => onBack?.()} /> : <NotWired pane={pane} />}
+        onReload={reload} onBack={() => onBack?.()} />
+        : pane === "mcp" ? <DesktopMcpPanel onCount={onMcpCount} />
+        : <NotWired />}
     </div>
   </div>;
 }
 
 /**
- * MCP and Skills have no Host inventory yet. Naming what is missing (and what
- * will not be shipped) is the honest state: no invented counts, no sample rows.
+ * Skills has no Host inventory yet. Naming what is missing (and what will not
+ * be shipped) is the honest state: no invented counts, no sample rows.
  */
-function NotWired({ pane }: { pane: Exclude<Pane, "providers"> }) {
-  const title = pane === "mcp" ? "MCP Servers" : "Skills";
-  return <section data-testid={`capabilities-${pane}`} className="min-w-0">
+function NotWired() {
+  const title = "Skills";
+  return <section data-testid="capabilities-skills" className="min-w-0">
     <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
       <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Agent Capabilities</p>
         <h1 className="mt-1.5 text-[24px] font-semibold text-ink">{title}</h1></div>
@@ -95,10 +105,8 @@ function NotWired({ pane }: { pane: Exclude<Pane, "providers"> }) {
     </header>
     <p className="mt-4 border border-line bg-soft px-3 py-2 text-xs leading-6 text-muted">
       Host 还没有 {title} 的真实清单、来源或运行时加载状态读取操作，因此这里不展示任何行，也不把未知数量显示为零。
-      {pane === "mcp"
-        ? "Pi 原生不包含 MCP：Server 的注册、工具暴露与审批边界要在受控桥接里先实现（后续工单 150）。"
-        : "技能的来源、安装与启停同样需要 Host 侧的真实接口，尚不在本机实现（后续工单 151）。"}
+      技能的来源、安装与启停同样需要 Host 侧的真实接口，尚不在本机实现（后续工单 151）。
     </p>
-    <p className="mt-2 text-[11px] text-muted">在此之前，Provider 管理（左侧第一项）是唯一已接线的能力。</p>
+    <p className="mt-2 text-[11px] text-muted">在此之前，Providers 与 MCP 是仅有的两个已接线能力。</p>
   </section>;
 }
