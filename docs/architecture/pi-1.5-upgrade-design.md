@@ -118,7 +118,7 @@ pi-ai 1.5 对**普通 JSON Schema**也执行 `compile(schema, {coerce:true}).par
 
 ### 验证证据（Node 24.21.0）
 
-- `pnpm build` / `pnpm typecheck` / `pnpm lint` 通过；`pnpm test`：160 文件通过 / 3 跳过，2240 测试通过 / 27 跳过。
+- `pnpm build` / `pnpm typecheck` / `pnpm lint` 通过；`pnpm test`（turbo 串起两个 workspace 包）：`@pidock/shell` 160 文件通过 / 3 跳过、2240 测试通过 / 27 跳过；`@pidock/renderer` 114 文件、1128 测试通过。
 - 真 SDK → Host seam 新增用例（`sdk-agent-tools.test.ts`）：`null` 写入、`null` 路径、整数截断与上界、可选 `null`、未知字段、失败路径（含 transcript 不含凭据）、90 KB 大参数、模板单值数组化 + 审批一致性 + 指纹一致、`shared: "abc"` 拒绝、显式模型绑定（无 SDK 默认模型回退）。
 - 1.5 `SessionManager` 写失败父链回滚（`sdk-text-kernel.test.ts`）：内存 leaf 回退、磁盘字节不变、重开后每个 `parentId` 都存在于文件；回合层：JSONL 写入被拒 → 回合失败、文件不变、冷恢复不重放该提示词。
 - 保留契约复跑：事件顺序 `delta,message_end,agent_settled`、`agent_settled.aborted`、`length` → `sdk-output-truncated`、工具白名单、ACK/幂等/不重放。
