@@ -120,26 +120,35 @@ function otherTaskDirs(input: LifecycleResourceInput): string[] {
  * answer about this repo. A failed read is `null` (unknown), never "clean".
  */
 function readRepoDelivery(repoDir: string): RepoDeliveryObservation {
+  const git = (args: readonly string[]): { ok: true; stdout: string } | { ok: false; code?: unknown } => {
+    try {
+      const stdout = execFileSync("git", ["-C", repoDir, ...args], {
+        encoding: "utf8",
+        timeout: 5_000,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return { ok: true, stdout };
+    } catch (error) {
+      return { ok: false, code: (error as { code?: unknown }).code };
+    }
+  };
   try {
     if (!lstatSync(repoDir).isDirectory()) return { repoDir, uncommitted: null, delivered: null, reason: "工作副本路径不可读" };
-    const status = execFileSync("git", ["-C", repoDir, "--no-optional-locks", "status", "--porcelain"], {
-      encoding: "utf8",
-      timeout: 5_000,
-      maxBuffer: 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    // No delivery ledger exists in this slice, so a delivery is unknown unless a
-    // recorded delivery names this repo: unknown is NOT delivered.
-    return { repoDir, uncommitted: status.trim().length > 0, delivered: null };
-  } catch (error) {
-    const code = (error as { code?: unknown }).code;
-    return {
-      repoDir,
-      uncommitted: null,
-      delivered: null,
-      reason: code === "ENOENT" ? "本机没有可用的 Git 命令" : "Git 状态读取失败",
-    };
+    const status = git(["--no-optional-locks", "status", "--porcelain"]);
+    if (!status.ok) {
+      return { repoDir, uncommitted: null, delivered: null, reason: status.code === "ENOENT" ? "本机没有可用的 Git 命令" : "Git 状态读取失败" };
+    }
+    // [Pencil T13] #148 read, not a success ledger: a commit that no
+    // remote-tracking ref contains is undelivered (`rev-list HEAD --not
+    // --remotes`). When that read fails the delivery stays `null` = unknown,
+    // which cleanup does NOT treat as delivered.
+    const ahead = git(["rev-list", "--count", "HEAD", "--not", "--remotes"]);
+    const delivered = ahead.ok ? Number.parseInt(ahead.stdout.trim(), 10) === 0 : null;
+    return { repoDir, uncommitted: status.stdout.trim().length > 0, delivered };
+  } catch {
+    return { repoDir, uncommitted: null, delivered: null, reason: "Git 状态读取失败" };
   }
 }
 

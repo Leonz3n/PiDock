@@ -171,6 +171,9 @@ describe("validateShellInvocationPayload", () => {
       "task/filePreview",
       "task/fileDiff",
       "task/deliveryInfo",
+      // [Pencil T13] #148: the delivery reads/settings keep the same whitelist.
+      "task/deliverySettings",
+      "task/deliveryPlan",
       "task/planTerminal",
       "task/terminalControl",
       "task/terminalState",
@@ -180,6 +183,13 @@ describe("validateShellInvocationPayload", () => {
         validateShellInvocationPayload("shell/taskOp", { taskId: "task-a", op, payload: {} }, "workspace-a"),
       ).toEqual({ workspaceId: "workspace-a" });
     }
+  });
+
+  it("routes the #148 delivery reads and writes through the whitelist", () => {
+    for (const op of ["task/deliverySettings", "task/saveDeliverySettings", "task/deliveryPlan", "task/deliveryCommit", "task/deliveryPush"]) {
+      expect(validateShellInvocationPayload("shell/taskOp", { taskId: "task-a", op, payload: {} }, "workspace-a")).toEqual({ workspaceId: "workspace-a" });
+    }
+    expect(() => validateShellInvocationPayload("shell/taskOp", { taskId: "task-a", op: "task/deliveryForce", payload: {} }, "workspace-a")).toThrow("unknown task op");
   });
 
   it("rejects unexpected payload keys", () => {

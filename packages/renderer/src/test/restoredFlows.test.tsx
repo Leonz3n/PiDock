@@ -114,24 +114,22 @@ describe("composer commands and candidates", () => {
 });
 
 describe("delivery review", () => {
-  it("reviews repositories and keeps the commit step explicit", async () => {
+  it("opens the real delivery sheet and states the in-memory boundary honestly", async () => {
     const user = userEvent.setup();
     renderApp("/projects/atlas/tasks/release?session=main");
     await screen.findByRole("heading", { name: "发布前检查" });
 
     // [UI 对齐 03] (#27): 审阅与交付 moved from the header's text-button row
-    // into the `任务操作` menu; the review flow itself is unchanged.
+    // into the `任务操作` menu. [Pencil T13] #148 replaced the prototype commit
+    // draft with the real sheet: in the in-memory adapter there is no Git
+    // repository, so it names that boundary instead of simulating a commit.
     await user.click(screen.getByRole("button", { name: "任务操作" }));
     await user.click(await screen.findByRole("menuitem", { name: "审阅与交付" }));
     const dialog = await screen.findByRole("dialog", { name: "审阅与交付" });
-    expect(within(dialog).getByText("front-monorepo")).toBeInTheDocument();
-    await user.type(within(dialog).getByLabelText("提交说明"), "修复对账字段");
-    await user.click(within(dialog).getByRole("button", { name: "查看提交面板示意" }));
-
-    const commit = await screen.findByRole("dialog", { name: "提交变更" });
-    expect(within(commit).getByText(/修复对账字段/)).toBeInTheDocument();
-    await user.click(within(commit).getByRole("button", { name: "确认提交草稿" }));
-    expect(await screen.findByText(/此原型不连接 Git，未提交任何变更/)).toBeInTheDocument();
+    expect(within(dialog).getByTestId("delivery-sheet")).toBeInTheDocument();
+    expect(within(dialog).getByTestId("delivery-error").textContent).toContain("内存模拟数据");
+    expect(within(dialog).queryByRole("button", { name: "查看提交面板示意" })).toBeNull();
+    expect(within(dialog).getByTestId("delivery-patch-boundary").textContent).toContain("不代表已提交");
   });
 });
 

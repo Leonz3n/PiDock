@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { createLifecycleResources } from "./lifecycle-resources.js";
 import type { TaskWorkspaceHost } from "./task-host.js";
 
@@ -116,5 +117,46 @@ describe("createLifecycleResources link removal", () => {
     expect(lifecycle.observeInTaskPath(loop)).toMatchObject({ isSymlink: true, isDirectory: false });
     lifecycle.removeInTaskPath(loop);
     expect(existsSync(loop)).toBe(false);
+  });
+});
+
+// [Pencil T13] #148: cleanup's "undelivered changes" answer is real git, never
+// a success ledger. A commit no remote-tracking ref contains is undelivered; a
+// commit that is reachable from a remote ref is not.
+describe("cleanup delivery state from real git", () => {
+  function git(cwd: string, args: string[]): string {
+    return execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=T", ...args], { cwd, encoding: "utf8" });
+  }
+
+  function withRepo() {
+    const root = mkdtempSync(join(tmpdir(), "pidock-cleanup-delivery-"));
+    roots.push(root);
+    const taskDir = join(root, "task-148");
+    const repoDir = join(taskDir, "repo-a");
+    mkdirSync(repoDir, { recursive: true });
+    git(repoDir, ["init", "-q", "-b", "ticket/148"]);
+    writeFileSync(join(repoDir, "a.txt"), "one");
+    git(repoDir, ["add", "."]);
+    git(repoDir, ["commit", "-q", "-m", "one"]);
+    const lifecycle = createLifecycleResources({
+      host: {
+        taskDir,
+        store: { readTask: () => ({ taskId: "148", name: "T", taskDir, branch: "ticket/148", repos: ["repo-a"], baseCommit: "abc1234" }) },
+      } as unknown as TaskWorkspaceHost,
+      services: () => null,
+      terminals: () => null,
+      sessionIds: () => [],
+    });
+    return { repoDir, lifecycle };
+  }
+
+  it("reads an unpushed commit and a dirty tree from the checkout itself", () => {
+    const { repoDir, lifecycle } = withRepo();
+    expect(lifecycle.delivery()).toEqual({ uncommitted: false, undelivered: true });
+    // A remote-tracking ref that contains the commit means it was delivered.
+    git(repoDir, ["update-ref", "refs/remotes/origin/ticket/148", "HEAD"]);
+    expect(lifecycle.delivery()).toEqual({ uncommitted: false, undelivered: false });
+    writeFileSync(join(repoDir, "a.txt"), "uncommitted");
+    expect(lifecycle.delivery()).toEqual({ uncommitted: true, undelivered: false });
   });
 });

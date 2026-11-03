@@ -178,6 +178,7 @@ import {
 } from "./session-index.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { SdkTextKernelRouter } from "./sdk-kernel-router.js";
+import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import { SdkContextClient } from "./sdk-context-client.js";
 import { SdkAgentToolBroker, derivedPrimaryCheckouts, type SdkAgentServiceHost, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
 import type { ServiceTemplateEditPort } from "../rpc/service-template-request.js";
@@ -976,6 +977,9 @@ export class TaskWorkspaceHost {
     const previous = this.sdkContext;
     this.sdkContext = null;
     this.sdkRouter = null;
+    // The turn transport captured the previous router; a new Provider identity
+    // gets a new transport (durable journals make this safe, nothing replays).
+    this.resetSdkTurnTransport();
     if (previous) await this.disposeSdkContext(previous);
     if (this.sdkShutdown || this.executionClosing) throw Error(this.sdkShutdown ? "sdk-host-closing" : "task-host-closing");
     this.sdkProviderGeneration += 1;
@@ -1047,6 +1051,9 @@ export class TaskWorkspaceHost {
 
   shutdownSdk(): Promise<void> {
     this.sdkRouter = null;
+    // Seal but keep the transport observable: the quit path still has to wait
+    // for an in-flight terminal journal, and only then drops it.
+    this.sdkTurnTransportState?.seal();
     return this.sdkShutdown ??= Promise.resolve().then(() => this.drainSdk());
   }
   private async drainSdk(): Promise<void> {
@@ -1158,17 +1165,25 @@ export class TaskWorkspaceHost {
     this.executions = new TaskExecutionLedger(taskId, taskDir, store, now);
     this.schedules = new TaskSchedules(taskId, taskDir, store, {
       startRun: (input) => this.startScheduledRun(input),
-      liveExecution: (scheduleId) => this.executions.liveSchedule(scheduleId),
+      liveExecution: (scheduleId) => this.executions.liveSchedule(scheduleId) || this.schedules.hasRunningRun(scheduleId),
       archived: () => this.store.readLifecycle(this.taskDir)?.archived === true,
-      catalog: () =>
-        this.catalog.map((profile) => ({
-          id: profile.id,
-          enabled: profile.enabled,
-          models: profile.models.map((model) => ({ id: model.id })),
-        })),
       now: this.now,
       taskKind: () => (this.store.readTask(this.taskDir)?.kind === "scheduled" ? "scheduled" : "normal"),
       providerGeneration: () => this.sdkProviderConfig()?.generation,
+      // [Pencil T17] #152: the catalog the definition is validated against is
+      // the Provider this task really installed, so provider/model/credential
+      // are proven against the live binding instead of a renderer claim. Before
+      // any Provider is installed the pushed catalog (possibly empty = not
+      // handed over) is used, exactly like the earlier validation layer.
+      catalog: () => this.scheduleCatalog(),
+      credentialPresent: (providerId) => {
+        const installed = this.sdkConfig;
+        // Nothing installed yet: the credential cannot be proven here, and the
+        // trigger refuses by name. An installed Provider must be the ONE the
+        // schedule names: never silently run on another credential.
+        return installed === null ? true : installed.config.profileId === providerId;
+      },
+      directoryPresent: () => this.taskDirectoryPresent(),
     });
     this.remote = new TaskRemoteDevices(taskDir, store, { now, mintSecret });
   }
@@ -1263,15 +1278,86 @@ export class TaskWorkspaceHost {
     sessionId: string;
     schedule: StoredSchedule;
     approvalExpiresAt: string;
-  }): { state: "done" | "approval" | "failed"; approvalId?: string; failureReason?: string } {
+  }): { state: "done" | "approval" | "failed" | "running"; approvalId?: string; failureReason?: string; failureCode?: string; sessionId?: string } {
     this.assertExecutionOpen();
-    if (this.store === diskTaskStore) {
-      return { state: "failed", failureReason: "sdk-route-unwired: scheduled model runs require #44" };
+    const failed = (failureCode: string, failureReason: string) => ({ state: "failed" as const, failureCode, failureReason });
+    // [Pencil T17] #152 the fixed task workspace must still exist: a lost task
+    // folder is a named failure, never a run in another directory.
+    if (!this.taskDirectoryPresent()) {
+      return failed("directory-missing", "任务工作区目录不存在，不能运行；请修复任务目录后重试");
     }
+    if (this.store.readTask(this.taskDir) === null) {
+      return failed("directory-missing", "任务记录不存在，不能运行定时任务");
+    }
+    // The production path is the REAL SDK turn: the same transport interactive
+    // turns use, a NEW session per run from the #139 index, the saved binding
+    // and permission. The memory store keeps the legacy channel path for hosts
+    // that never had a Provider installed (unit-test wiring); production always
+    // installs one before a scheduled turn is possible.
+    if (this.sdkProviderConfigured) return this.startSdkScheduledRun(input, failed);
+    if (this.store !== diskTaskStore) return this.startLegacyScheduledRun(input);
+    return failed("credential-missing", `Provider ${input.schedule.providerId} 没有可用凭据（任务未安装 Provider 配置），不会绕过审批或换用其他凭据`);
+  }
+
+  /** [Pencil T17] #152 the real trigger: one accepted SDK turn per run. */
+  private startSdkScheduledRun(
+    input: { runId: string; sessionId: string; schedule: StoredSchedule },
+    failed: (failureCode: string, failureReason: string) => { state: "failed"; failureCode: string; failureReason: string },
+  ): { state: "done" | "approval" | "failed" | "running"; failureReason?: string; failureCode?: string; sessionId?: string } {
+    const installed = this.sdkProviderConfig();
+    if (installed === null) return failed("credential-missing", "Provider 配置未安装，不能运行定时任务");
+    // The saved binding/permission decide the run; the installed Provider must
+    // be the SAME identity. No fallback to another provider or model.
+    if (installed.config.profileId !== input.schedule.providerId) {
+      return failed("provider-missing", `定时任务保存的 Provider ${input.schedule.providerId} 与任务已安装的 Provider ${installed.config.profileId} 不一致，不会替换`);
+    }
+    const model = installed.config.models.find((row) => row.id === input.schedule.model);
+    if (model === undefined) {
+      return failed("model-not-declared", `Provider ${input.schedule.providerId} 未声明模型 ${input.schedule.model}，不会替换为其他模型`);
+    }
+    const transport = this.sdkTurnTransport();
+    // Basic overlap refusal (#153 owns the full scheduler): a turn already in
+    // flight is never queued behind or started on top of.
+    if (!transport.available()) {
+      return failed("task-locked", "上一个回合仍在执行，本次定时触发不重叠启动；请等待当前执行结束");
+    }
+    // A NEW session of this task, bound to the saved model/permission. It never
+    // reuses another run's conversation or another session's transcript.
+    let session: TaskSessionRecord;
+    try {
+      session = this.createScheduledSession(input.runId, input.schedule);
+    } catch (error) {
+      return failed("schedule-start-failed", `无法为本次执行创建独立会话：${error instanceof Error ? error.message : String(error)}`);
+    }
+    void (async () => {
+      try {
+        // The #139 index already carries the saved model/permission; `open`
+        // applies that binding instead of the task-wide default.
+        await transport.start(session.id, input.runId, input.schedule.prompt, () => {}, (turn) => {
+          const digest = this.sdkTextKernel().digest(session.id);
+          const actualModel = digest.model?.modelId;
+          const done = turn.state === "done";
+          this.schedules.settleRun(input.runId, {
+            result: done ? "completed" : "failed",
+            ...(actualModel === undefined ? {} : { actualModel }),
+            ...(done ? {} : { failureCode: "sdk-turn-failed", reason: `SDK 回合未完成（${turn.state}）` }),
+          });
+        });
+      } catch (error) {
+        this.schedules.settleRun(input.runId, {
+          result: "failed",
+          failureCode: "schedule-start-failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+    return { state: "running", sessionId: session.id };
+  }
+
+  /** Legacy in-memory channel trigger (unit-test wiring without a Provider). */
+  private startLegacyScheduledRun(input: { runId: string; sessionId: string; schedule: StoredSchedule; approvalExpiresAt: string }): { state: "done" | "approval" | "failed"; approvalId?: string; failureReason?: string } {
     const existing = this.store.readSession(this.taskDir, input.sessionId);
     if (existing !== null) {
-      // Ids are re-seeded from the persisted record, so this can only be a
-      // tampered/copied folder: refuse instead of continuing another run.
       throw new Error(`session-exists: 定时执行会话 ${input.sessionId} 已存在，不能复用`);
     }
     this.openSession(input.sessionId, {
@@ -1288,11 +1374,82 @@ export class TaskWorkspaceHost {
       if (result.state === "approval") return { state: "approval", approvalId: result.approvalId ?? "" };
       return { state: result.state === "done" ? "done" : "failed" };
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      // A refused turn still created the run's session; the failed run keeps the
-      // reason and the next occurrence is not blocked by it.
-      return { state: "failed", failureReason: reason };
+      return { state: "failed", failureReason: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  /** The installed Provider's own declared models, else the pushed catalog. */
+  private scheduleCatalog(): readonly { id: string; enabled?: boolean; models: readonly { id: string }[] }[] {
+    const installed = this.sdkConfig;
+    if (installed !== null) {
+      return [{ id: installed.config.profileId, enabled: true, models: installed.config.models.map((model) => ({ id: model.id })) }];
+    }
+    return this.catalog.map((profile) => ({
+      id: profile.id,
+      enabled: profile.enabled,
+      models: profile.models.map((model) => ({ id: model.id })),
+    }));
+  }
+
+  private taskDirectoryPresent(): boolean {
+    const { lstatSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+    try { return lstatSync(this.taskDir).isDirectory(); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  /**
+   * One run's own session in the #139 index, bound to the saved model and
+   * permission. The active-session pointer is kept where it was: a background
+   * trigger must not yank the user out of the conversation they are in.
+   */
+  private createScheduledSession(runId: string, schedule: StoredSchedule): TaskSessionRecord {
+    const installed = this.sdkConfig;
+    if (installed === null) throw new Error("credential-missing: Provider 配置未安装");
+    const binding: SessionBinding = {
+      profileId: installed.config.profileId,
+      modelId: schedule.model,
+      thinkingLevel: this.reasoningLevelOf(installed.config, schedule.model),
+      generation: this.sdkProviderGeneration,
+    };
+    const before = this.sessionIndex();
+    const created = createSessionInIndex(before, {
+      name: `定时执行 ${runId}`,
+      permission: schedule.permission,
+      binding,
+      now: this.now(),
+    });
+    const index = this.commitSessionIndex({ ...created.index, activeSessionId: before.activeSessionId });
+    return sessionOf(index, created.session.id);
+  }
+
+  // ---- [Pencil T17] #152 scheduler-owned SDK turn transport ----
+
+  private sdkTurnTransportState: SdkTurnTransport | null = null;
+  private sdkTurnsSealed = false;
+
+  /** The transport interactive and scheduled turns share (lazy, per Host). */
+  sdkTurnTransport(): SdkTurnTransport {
+    if (this.sdkTurnsSealed) throw new Error("sdk-host-closing");
+    return this.sdkTurnTransportState ??= new SdkTurnTransport(this.taskId, this.taskDir, this.sdkTextKernel());
+  }
+
+  /** The existing transport, if one was ever created; never creates one. */
+  currentSdkTurnTransport(): SdkTurnTransport | null {
+    return this.sdkTurnTransportState;
+  }
+
+  /** Drop the transport (Provider re-install): the router identity changed. */
+  resetSdkTurnTransport(): void {
+    this.sdkTurnTransportState = null;
+  }
+
+  /** Seal it at quit: no new turn may start after this. */
+  sealSdkTurnTransport(): void {
+    this.sdkTurnsSealed = true;
+    this.sdkTurnTransportState?.seal();
   }
 
   // ---- [PiDock 18] (#20) scheduled tasks ----

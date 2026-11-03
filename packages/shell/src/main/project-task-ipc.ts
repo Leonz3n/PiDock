@@ -17,10 +17,31 @@ function input(value: unknown): CreationRequest {
   // [Pencil T02] #137: `workspaceMode` is optional so a legacy caller keeps the
   // previous auto-worktree behaviour; when present it must be one of the three
   // real modes (a renderer-only string is refused here, before main).
-  exactOptional(value, ["projectId", "name", "repositories", "directoryIds", "sharedWriteConfirmed", "override"], ["workspaceMode"]);
+  exactOptional(value, ["projectId", "name", "repositories", "directoryIds", "sharedWriteConfirmed", "override"],
+    ["workspaceMode", "kind", "schedule"]);
   if (value.workspaceMode !== undefined &&
       value.workspaceMode !== "worktree" && value.workspaceMode !== "existing-git" && value.workspaceMode !== "plain-dirs") {
     throw new TrustDomainViolation("invalid-payload", "invalid workspace mode");
+  }
+  // [Pencil T17] #152: kind + definition are the ONLY creation-time schedule
+  // surface. A scheduled creation must carry both; a normal one neither. The
+  // Host validates every definition field on save, so this only fixes the shape.
+  if (value.kind !== undefined && value.kind !== "normal" && value.kind !== "scheduled") {
+    throw new TrustDomainViolation("invalid-payload", "invalid task kind");
+  }
+  if (value.schedule !== undefined) {
+    if (!object(value.schedule) || value.kind !== "scheduled") {
+      throw new TrustDomainViolation("invalid-payload", "schedule requires a scheduled task kind");
+    }
+    const schedule = value.schedule;
+    if (Object.keys(schedule).some((key) => !["name", "ruleText", "timezone", "prompt", "providerId", "model", "permission", "enabled"].includes(key)) ||
+        !["name", "ruleText", "timezone", "prompt", "providerId", "model"].every((key) => typeof schedule[key] === "string") ||
+        (schedule.permission !== "read" && schedule.permission !== "default" && schedule.permission !== "auto") ||
+        (schedule.enabled !== undefined && typeof schedule.enabled !== "boolean")) {
+      throw new TrustDomainViolation("invalid-payload", "invalid schedule definition");
+    }
+  } else if (value.kind === "scheduled") {
+    throw new TrustDomainViolation("invalid-payload", "scheduled task requires a schedule definition");
   }
   if (typeof value.projectId !== "string" || typeof value.name !== "string" ||
       typeof value.override !== "boolean" || typeof value.sharedWriteConfirmed !== "boolean" ||

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Icon } from "./Icon";
-import { abandonCreation, commitCreation, creationStatus, currentCreation, prepareCreation, retryCreation, CREATION_RETENTION_NOTICE, WORKSPACE_MODE_LABELS, type AbandonCleanupView, type CreationInput, type CreationIntentView, type CreationStatusView, type RepoPhaseView, type WorkspaceModeView } from "../data/desktopCreation";
+import { abandonCreation, commitCreation, creationStatus, currentCreation, prepareCreation, retryCreation, CREATION_RETENTION_NOTICE, WORKSPACE_MODE_LABELS, type AbandonCleanupView, type CreationInput, type CreationIntentView, type CreationScheduleInput, type CreationStatusView, type RepoPhaseView, type WorkspaceModeView } from "../data/desktopCreation";
+import { parseProviderStatus, providerCall } from "../data/providerProfile";
 import { BRANCH_TEMPLATE_TOKEN, sourceName, sourcePath, type DesktopProject } from "../data/desktopProjects";
 import type { PidockBridge } from "../data/shellBridge";
 import { hostText } from "../data/workspaceFiles";
@@ -37,6 +38,17 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
   const [directories, setDirectories] = useState<string[]>([]);
   const [sharedWriteConfirmed, setSharedWriteConfirmed] = useState(false);
   const [override, setOverride] = useState(false);
+  // [Pencil T17]: a scheduled creation is its OWN task kind. The definition
+  // below travels with the creation intent and is saved by the Host's schedule
+  // path (it still validates rule/timezone/provider/model/credential/directory).
+  const [taskKind, setTaskKind] = useState<"normal" | "scheduled">("normal");
+  const [scheduleRule, setScheduleRule] = useState("每日 09:15");
+  const [scheduleTimezone, setScheduleTimezone] = useState("Asia/Shanghai");
+  const [schedulePrompt, setSchedulePrompt] = useState("");
+  const [scheduleModelKey, setScheduleModelKey] = useState("");
+  const [schedulePermission, setSchedulePermission] = useState<"read" | "default" | "auto">("default");
+  const [providers, setProviders] = useState<{ id: string; name: string; modelId: string; models: { id: string; name: string }[] }[] | null>(null);
+  const [providersError, setProvidersError] = useState("");
   const [busy, setBusy] = useState(false);
   // [Pencil T08]: the real per-repository state, read from Host after an
   // interrupted/partial creation. Never derived from the preview the page holds.
@@ -51,6 +63,8 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
 
   const resetSelections = useCallback(() => {
     setName(""); setRepos({}); setDirectories([]); setSharedWriteConfirmed(false); setOverride(false);
+    setTaskKind("normal"); setScheduleRule("每日 09:15"); setScheduleTimezone("Asia/Shanghai");
+    setSchedulePrompt(""); setScheduleModelKey(""); setSchedulePermission("default");
   }, []);
   useEffect(() => {
     if (typeof bridge.createTask !== "function") { setError("桌面壳真实任务创建接口不可用，请重启应用"); return; }
@@ -60,6 +74,34 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
       }
     }).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "创建记录读取失败"));
   }, [bridge]);
+
+  // Provider / model choices are read from main once the scheduled section is
+  // shown; a failed read leaves the section without a fabricated selection.
+  const scheduled = taskKind === "scheduled";
+  useEffect(() => {
+    if (!open || !scheduled || providers !== null) return;
+    let live = true;
+    setProvidersError("");
+    void (async () => {
+      try {
+        const status = parseProviderStatus(await providerCall({ op: "list" }));
+        if (!live) return;
+        setProviders(status.profiles.map((profile) => ({
+          id: profile.id,
+          name: profile.name,
+          modelId: profile.modelId,
+          models: profile.models.map((model) => ({ id: model.id, name: model.name })),
+        })));
+      } catch (error) {
+        if (live) setProvidersError(error instanceof Error ? error.message : "Provider 列表读取失败");
+      }
+    })();
+    return () => { live = false; };
+  }, [open, scheduled, providers]);
+  const scheduleTarget = (() => {
+    const [providerId = "", model = ""] = scheduleModelKey.split("\u0000");
+    return { providerId, model };
+  })();
 
   const projectRepos = project?.repositories ?? [];
   const gitModesAvailable = projectRepos.length > 0;
@@ -94,15 +136,30 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
     return mode === "existing-git" || Boolean(entry.branch.trim());
   });
   const noSelections = mode === "plain-dirs" ? !hasSelectedDirs : !hasSelectedRepos;
+  const scheduleReady = !scheduled || (scheduleRule.trim().length > 0 && schedulePrompt.trim().length > 0 &&
+    scheduleTarget.providerId.length > 0 && scheduleTarget.model.length > 0);
   const submitDisabled = busy || project?.id !== formProjectId || !currentName.trim() || noSelections || !selectedReady ||
-    (hasSelectedDirs && !sharedWriteConfirmed);
+    (hasSelectedDirs && !sharedWriteConfirmed) || !scheduleReady;
 
   const prepare = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!project || project.id !== formProjectId) { setError("项目选择已变化，请选择原项目或取消后重新创建"); return; }
     if (submitDisabled) { nameRef.current?.focus(); return; }
+    const schedule: CreationScheduleInput | undefined = scheduled
+      ? {
+          name: name.trim(),
+          ruleText: scheduleRule,
+          timezone: scheduleTimezone,
+          prompt: schedulePrompt,
+          providerId: scheduleTarget.providerId,
+          model: scheduleTarget.model,
+          permission: schedulePermission,
+          enabled: true,
+        }
+      : undefined;
     const input: CreationInput = {
       projectId: project.id, name, workspaceMode: mode,
+      ...(scheduled ? { kind: "scheduled" as const, ...(schedule ? { schedule } : {}) } : {}),
       repositories: projectRepos.filter((row) => repos[row.id]?.selected).map((row) => ({
         sourceId: row.id, remote: repos[row.id]!.remote.trim(),
         // Existing-git uses the checkout's current branch, read by main; the
@@ -319,6 +376,34 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
               </div>
               <p className="mt-1 text-[11px] text-muted">{MODE_HINTS[mode]}</p>
             </fieldset>
+            <fieldset className="border-0 p-0">
+              <legend className="text-[11px] font-medium text-muted">任务类型</legend>
+              <div className="mt-1 flex gap-3 text-xs">
+                {([["normal", "普通任务"], ["scheduled", "定时任务"]] as const).map(([value, text]) => (
+                  <label key={value} className="flex items-center gap-1.5">
+                    <input type="radio" name="desktop-task-kind" aria-label={text} checked={taskKind === value}
+                      onChange={() => { setTaskKind(value); if (value === "normal") setProviders(null); }} />
+                    {text}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            {scheduled ? <fieldset className="border-0 p-0">
+              <legend className="text-[11px] font-medium text-muted">定时设置 *</legend>
+              <p className="mt-1 text-[11px] text-muted">定时任务拥有自己的任务工作区；每次触发在该工作区新建独立会话，不继承其他执行上下文，运行记录可回到原会话继续对话。</p>
+              {providersError && <p role="alert" className="mt-2 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-[11px] text-[#ad4545]">Provider 列表读取失败：{providersError}。不会改用其它 Provider；保存或运行会明确失败。</p>}
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <label className={label}>执行周期 *<input aria-label="定时任务规则" className={field} required value={scheduleRule} onChange={(event) => setScheduleRule(event.target.value)} placeholder="每日 09:15 / 每周五 15:00 / 一次性 2026-10-01T09:00 / 五段 Cron" /></label>
+                <label className={label}>时区 *<input aria-label="定时任务时区" className={field} required value={scheduleTimezone} list="desktop-creation-timezones" onChange={(event) => setScheduleTimezone(event.target.value)} /><datalist id="desktop-creation-timezones"><option value="Asia/Shanghai" /><option value="UTC" /><option value="America/Los_Angeles" /></datalist></label>
+                <label className={label}>Provider / 模型 *<select aria-label="定时任务模型" className={field} required value={scheduleModelKey} onChange={(event) => setScheduleModelKey(event.target.value)}>
+                  <option value="">{providers === null ? "正在读取 Provider…" : "请选择 Provider / 模型"}</option>
+                  {(providers ?? []).flatMap((provider) => provider.models.map((model) => <option key={`${provider.id}\u0000${model.id}`} value={`${provider.id}\u0000${model.id}`}>{provider.name} / {model.name}</option>))}
+                </select></label>
+                <label className={label}>新会话权限 *<select aria-label="定时任务权限" className={field} value={schedulePermission} onChange={(event) => setSchedulePermission(event.target.value as "read" | "default" | "auto")}><option value="read">只读</option><option value="default">默认权限 · 需要时等待确认</option><option value="auto">自动执行</option></select></label>
+              </div>
+              <label className={`${label} mt-2`}>提示词 *<textarea aria-label="定时任务提示词" rows={3} className={`${field} text-xs`} required value={schedulePrompt} onChange={(event) => setSchedulePrompt(event.target.value)} placeholder="包括要处理的内容，以及如何保存、发送或使用结果" /></label>
+              <p className="mt-1 text-[11px] text-muted">规则、时区、Provider／模型与权限由 Host 在保存时校验并持久化；一次性与周期规则按同一份定义保存。</p>
+            </fieldset> : null}
             <fieldset className="min-w-0 border-0 p-0">
               <legend className="flex w-full items-center justify-between gap-2 text-[11px] font-medium text-muted">
                 <span>关联工作区仓库与目录 *</span>

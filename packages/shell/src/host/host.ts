@@ -52,10 +52,21 @@ import { diskServiceOwnershipLog } from "./service-ownership.js";
 import { diskLaunchVerificationLog } from "./service-launch-verification.js";
 import { serviceOwnerBootstrap, serviceOwnerRebind, type ServiceOwnerBootstrap, type ServiceOwnerCompletion } from "../rpc/service-host-binding.js";
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
-import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import type { PromptContextEntry } from "./sdk-prompt-context.js";
 import { availableReasoningLevels, validateExplicitTextProvider } from "./explicit-text-provider.js";
 import { SESSION_PERMISSIONS, SESSION_THINKING_LEVELS, type SessionIndex, type SessionThinkingLevel } from "./session-index.js";
+import {
+  commitRepos,
+  planDelivery,
+  pullRequestGuidance,
+  pushRepos,
+  readCurrentBranch,
+  readDeliverySettings,
+  readRemoteUrl,
+  runGit,
+  saveDeliverySettings,
+  type RepoPreviewInput,
+} from "../main/git-delivery.js";
 import { sessionCreatedPayload, sessionListPayload } from "./session-list-payload.js";
 import { hostSessionLifecyclePorts, runSessionLifecycle, type SessionLifecycleAction } from "./session-lifecycle.js";
 import { switchSessionModel } from "./session-switch.js";
@@ -141,7 +152,6 @@ function reply(response: RpcResponse): void {
 // Lazily created on first dispatch so `host/ping` smoke paths that never
 // touch tasks do not require the task env.
 let workspaceHost: TaskWorkspaceHost | null = null;
-let sdkTurns: SdkTurnTransport | null = null;
 let sdkClosing = false;
 let quitReceipt: Promise<ReturnType<TaskLifecycleHost["quit"]>> | undefined;
 let serviceOwnerInventory: ServiceOwnerInventory | null = null;
@@ -290,6 +300,61 @@ function workspaceFilesFor(taskId: string): TaskWorkspaceFiles | { error: string
     workspaceFiles = new TaskWorkspaceFiles(host.taskId, host.taskDir, host.store, undefined, () => [...privateSecretValues], protectedPaths());
   }
   return workspaceFiles;
+}
+
+/** [Pencil T13] #148 the app-private settings directory this Host was given. */
+function protectedProfile(): string {
+  return process.env["PIDOCK_PROTECTED_PROFILE"] ?? "";
+}
+
+/**
+ * [Pencil T13] #148 the real repositories a delivery would touch: this task's
+ * worktree roots only (an existing-Git shared checkout has no task branch, and
+ * a plain link is not a repository). Branch and remote URL are read from the
+ * checkout itself so the preview cannot drift from what git would do.
+ */
+function deliveryRowsFor(
+  taskId: string,
+): { taskTitle: string; repos: RepoPreviewInput[]; settings: ReturnType<typeof readDeliverySettings> } | { error: string } {
+  const files = workspaceFilesFor(taskId);
+  if ("error" in files) return { error: files.error };
+  const host = taskHostFor(taskId);
+  if ("error" in host) return { error: host.error };
+  const settings = readDeliverySettings(protectedProfile());
+  const repos = files
+    .roots()
+    .filter((root) => root.kind === "worktree")
+    .map((root) => ({
+      repoId: root.repoDir ?? root.id,
+      name: root.label,
+      repoPath: root.path,
+      currentBranch: readCurrentBranch(runGit, root.path),
+      remoteUrl: readRemoteUrl(runGit, root.path, settings.remote) ?? undefined,
+    }));
+  return { taskTitle: host.store.readTask(host.taskDir)?.name ?? taskId, repos, settings };
+}
+
+/**
+ * [Pencil T13] #148 turn the previewed rows into commit/push targets for the
+ * repositories the user actually selected. The branch comes from the explicit
+ * action (the one the sheet showed); a repository that is not on it is refused
+ * by `commitOneRepo` instead of being silently switched.
+ */
+function deliveryTargets(
+  repos: readonly RepoPreviewInput[],
+  record: Record<string, unknown>,
+): { targets: { repoId: string; repoPath: string; branch: string; remote: string }[] } | { error: string } {
+  const branch = String(record["branch"] ?? "");
+  const remote = readDeliverySettings(protectedProfile()).remote;
+  const selected = record["repoIds"];
+  const ids = Array.isArray(selected) ? selected.map(String) : repos.map((repo) => repo.repoId);
+  const unknown = ids.filter((id) => !repos.some((repo) => repo.repoId === id));
+  if (unknown.length > 0) return { error: `unknown-repo: 本任务没有仓库 ${unknown.join(",")}` };
+  const targets = repos
+    .filter((repo) => ids.includes(repo.repoId))
+    .map((repo) => ({ repoId: repo.repoId, repoPath: repo.repoPath, branch, remote }));
+  if (targets.length === 0) return { error: "no-repositories: 没有可交付的 Git 仓库" };
+  return { targets };
 }
 
 function terminalRegistryFor(taskId: string): TaskTerminalRegistry | { error: string } {
@@ -1052,7 +1117,7 @@ async function dispatchTaskOp(
  * usage come from this session's own JSONL (`digest`), never from the legacy
  * `task/sessionContext` defaults and never from a task-wide total.
  */
-function sessionReadoutOf(host: TaskWorkspaceHost, sdkTurns: SdkTurnTransport | null, sessionId: string): Record<string, unknown> {
+function sessionReadoutOf(host: TaskWorkspaceHost, sessionId: string): Record<string, unknown> {
   const index = host.sessionIndex();
   const session = index.sessions.find((entry) => entry.id === sessionId);
   if (!session) throw new Error("session-unknown");
@@ -1060,7 +1125,7 @@ function sessionReadoutOf(host: TaskWorkspaceHost, sdkTurns: SdkTurnTransport | 
   const installed = host.sdkProviderConfig();
   const boundModelId = session.binding?.modelId ?? installed?.config.modelId ?? null;
   const row = boundModelId === null ? undefined : installed?.config.models.find((model) => model.id === boundModelId);
-  const busy = sdkTurns?.busy(sessionId) ?? false;
+  const busy = host.currentSdkTurnTransport()?.busy(sessionId) ?? false;
   return {
     session,
     active: index.activeSessionId === sessionId,
@@ -1098,7 +1163,7 @@ function sessionReadoutOf(host: TaskWorkspaceHost, sdkTurns: SdkTurnTransport | 
  *    the index back, so the two records never disagree.
  */
 async function applySessionBinding(
-  host: TaskWorkspaceHost, sdkTurns: SdkTurnTransport | null, sessionId: string,
+  host: TaskWorkspaceHost, sessionId: string,
   modelId: string, level: SessionThinkingLevel | undefined,
 ): Promise<Record<string, unknown>> {
   const previous = host.sessionIndex();
@@ -1110,24 +1175,24 @@ async function applySessionBinding(
       models: installed.config.models,
     },
     session: (id) => host.sessionForTurn(id),
-    busy: (id) => sdkTurns?.busy(id) ?? false,
+    busy: (id) => host.currentSdkTurnTransport()?.busy(id) ?? false,
     digest: (id) => host.sdkTextKernel().digest(id),
     persist: (binding) => { host.bindTaskSession(sessionId, binding); },
     bind: (id, binding) => host.sdkTextKernel().bind(id, binding),
     rollback: () => { host.store.writeSessionIndex(host.taskDir, previous); },
   }, { sessionId, modelId, ...(level === undefined ? {} : { thinkingLevel: level }) });
-  return sessionReadoutOf(host, sdkTurns, sessionId);
+  return sessionReadoutOf(host, sessionId);
 }
 
 /** [#139] Reasoning only: same session, same model, level must be declared by it. */
 async function bindSessionReasoning(
-  host: TaskWorkspaceHost, sdkTurns: SdkTurnTransport | null, sessionId: string, level: SessionThinkingLevel,
+  host: TaskWorkspaceHost, sessionId: string, level: SessionThinkingLevel,
 ): Promise<Record<string, unknown>> {
   const session = host.sessionForTurn(sessionId);
   const installed = host.sdkProviderConfig();
   if (!installed) throw new Error("provider-not-configured");
   const modelId = session.binding?.modelId ?? installed.config.modelId;
-  return applySessionBinding(host, sdkTurns, sessionId, modelId, level);
+  return applySessionBinding(host, sessionId, modelId, level);
 }
 
 async function performTaskOp(
@@ -1145,11 +1210,11 @@ async function performTaskOp(
         // turn: a journal that is still open means a model request is in
         // flight, and a mid-turn context swap would split one turn across two
         // model identities.
-        sdkTurns?.assertTerminalCommitted();
+        host.currentSdkTurnTransport()?.assertTerminalCommitted();
         const provider = record["provider"];
         if (provider === null) {
           await host.configureSdkProvider(null);
-          sdkTurns = null;
+          host.resetSdkTurnTransport();
           return { ok: true, payload: { configured: false } };
         }
         if (typeof provider !== "object" || provider === null || Array.isArray(provider)) throw new Error("invalid-sdk-provider");
@@ -1163,12 +1228,12 @@ async function performTaskOp(
         // The transport holds the previous kernel/context; re-create it so the
         // new isolated context serves subsequent turns. Durable journals make
         // this safe: nothing is replayed, and status reads still resolve.
-        sdkTurns = null;
+        host.resetSdkTurnTransport();
         return { ok: true, payload: { configured: true, generation: result.generation } };
       }
       const sessionId = record["sessionId"];
       if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-sdk-session");
-      sdkTurns ??= new SdkTurnTransport(taskId, host.taskDir, host.sdkTextKernel());
+      const sdkTurns = host.sdkTurnTransport();
       if (op === "task/sdkProjection") return { ok: true, payload: sdkTurns.projection(sessionId) };
       if (op === "task/sdkStatus") {
         if (typeof record["requestId"] !== "string") throw new Error("invalid-sdk-request");
@@ -2030,7 +2095,7 @@ async function performTaskOp(
           if (op === "task/sessionStop" || op === "task/sessionArchive" || op === "task/sessionRestore" || op === "task/sessionDelete") {
             const action: SessionLifecycleAction = op === "task/sessionStop" ? "stop"
               : op === "task/sessionArchive" ? "archive" : op === "task/sessionRestore" ? "restore" : "delete";
-            const outcome = await runSessionLifecycle(action, sessionId, hostSessionLifecyclePorts(host, sdkTurns));
+            const outcome = await runSessionLifecycle(action, sessionId, hostSessionLifecyclePorts(host, host.currentSdkTurnTransport()));
             return {
               ok: true,
               payload: {
@@ -2062,7 +2127,7 @@ async function performTaskOp(
         if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) {
           return { ok: false, error: "invalid-payload: task/sessionReadout requires sessionId" };
         }
-        try { return { ok: true, payload: sessionReadoutOf(host, sdkTurns, sessionId) }; }
+        try { return { ok: true, payload: sessionReadoutOf(host, sessionId) }; }
         catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
       }
       // [#139] Model switching inside a session: keep the same transcript and
@@ -2084,7 +2149,7 @@ async function performTaskOp(
           return { ok: false, error: "invalid-payload: task/sessionModel.thinkingLevel must be a declared level" };
         }
         try {
-          const readout = await applySessionBinding(host, sdkTurns, sessionId, modelId,
+          const readout = await applySessionBinding(host, sessionId, modelId,
             level === null || level === undefined ? undefined : level as SessionThinkingLevel);
           return { ok: true, payload: readout };
         } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
@@ -2099,7 +2164,7 @@ async function performTaskOp(
           return { ok: false, error: "invalid-payload: task/sessionReasoning.level must be a declared level" };
         }
         try {
-          return { ok: true, payload: await bindSessionReasoning(host, sdkTurns, sessionId, level as SessionThinkingLevel) };
+          return { ok: true, payload: await bindSessionReasoning(host, sessionId, level as SessionThinkingLevel) };
         } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
       }
       // [PiDock 11] (#9) provider/model/context ops. The catalog is redacted
@@ -2269,6 +2334,65 @@ async function performTaskOp(
         if ("error" in files) return { ok: false, error: files.error };
         const result = files.delivery({ rootId: record["rootId"] });
         return result.ok ? { ok: true, payload: { target: result.target } } : { ok: false, error: result.error };
+      }
+      // [Pencil T13] #148 the saved branch convention + target remote. Read and
+      // write are app-private settings documents; nothing here touches a repo.
+      case "task/deliverySettings": {
+        const userData = protectedProfile();
+        if (userData.length === 0) return { ok: false, error: "git-delivery-settings-unavailable: 应用数据目录未知，无法读取交付设置" };
+        return { ok: true, payload: { settings: readDeliverySettings(userData) } };
+      }
+      case "task/saveDeliverySettings": {
+        const userData = protectedProfile();
+        if (userData.length === 0) return { ok: false, error: "git-delivery-settings-unavailable: 应用数据目录未知，无法保存交付设置" };
+        const saved = saveDeliverySettings(userData, { branchTemplate: record["branchTemplate"], remote: record["remote"] });
+        return saved.ok ? { ok: true, payload: { settings: saved.settings } } : { ok: false, error: `${saved.code}: ${saved.message}` };
+      }
+      // [Pencil T13] #148 the per-repo preview the create-task form and the
+      // delivery sheet show BEFORE anything is created or pushed.
+      case "task/deliveryPlan": {
+        const rows = deliveryRowsFor(taskId);
+        if ("error" in rows) return { ok: false, error: rows.error };
+        const plan = planDelivery({ taskId, taskTitle: rows.taskTitle, settings: rows.settings, repos: rows.repos });
+        return { ok: true, payload: { plan } };
+      }
+      // [Pencil T13] #148 explicit user actions. Both are per-repository and
+      // both run under the #141 real-path cross-task lock.
+      case "task/deliveryCommit": {
+        const rows = deliveryRowsFor(taskId);
+        if ("error" in rows) return { ok: false, error: rows.error };
+        const targets = deliveryTargets(rows.repos, record);
+        if ("error" in targets) return { ok: false, error: targets.error };
+        const userData = protectedProfile();
+        const result = commitRepos({
+          run: runGit,
+          repos: targets.targets,
+          message: String(record["commitMessage"] ?? ""),
+          ...(userData.length > 0 ? { lock: { userData, taskId, label: "任务交付提交" } } : {}),
+        });
+        return { ok: true, payload: { ...result, branch: String(record["branch"]), remote: rows.settings.remote } };
+      }
+      case "task/deliveryPush": {
+        const rows = deliveryRowsFor(taskId);
+        if ("error" in rows) return { ok: false, error: rows.error };
+        const targets = deliveryTargets(rows.repos, record);
+        if ("error" in targets) return { ok: false, error: targets.error };
+        const userData = protectedProfile();
+        const result = pushRepos({
+          run: runGit,
+          repos: targets.targets,
+          ...(userData.length > 0 ? { lock: { userData, taskId, label: "任务交付推送" } } : {}),
+        });
+        // PR guidance follows the ACTUAL push target of each repository, and
+        // never claims a PR exists (see `pullRequestGuidance`).
+        const pr = result.outcomes.map((entry) => ({
+          repoId: entry.repoId,
+          ...pullRequestGuidance({
+            remoteUrl: rows.repos.find((repo) => repo.repoId === entry.repoId)?.remoteUrl ?? null,
+            branch: entry.branch,
+          }),
+        }));
+        return { ok: true, payload: { ...result, pr, branch: String(record["branch"]), remote: rows.settings.remote } };
       }
       // [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The Host is the actor: it
       // resolves the same root the file tree shows, re-probes the user's
@@ -2519,7 +2643,7 @@ async function performTaskOp(
         host.sealExecution();
         if (serviceOwnerInventory || process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1") ownerInventoryFor(host).seal();
         sdkClosing = true;
-        sdkTurns?.seal();
+        host.sealSdkTurnTransport();
         try {
           quitReceipt ??= (async () => {
             // [#117 第 3 项 / A] The Agent is aborted FIRST: an in-flight turn is
@@ -2530,7 +2654,8 @@ async function performTaskOp(
             // termination must not sit behind the Agent stage.
             let abortFailure: unknown;
             try {
-              const aborted = await shutdownDeadline(sdkTurns ? sdkTurns.abortAll() : Promise.resolve<string[]>([]), 15_000, "sdk-turns-abort-unconfirmed");
+              const liveTurns = host.currentSdkTurnTransport();
+              const aborted = await shutdownDeadline(liveTurns ? liveTurns.abortAll() : Promise.resolve<string[]>([]), 15_000, "sdk-turns-abort-unconfirmed");
               if (aborted.length > 0) abortedTurns = aborted;
             } catch (error) { abortFailure = error; }
             // Real service children are stopped before the Agent/SDK stages: a
@@ -2549,8 +2674,8 @@ async function performTaskOp(
             // child above has been stopped: the order is Agent -> children -> SDK.
             if (abortFailure) throw abortFailure;
             await workspaceHost?.shutdownSdk();
-            await shutdownDeadline(Promise.resolve(sdkTurns?.waitForTerminal()), 15_000, "sdk-turns-shutdown-unconfirmed");
-            sdkTurns = null;
+            await shutdownDeadline(Promise.resolve(host.currentSdkTurnTransport()?.waitForTerminal()), 15_000, "sdk-turns-shutdown-unconfirmed");
+            host.resetSdkTurnTransport();
             await shutdownDeadline(taskAdmission.drain(), 15_000, "task-operations-shutdown-unconfirmed");
             host.assertExecutionSettled();
             // [Pencil T06] #141: Host exit releases this task's real-path locks,

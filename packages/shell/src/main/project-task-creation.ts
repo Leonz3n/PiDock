@@ -41,6 +41,14 @@ export interface CreationIntent {
    * never failed carries no empty object.
    */
   repoStates?: Record<string, RepoProvisionState>;
+  /**
+   * [Pencil T17] #152 creation intent of this task and, for a dedicated
+   * scheduled task, the definition saved through the Host after provisioning.
+   */
+  kind?: "normal" | "scheduled";
+  schedule?: CreationSchedule;
+  /** Set once the Host accepted the definition, so a retry updates it instead of duplicating it. */
+  scheduleId?: string;
 }
 
 /** One repository as the recovery surface reads it ([Pencil T08] #143). */
@@ -55,7 +63,7 @@ export interface CreationRepoStatus extends RepoProvisionState {
 /** Read-only per-repository recovery status of the current creation intent. */
 export interface CreationStatus {
   intent: { id: string; taskId: string; name: string; taskDir: string; root: string; branch: string;
-    state: "pending" | "complete" | "abandoned"; workspaceMode: WorkspaceMode } | null;
+    state: "pending" | "complete" | "abandoned"; workspaceMode: WorkspaceMode; kind?: "normal" | "scheduled" } | null;
   repos: CreationRepoStatus[];
   directories: { id: string; name: string; path: string; linkName: string; linkPresent: boolean }[];
   /** True when at least one repository is really failing (the retry set). */
@@ -70,17 +78,48 @@ export interface CreationStatus {
 /** Frees only identity-confirmed repositories that belong to this creation. */
 export type AbandonCleanup = "keep" | "owned";
 
+/**
+ * [Pencil T17] #152 the definition a dedicated scheduled task is created with.
+ * It is persisted with the creation intent and saved through the Host's ONE
+ * schedule path (`task/scheduleSave`), so `scheduleDefinitionIssues` validates
+ * it and no creation caller can bypass that save.
+ */
+export interface CreationSchedule {
+  name: string;
+  ruleText: string;
+  timezone: string;
+  prompt: string;
+  providerId: string;
+  model: string;
+  permission: "read" | "default" | "auto";
+  /** New schedules start enabled unless the caller explicitly pauses them. */
+  enabled?: boolean;
+}
 export interface CreationRequest {
   projectId: string; name: string;
   repositories: { sourceId: string; remote: string; remoteBranch: string }[];
   directoryIds: string[]; sharedWriteConfirmed: boolean; override: boolean;
   /** Absent only on a legacy caller; derived from the selected sources then. */
   workspaceMode?: WorkspaceMode;
+  /**
+   * [Pencil T17] #152 creation intent. `scheduled` creates the dedicated task
+   * that owns its schedule rules; a schedule definition must accompany it.
+   */
+  kind?: "normal" | "scheduled";
+  schedule?: CreationSchedule;
 }
 export interface CreationHost {
-  routeTaskOp(params: { taskId: string; op: "task/provision"; payload: Record<string, unknown> }): Promise<HostTaskResult>;
+  routeTaskOp(params: { taskId: string; op: "task/provision" | "task/scheduleSave"; payload: Record<string, unknown> }): Promise<HostTaskResult>;
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** The Host's own schedule identity, if its save reply carried one. */
+function scheduleIdOf(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
+  const schedule = (payload as Record<string, unknown>)["schedule"];
+  if (typeof schedule !== "object" || schedule === null || Array.isArray(schedule)) return undefined;
+  const id = (schedule as Record<string, unknown>)["scheduleId"];
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
 const FILE = "task-creations.json";
 function string(value: unknown): string {
   if (typeof value !== "string" || !value || value.length > 256 || value.trim() !== value || value.includes("\0")) throw new Error("invalid creation value");
@@ -261,7 +300,7 @@ function validate(value: unknown): CreationIntent {
   // such key and is accepted (mode migrated below, states re-derived from the
   // disk) instead of being called damaged, so an interrupted creation from an
   // earlier build stays recoverable.
-  const allowed = new Set([...intentFields, "workspaceMode", "repoStates"]);
+  const allowed = new Set([...intentFields, "workspaceMode", "repoStates", "kind", "schedule", "scheduleId"]);
   if (keys.some((key) => !allowed.has(key)) || intentFields.some((field) => !keys.includes(field))) throw new Error("创建意图损坏");
   const legacy = !keys.includes("workspaceMode");
   const workspaceMode: WorkspaceMode = legacy
@@ -288,6 +327,28 @@ function validate(value: unknown): CreationIntent {
     string(item.name); path(item.path); path(item.realPath); string(item.device); string(item.inode);
   }
   if (row.directories.length && !row.sharedWriteConfirmed) throw new Error("共享写入未经确认");
+  // [Pencil T17] #152: the creation intent is the only place a task is born a
+  // dedicated scheduled task. A scheduled intent MUST carry its definition and a
+  // definition never rides on an ordinary task; both are exact shapes.
+  const kind = row.kind;
+  if (kind !== undefined && kind !== "normal" && kind !== "scheduled") throw new Error("任务创建意图类型损坏");
+  let schedule: CreationSchedule | undefined;
+  if (row.schedule !== undefined) {
+    const item = strict(row.schedule, ["name", "ruleText", "timezone", "prompt", "providerId", "model", "permission", "enabled"]);
+    if (item.permission !== "read" && item.permission !== "default" && item.permission !== "auto") throw new Error("定时任务权限损坏");
+    if (typeof item.enabled !== "boolean") throw new Error("定时任务启用状态损坏");
+    for (const field of ["name", "ruleText", "timezone", "providerId", "model"] as const) string(item[field]);
+    // The prompt may be empty in the INTENT: the Host's definition validator is
+    // what refuses it by name (`prompt-empty`), so the intent stays readable.
+    if (typeof item.prompt !== "string" || item.prompt.length > 16_384) throw new Error("定时任务提示词损坏");
+    schedule = item as unknown as CreationSchedule;
+  }
+  if (kind === "scheduled" && schedule === undefined) throw new Error("定时任务创建意图缺少规则定义");
+  if (kind !== "scheduled" && schedule !== undefined) throw new Error("普通任务创建意图不能携带定时规则");
+  if (row.scheduleId !== undefined) {
+    if (kind !== "scheduled" || schedule === undefined) throw new Error("定时任务创建意图标识损坏");
+    string(row.scheduleId);
+  }
   const repos = row.repos as unknown[];
   if ((workspaceMode === "plain-dirs" && repos.length > 0) || (workspaceMode !== "plain-dirs" && repos.length === 0)) throw new Error("创建意图与工作区模式不符");
   // [Pencil T08] #143: the persisted per-repository state must keep its exact
@@ -326,7 +387,7 @@ function validate(value: unknown): CreationIntent {
     }
     repoStates = parsed;
   }
-  return { ...(value as CreationIntent), workspaceMode, ...(repoStates ? { repoStates } : {}) };
+  return { ...(value as CreationIntent), workspaceMode, ...(repoStates ? { repoStates } : {}), ...(kind !== undefined ? { kind } : {}), ...(schedule ? { schedule } : {}), ...(typeof row.scheduleId === "string" ? { scheduleId: row.scheduleId } : {}) };
 }
 
 /** One main instance owns this file; first-write backup witnesses an initialized store. */
@@ -632,6 +693,13 @@ export class ProjectTaskCreation {
       if (mode === "worktree" && input.repositories.length === 0) throw new Error("独立 Worktree 模式至少需要一个已登记的 Git 仓库来源；仅普通目录请选择「仅普通目录」模式");
       if (!input.repositories.length && !input.directoryIds.length) throw new Error("当前创建流程至少需要选择一个仓库或目录");
       if (input.override !== (selectedRoot !== undefined)) throw new Error("任务根选择结果与请求不符");
+      // [Pencil T17] #152: a scheduled creation must name its kind AND carry the
+      // definition; a normal creation must do neither. The Host still validates
+      // the definition field by field on save.
+      const kind = input.kind ?? "normal";
+      if (kind !== "normal" && kind !== "scheduled") throw new Error("任务类型无效");
+      if (kind === "scheduled" && input.schedule === undefined) throw new Error("定时任务创建必须提供规则、提示词与 Provider／模型");
+      if (kind !== "scheduled" && input.schedule !== undefined) throw new Error("普通任务不能携带定时规则");
       const name = string(input.name), root = path(selectedRoot ?? this.defaultRoot);
       this.store.assertTaskPath(root);
       for (const selected of input.repositories) {
@@ -695,10 +763,20 @@ export class ProjectTaskCreation {
       checkWorkspaceOverlap(join(realRoot, taskId), repos, directories);
       const branch = buildTaskBranch(taskId);
       if (!branch.ok) throw new Error(branch.error.message);
+      const schedule = input.schedule === undefined ? undefined : {
+        ...input.schedule,
+        name: input.schedule.name.trim(),
+        ruleText: input.schedule.ruleText.trim(),
+        timezone: input.schedule.timezone || "Asia/Shanghai",
+        // A created scheduled task is enabled unless the caller paused it; the
+        // Host still validates the rule and computes the persisted nextRunAt.
+        enabled: input.schedule.enabled !== false,
+      };
       const intent: CreationIntent = { id: randomUUID(), taskId, name, projectId: project.id, projectSnapshot: JSON.stringify(project),
         root, rootDevice: rootIdentity?.device ?? null, rootInode: rootIdentity?.inode ?? null, rootRealPath: rootIdentity?.realPath ?? null,
         taskDir: join(root, taskId), branch: branch.branch, repos, directories,
-        sharedWriteConfirmed: input.sharedWriteConfirmed === true, state: "pending", workspaceMode: mode };
+        sharedWriteConfirmed: input.sharedWriteConfirmed === true, state: "pending", workspaceMode: mode,
+        ...(kind === "scheduled" ? { kind, ...(schedule ? { schedule } : {}) } : {}) };
       this.store.write(intent);
       return intent;
     });
@@ -767,7 +845,7 @@ export class ProjectTaskCreation {
     const canAdoptOrphans = repos.some((row) => row.orphan?.adoptable === true);
     return {
       intent: { id: intent.id, taskId: intent.taskId, name: intent.name, taskDir: intent.taskDir, root: intent.root,
-        branch: intent.branch, state: intent.state, workspaceMode: intent.workspaceMode ?? "worktree" },
+        branch: intent.branch, state: intent.state, workspaceMode: intent.workspaceMode ?? "worktree", kind: intent.kind ?? "normal" },
       repos,
       directories: intent.directories.map((dir) => ({ id: dir.id, name: dir.name, path: dir.path, linkName: dir.linkName,
         linkPresent: (() => { try { return lstatSync(join(intent.taskDir, dir.linkName)).isSymbolicLink(); } catch { return false; } })() })),
@@ -1009,6 +1087,9 @@ export class ProjectTaskCreation {
               ...(checkoutIdentities[repo.repoDir] ?? {}) }])),
           }),
           plainDirs: intent.directories.map((dir) => ({ directoryId: dir.id, sourcePath: dir.path })),
+          // [Pencil T17] #152 the dedicated-task marker. Only this creation
+          // intent can make a task a scheduled task; a plain provision has no kind.
+          ...(intent.kind === "scheduled" ? { kind: "scheduled" as const } : {}),
         } });
         if (result.taskId !== intent.taskId) throw new Error("Host 任务身份不符");
       }
@@ -1048,6 +1129,37 @@ export class ProjectTaskCreation {
           (record.workspaceMode ?? "worktree") !== mode || !repoRecordOk ||
           (record.dirLinks?.length ?? 0) !== intent.directories.length || intent.directories.some((dir) => !record.dirLinks?.some((entry) => entry.directoryId === dir.id && entry.linkName === dir.linkName && entry.sourcePath === dir.path))) {
         throw new Error("任务磁盘记录与创建意图不符");
+      }
+      // [Pencil T17] #152: the definition is saved through the Host's own
+      // schedule path, so `scheduleDefinitionIssues` (rule/timezone/Provider/
+      // model/credential/directory) is the single validation authority. A
+      // refusal keeps the creation pending and retryable; nothing is fabricated.
+      if (intent.kind === "scheduled" && intent.schedule !== undefined) {
+        const saved = intent.schedule;
+        const result = await this.host.routeTaskOp({
+          taskId: intent.taskId,
+          op: "task/scheduleSave",
+          payload: {
+            ...(intent.scheduleId !== undefined ? { scheduleId: intent.scheduleId } : {}),
+            projectId: intent.projectId,
+            name: saved.name,
+            ruleText: saved.ruleText,
+            timezone: saved.timezone,
+            prompt: saved.prompt,
+            providerId: saved.providerId,
+            model: saved.model,
+            permission: saved.permission,
+            enabled: saved.enabled !== false,
+          },
+        });
+        const savedId = scheduleIdOf(result.payload);
+        if (savedId !== undefined && savedId !== intent.scheduleId) {
+          // Persist the identity BEFORE the final complete write: a retry after
+          // any later failure updates this definition instead of creating a
+          // second one in the same dedicated task.
+          intent.scheduleId = savedId;
+          this.store.write(intent);
+        }
       }
       this.store.assertTaskPath(intent.taskDir);
       for (const source of [...intent.repos, ...intent.directories]) this.store.assertTaskPath(source.path);
