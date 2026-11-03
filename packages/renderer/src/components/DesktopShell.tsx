@@ -43,6 +43,8 @@ export interface DesktopShellProject {
   id: string;
   name: string;
   description: string;
+  /** Tasks main reports for this workspace; `null` while the lifecycle read is unverified. */
+  taskCount: number | null;
 }
 
 /** Pages the shell can show; each nav entry names its own real page. */
@@ -69,24 +71,27 @@ const LABELS: Record<DesktopLocalPageKey, string> = {
 const NAV_ITEM_CLASS = "flex w-full items-center gap-[10px] rounded-[7px] px-[11px] py-[9px] text-left text-[12px] below-mid:justify-center";
 const HEADING_CLASS = "mt-6 mb-[7px] flex items-center justify-between px-[10px] text-[10px] tracking-[1.4px] text-[#91999f] uppercase below-mid:hidden";
 
-function SidebarNavButton({ label, icon, active, count, disabled, onSelect }: { label: string; icon: IconName; active: boolean; count?: number; disabled?: boolean; onSelect: () => void }) {
+function SidebarNavButton({ label, icon, active, count, countLabel, tone, disabled, onSelect }: { label: string; icon: IconName; active: boolean; count?: number; countLabel?: string; tone?: "attention"; disabled?: boolean; onSelect: () => void }) {
   return (
     <Button
       type="button"
       variant="ghost"
       title={label}
+      // The workspace rows are found by their own name; the count is a trailing
+      // meta chip, so it never becomes part of the accessible name.
+      aria-label={label}
       aria-current={active ? "page" : undefined}
       disabled={disabled}
       onClick={onSelect}
       className={`${NAV_ITEM_CLASS} my-0.5 h-auto border-transparent bg-transparent disabled:cursor-default disabled:opacity-45 ${
-        active ? "bg-[#e3e6ec] font-semibold text-[#283c6c]" : "text-[#69737a] hover:bg-[#eaebec]"
+        active ? "bg-[#e3e6ec] font-semibold text-[#283c6c]" : tone === "attention" ? "text-[#805c28] hover:bg-[#f0e6d4]" : "text-[#69737a] hover:bg-[#eaebec]"
       }`}
     >
       <Icon name={icon} />
       {/* The 64px rail keeps an accessible name per button (`sr-only`), unlike the
           prototype's `display:none`, without changing the wide layout. */}
-      <span className="below-mid:sr-only">{label}</span>
-      {count === undefined ? null : <Badge variant="soft" className="ml-auto rounded-[5px] border-transparent bg-[#e7eaea] px-1.5 text-[10px] below-mid:hidden">{count}</Badge>}
+      <span className="min-w-0 flex-1 truncate below-mid:sr-only">{label}</span>
+      {count === undefined ? null : <Badge variant="soft" className="ml-auto rounded-[5px] border-transparent bg-[#e7eaea] px-1.5 text-[10px] below-mid:hidden">{countLabel ?? count}</Badge>}
     </Button>
   );
 }
@@ -191,6 +196,9 @@ export function DesktopShell({
   view,
   onNavigate,
   projects,
+  projectsInitialized,
+  unassignedCount,
+  onNewWorkspace,
   tasks,
   allTaskCount,
   lifecyclePending,
@@ -203,6 +211,12 @@ export function DesktopShell({
   view: DesktopView;
   onNavigate: (next: DesktopView) => void;
   projects: DesktopShellProject[];
+  /** Whether main's registry exists; `false` is stated in the sidebar, never faked. */
+  projectsInitialized: boolean;
+  /** Unassigned tasks main reports; `null` while unverified. */
+  unassignedCount: number | null;
+  /** The S10 create dialog; the shell offers it next to the workspace tree. */
+  onNewWorkspace?: () => void;
   tasks: DesktopShellTask[];
   allTaskCount: number;
   lifecyclePending: boolean;
@@ -230,7 +244,7 @@ export function DesktopShell({
       : undefined;
   return (
     <div className="flex h-screen min-h-0 w-full bg-bg text-ink" data-testid="desktop-shell">
-      <aside data-testid="desktop-sidebar" className="flex min-h-0 w-[226px] shrink-0 flex-col border-r border-line bg-sidebar px-[13px] below-wide:w-[192px] below-mid:w-16 below-mid:px-2">
+      <aside data-testid="desktop-sidebar" className="flex min-h-0 w-[260px] shrink-0 flex-col border-r border-line bg-sidebar px-[13px] below-wide:w-[212px] below-mid:w-16 below-mid:px-2">
         <div className="flex h-16 items-center gap-[9px] px-2 below-mid:justify-center below-mid:px-0">
           <BrandMark />
           <span className="text-[19px] font-[680] tracking-[-0.8px] text-ink below-mid:hidden">PiDock</span>
@@ -249,14 +263,38 @@ export function DesktopShell({
         </div>
 
         <nav aria-label="主导航" className="flex min-h-0 flex-1 flex-col">
-          <div data-nav-group="workspace" role="group" aria-label="工作区" className="flex flex-col">
-            <SidebarNavButton label="项目总览" icon="grid" active={view.view === "project" || view.view === "unassigned"} onSelect={() => { const first = projects[0]; if (first) onNavigate({ view: "project", projectId: first.id }); else onNavigate({ view: "unassigned" }); }} />
-            <SidebarNavButton label="环境与服务" icon="settings" active={view.view === "env"} onSelect={() => onNavigate({ view: "env" })} />
-            <SidebarNavButton label="Token 用量" icon="chart" active={view.view === "usage"} onSelect={() => onNavigate({ view: "usage" })} />
-          </div>
-
-          <div data-nav-group="tasks" role="group" aria-label="进行中的任务" className="flex min-h-0 flex-col">
+          <div data-nav-group="workspaces" role="group" aria-label="工作空间与任务" className="flex min-h-0 flex-col">
             <div className={HEADING_CLASS}>
+              <span>工作空间与任务</span>
+              <span className="flex items-center gap-1 text-[10px] normal-case">{projects.length}
+                {onNewWorkspace ? <Button type="button" variant="ghost" size="icon-sm" aria-label="新建工作空间" title="新建工作空间" onClick={onNewWorkspace} className="h-5 w-5 border-transparent p-0 text-muted hover:bg-[#eaebec]"><Icon name="plus" /></Button> : null}
+              </span>
+            </div>
+            <div className="flex min-h-0 flex-col overflow-y-auto below-mid:hidden">
+              {projects.map((project) => (
+                <SidebarNavButton
+                  key={project.id}
+                  label={project.name}
+                  icon="folder"
+                  count={project.taskCount ?? undefined}
+                  countLabel={project.taskCount === null ? "未核验" : undefined}
+                  active={view.view === "project" && view.projectId === project.id}
+                  onSelect={() => onNavigate({ view: "project", projectId: project.id })}
+                />
+              ))}
+              <SidebarNavButton
+                label="未归属任务"
+                icon="inbox"
+                tone="attention"
+                count={unassignedCount ?? undefined}
+                countLabel={unassignedCount === null ? "未核验" : undefined}
+                active={view.view === "unassigned"}
+                onSelect={() => onNavigate({ view: "unassigned" })}
+              />
+              {projects.length === 0 ? <p className="px-[10px] pb-2 text-[10px] text-muted">{projectsInitialized ? "尚无工作空间；用「项目管理」新建。" : "项目映射未建立。"}</p> : null}
+            </div>
+
+            <div className={`${HEADING_CLASS} mt-4`}>
               <span>进行中的任务</span>
               <span className="text-[10px] normal-case">{lifecycleUnverified ? "未核验" : tasks.length}</span>
             </div>
@@ -272,6 +310,8 @@ export function DesktopShell({
           <div data-nav-group="system" className="mt-auto border-t border-line pt-[11px]">
             <SidebarNavButton label="需要处理" icon="clock" active={view.view === "attention"} onSelect={() => onNavigate({ view: "attention" })} />
             <SidebarNavButton label="定时任务" icon="clock" active={view.view === "schedules"} onSelect={() => onNavigate({ view: "schedules" })} />
+            <SidebarNavButton label="环境与服务" icon="settings" active={view.view === "env"} onSelect={() => onNavigate({ view: "env" })} />
+            <SidebarNavButton label="Token 用量" icon="chart" active={view.view === "usage"} onSelect={() => onNavigate({ view: "usage" })} />
             <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "capabilities"} onSelect={() => onNavigate({ view: "capabilities" })} />
             <SidebarNavButton label={LABELS.settings} icon="folder" active={view.view === "settings"} onSelect={() => onNavigate({ view: "settings" })} />
             <SidebarNavButton label="模型与 Provider" icon="key" active={view.view === "providers"} onSelect={() => onNavigate({ view: "providers" })} />
@@ -289,7 +329,7 @@ export function DesktopShell({
             breadcrumb; without `shrink-0`/`whitespace-nowrap` on the literal
             segments, CJK text wrapped one character per line and pushed the 48px
             bar taller. The project/task names are the only parts that truncate. */}
-        <header data-testid="desktop-breadcrumb" className="flex min-h-12 shrink-0 items-center gap-2 border-b border-line bg-paper px-4 text-[12px] below-mid:px-3">
+        <header data-testid="desktop-breadcrumb" className="flex min-h-[52px] shrink-0 items-center gap-2 border-b border-line bg-paper px-4 text-[12px] below-mid:px-3">
           <span className="shrink-0 whitespace-nowrap text-muted">工作区</span>
           <span className="shrink-0 text-[#cfd3d7]">/</span>
           <span className="min-w-0 truncate text-muted">{breadcrumb.project ?? "工作区"}</span>
