@@ -32,6 +32,10 @@ export const ALLOWED_INVOKE_CHANNELS = [
   // added to the renderer task-op set — so this write can never travel on
   // `shell/taskOp`.
   "shell/editorSettingsOp",
+  // [Pencil T14] #149 the settings surface: PiDock's appearance document plus
+  // Pi's native keybindings as a bounded projection. Four named ops; the page
+  // names no path, no file and no unverified Pi action.
+  "shell/preferencesOp",
   "shell/providerOp",
   "shell/taskOp",
   "shell/sdkTurn",

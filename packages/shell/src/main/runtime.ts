@@ -51,6 +51,11 @@ import type { PortAssignment, PortReservation, ResolvedBinding, RunDiagnostic, R
 import { codeObservationFields } from "./service-code-observation.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
+// [Pencil T14] #149: PiDock's own appearance document plus Pi's native
+// keybindings/settings as a bounded projection (see `native-preferences.ts`).
+import { performPreferencesOperation } from "./preferences-route.js";
+import { resolveAgentDir } from "./native-models-config.js";
+import { homedir } from "node:os";
 import { performProjectOperation, projectFailureMessage } from "./project-ipc.js";
 import { PROVIDER_REFUSAL_TEXT, ProviderRefusal, type ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
@@ -2368,6 +2373,23 @@ export function registerIpc(
       registry.requireShellSender(event);
       const result = performEditorSettingsOperation(payload, app.getPath("userData"));
       return result.ok ? { ok: true as const, payload: result.status } : { ok: false as const, error: result.error };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
+  // [Pencil T14] #149 设置：PiDock 外观偏好 (userData) + Pi 原生 keybindings
+  // 的有界投影。One channel, four named ops; no task op carries these writes and
+  // the page never names a path, a file or an unverified Pi action.
+  ipcMain.handle("shell/preferencesOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      const result = performPreferencesOperation(payload, {
+        userData: app.getPath("userData"),
+        agentDir: resolveAgentDir(process.env, homedir()),
+      });
+      return result.ok ? { ok: true as const, payload: result.payload } : { ok: false as const, error: result.error };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: errorMessage(error) };
