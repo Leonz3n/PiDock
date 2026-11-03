@@ -45,6 +45,15 @@ function syncDirectory(dir: string): void {
 /** Host-owned request journal, separate from the SDK's sole model-context JSONL. */
 export class SdkTurnTransport {
   private readonly active = new Map<string, { record: TurnRecord; run: Promise<void> }>();
+  /**
+   * [#146] Deleted session ids. A lifecycle delete retires the id BEFORE the
+   * record and the artifacts go, so a late `start` for a session that no longer
+   * exists is refused by identity (`session-deleted`) instead of appending one
+   * more journal entry (and one more model turn) to it. The set is in-memory by
+   * design: a restart has no active run to race, and a deleted id is absent from
+   * the session index, so `sessionForTurn` refuses it there as well.
+   */
+  private readonly retired = new Set<string>();
   private starting = false;
   private opening: Promise<void> | undefined;
   private closing = false;
@@ -129,6 +138,7 @@ export class SdkTurnTransport {
   async start(sessionId: string, requestId: string, text: string, deliver: (event: SdkTextEvent) => void, settled?: (turn: TurnRecord) => void,
     context?: PromptContext): Promise<TurnRecord> {
     if (this.closing) throw new Error("sdk-host-closing");
+    if (this.retired.has(sessionId)) throw new Error("session-deleted");
     if (this.acceptanceUncertain) throw new Error("sdk-turn-journal-uncommitted");
     id(sessionId);
     id(requestId);
@@ -156,6 +166,9 @@ export class SdkTurnTransport {
       this.opening = opening.then(() => undefined, () => undefined);
       await opening;
       if (this.closing) throw new Error("sdk-host-closing");
+      // [#146] The delete may have retired this id while the context was
+      // opening: refuse BEFORE the acceptance record is made durable.
+      if (this.retired.has(sessionId)) throw new Error("session-deleted");
     } catch (error) {
       this.starting = false;
       throw error;
@@ -251,5 +264,40 @@ export class SdkTurnTransport {
     await this.kernel.cancel(sessionId);
     await active.run;
     return this.status(sessionId, active.record.requestId)!;
+  }
+
+  /**
+   * [#146] Abort every live turn of ONE session and await its settlement, then
+   * make sure the terminal record is durable. Returns the turns that really
+   * existed (never an invented id), so a lifecycle op can report "stopped N".
+   * A kernel that refuses its own cancel is not fatal: the run still settles on
+   * its prompt result (same rule as `abortAll`).
+   */
+  async abortSession(sessionId: string): Promise<TurnRecord[]> {
+    id(sessionId);
+    const active = [...this.active.values()].filter(({ record }) => record.sessionId === sessionId);
+    await Promise.all(active.map(async ({ record }) => {
+      try { await this.kernel.cancel(record.sessionId); } catch { /* settle below */ }
+    }));
+    await Promise.all(active.map(({ run }) => run));
+    this.reconcileTerminal();
+    return active
+      .map(({ record }) => this.status(record.sessionId, record.requestId))
+      .filter((record): record is TurnRecord => record !== null);
+  }
+
+  /**
+   * [#146] Refuse any FUTURE turn for this id. Called before the session record
+   * and its artifacts are deleted; an already-running turn must already have
+   * settled (`abortSession`), so this never truncates a live model request.
+   */
+  retire(sessionId: string): void {
+    id(sessionId);
+    this.retired.add(sessionId);
+  }
+
+  /** Whether a turn for this id was refused because the session was deleted. */
+  isRetired(sessionId: string): boolean {
+    return this.retired.has(sessionId);
   }
 }

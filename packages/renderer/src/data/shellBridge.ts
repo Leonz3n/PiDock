@@ -171,6 +171,7 @@ export type ShellTaskOp =
   | "task/sessionArchive"
   | "task/sessionRestore"
   | "task/sessionDelete"
+  | "task/sessionStop"
   | "task/sessionActivate"
   | "task/sessionReadout"
   | "task/sessionModel"

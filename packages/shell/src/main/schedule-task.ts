@@ -152,6 +152,19 @@ export function nextRunAtOf(schedule: Pick<StoredSchedule, "ruleText" | "timezon
 
 export type ScheduleRunStatus = "running" | "completed" | "awaiting-approval" | "skipped" | "failed" | "unknown";
 
+/**
+ * [#146 / T18 boundary] How a run's linked conversation stands TODAY.
+ *
+ * `resumable`  — a real session still exists and can be opened to continue.
+ * `retained`  — a real session exists but this run's outcome is not resumable
+ *               (e.g. a run that was skipped/failed after creating one).
+ * `deleted`   — the session this run pointed at was deleted by the user. The
+ *               run record itself is NOT deleted: schedule history keeps an
+ *               explicit state instead of silently looking like "no session".
+ * `none`      — the run never created a session (skipped / pre-flight failure).
+ */
+export type ScheduleRunLinkState = "resumable" | "retained" | "deleted" | "none";
+
 export interface ScheduleRunView {
   runId: string;
   /** Start time of the attempt (S04「开始时间」). */
@@ -162,11 +175,19 @@ export interface ScheduleRunView {
   sessionId?: string;
   status: ScheduleRunStatus;
   statusLabel: string;
-  /** Outcome or failure reason, exactly as recorded. */
+  /** Outcome or failure reason, exactly as recorded (plus a named deleted-session state). */
   detail?: string;
-  /** True only when a real session exists and can be opened to continue the conversation. */
+  /** True only when a real, still-existing session can be opened to continue the conversation. */
   resumable: boolean;
+  /** The linked history state shown to the reader (never inferred from a missing read). */
+  linkState: ScheduleRunLinkState;
 }
+
+const LINK_STATE_LABEL: Record<Exclude<ScheduleRunLinkState, "none">, string> = {
+  resumable: "关联会话可继续",
+  retained: "关联会话保留",
+  deleted: "关联会话已删除（记录保留）",
+};
 
 const RESULT_LABEL: Record<ScheduledRunResult, string> = {
   completed: "完成",
@@ -179,9 +200,22 @@ const RESULT_LABEL: Record<ScheduledRunResult, string> = {
 /**
  * S04 run row. `actualModel` stays false when the run never started (skipped or
  * failed before a turn), so history never claims a model was used.
+ *
+ * [#146] `sessionExists === false` is the ONLY way a link becomes `deleted`:
+ * the Host checked the task's session index for that id. `undefined` means the
+ * caller did not check (an older read), and the row then keeps the #152
+ * behavior instead of claiming a session was deleted without having looked.
  */
-export function scheduleRunView(run: ScheduledRunRecord): ScheduleRunView {
+export function scheduleRunView(run: ScheduledRunRecord, sessionExists?: boolean): ScheduleRunView {
   const status: ScheduleRunStatus = RESULT_LABEL[run.result] === undefined ? "unknown" : run.result;
+  const startable = run.result === "completed" || run.result === "awaiting-approval" || run.result === "running";
+  const linkState: ScheduleRunLinkState = run.sessionId === undefined
+    ? "none"
+    : sessionExists === false ? "deleted"
+      : startable ? "resumable" : "retained";
+  const detail = linkState === "deleted"
+    ? [run.reason, "关联会话已删除；本次执行记录保留（T18）"].filter((part): part is string => typeof part === "string" && part.length > 0).join(" · ")
+    : run.reason;
   return {
     runId: run.runId,
     startedAt: run.startedAt,
@@ -190,9 +224,15 @@ export function scheduleRunView(run: ScheduledRunRecord): ScheduleRunView {
     ...(run.sessionId !== undefined ? { sessionId: run.sessionId } : {}),
     status,
     statusLabel: RESULT_LABEL[run.result] ?? "未知",
-    ...(run.reason !== undefined ? { detail: run.reason } : {}),
-    // A session link is only resumable for a run that really created one; a
-    // skipped run and a pre-flight failure created no conversation.
-    resumable: run.sessionId !== undefined && (run.result === "completed" || run.result === "awaiting-approval" || run.result === "running"),
+    ...(detail !== undefined ? { detail } : {}),
+    // A resumable link requires a session that really exists; a deleted one
+    // keeps its record but offers no "continue" affordance.
+    resumable: linkState === "resumable",
+    linkState,
   };
+}
+
+/** The label the schedule history shows for a run's linked session, or `null` when it has none. */
+export function scheduleRunLinkLabel(view: Pick<ScheduleRunView, "linkState">): string | null {
+  return view.linkState === "none" ? null : LINK_STATE_LABEL[view.linkState];
 }

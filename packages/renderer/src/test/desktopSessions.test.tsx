@@ -125,7 +125,10 @@ function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | nu
       if (op === "task/sessionArchive") {
         sessions = sessions.map((entry) => (entry.id === sessionId ? { ...entry, archived: true } : entry));
         if (activeSessionId === sessionId) activeSessionId = sessions.find((entry) => !entry.archived)?.id ?? null;
-        return envelope(writeList());
+        return envelope({ ...writeList(), action: "archive", sessionId, stopped: false, abortedTurnIds: [] });
+      }
+      if (op === "task/sessionStop") {
+        return envelope({ ...writeList(), action: "stop", sessionId, stopped: true, abortedTurnIds: ["turn-1"] });
       }
       if (op === "task/sessionRestore") {
         sessions = sessions.map((entry) => (entry.id === sessionId ? { ...entry, archived: false } : entry));
@@ -134,7 +137,7 @@ function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | nu
       if (op === "task/sessionDelete") {
         sessions = sessions.filter((entry) => entry.id !== sessionId);
         if (activeSessionId === sessionId) activeSessionId = sessions.find((entry) => !entry.archived)?.id ?? null;
-        return envelope(writeList());
+        return envelope({ ...writeList(), action: "delete", sessionId, stopped: false, abortedTurnIds: [] });
       }
       if (op === "task/sessionModel") {
         const refusal = refusals["model"];
@@ -305,9 +308,12 @@ describe("[#139] task sessions in the conversation", () => {
     await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionRestore")).toBe(true));
     await expectModelMenu("restore");
 
-    // delete it
+    // delete it: the confirmation is a separate, explicit step
     row = screen.getByTestId("session-row-s-9f9f9f9f");
     fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+    expect(screen.getByTestId("session-delete-confirm")).toBeInTheDocument();
+    expect(fixture.ops.some((entry) => entry.op === "task/sessionDelete")).toBe(false);
+    fireEvent.click(screen.getByTestId("session-delete-confirm-button"));
     await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionDelete")).toBe(true));
     await expectModelMenu("delete");
   });
@@ -529,5 +535,101 @@ describe("[#139] the sidebar session tree", () => {
     );
     expect(await screen.findByText(/会话列表读取失败：sessions\.json 损坏/)).toBeInTheDocument();
     expect(document.querySelectorAll("[data-session-nav]")).toHaveLength(0);
+  });
+});
+
+describe("[#146] 停止 / 归档 / 恢复 / 删除 entries", () => {
+  const openPanel = async () => {
+    fireEvent.click(await screen.findByTestId("session-all"));
+    return screen.findByRole("dialog", { name: "全部会话" });
+  };
+
+  it("offers 新建 / 续聊 / 停止 / 归档 / 恢复 / 删除 as distinct entries with per-state availability", async () => {
+    const fixture = setup({
+      sessions: [session("main", "主会话"), session("s-arch0001", "已归档会话", { archived: true })],
+      activeSessionId: "main",
+    });
+    mount(fixture);
+    const panel = await openPanel();
+    // 新建 lives on the list itself and is always offered.
+    expect(within(panel).getByRole("button", { name: /新建会话/ })).toBeEnabled();
+    const archivedRow = await screen.findByTestId("session-row-s-arch0001");
+    // Archived → 恢复 / 删除 only; stop/archive/continue are refused with a reason.
+    expect(within(archivedRow).getByRole("button", { name: "恢复" })).toBeEnabled();
+    expect(within(archivedRow).getByRole("button", { name: "删除" })).toBeEnabled();
+    expect(within(archivedRow).getByRole("button", { name: "停止" })).toBeDisabled();
+    expect(within(archivedRow).getByRole("button", { name: "归档" })).toBeDisabled();
+    expect(within(archivedRow).getByRole("button", { name: "继续对话" })).toBeDisabled();
+    expect(within(archivedRow).getByRole("button", { name: "停止" }).getAttribute("title")).toContain("已归档");
+    // Live, non-current → 续聊 / 停止 / 归档 / 删除, and 恢复 is refused with a reason.
+    const mainRow = screen.getByTestId("session-row-main");
+    expect(within(mainRow).getByRole("button", { name: "当前会话" })).toBeDisabled();
+    expect(within(mainRow).getByRole("button", { name: "停止" })).toBeEnabled();
+    expect(within(mainRow).getByRole("button", { name: "归档" })).toBeEnabled();
+    expect(within(mainRow).getByRole("button", { name: "恢复" })).toBeDisabled();
+    expect(within(mainRow).getByRole("button", { name: "恢复" }).getAttribute("title")).toContain("未归档");
+    // Six entries, one per label: nothing is folded into a generic "操作" menu.
+    const labels = [...panel.querySelectorAll("[data-testid^='session-actions-'] button")].map((button) => button.textContent?.trim());
+    for (const label of ["继续对话", "当前会话", "停止", "归档", "恢复", "删除", "重命名"]) {
+      expect(labels).toContain(label);
+    }
+  });
+
+  it("stop goes through task/sessionStop and reports what was really stopped", async () => {
+    const fixture = setup({ sessions: [session("main", "主会话")], activeSessionId: "main" });
+    mount(fixture);
+    const panel = await openPanel();
+    const row = await screen.findByTestId("session-row-main");
+    fireEvent.click(within(row).getByRole("button", { name: "停止" }));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionStop" && entry.payload["sessionId"] === "main")).toBe(true));
+    // The Host's own outcome is quoted; the page never invents "已停止".
+    await waitFor(() => expect(within(panel).getByTestId("session-lifecycle-notice")).toHaveTextContent("已先停止「主会话」的 1 个执行回合并等待结算，然后完成停止"));
+    // Stopping does not remove the session or its history.
+    expect(screen.getByTestId("session-row-main")).toBeInTheDocument();
+  });
+
+  it("delete asks first, names the real impact, and cancel deletes nothing", async () => {
+    const fixture = setup({ sessions: [session("main", "主会话")], activeSessionId: "main" });
+    mount(fixture);
+    await openPanel();
+    const row = await screen.findByTestId("session-row-main");
+    fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+    const dialog = await screen.findByTestId("session-delete-confirm");
+    // History + drafts go; the task workspace and the user's own directories do NOT.
+    expect(dialog).toHaveTextContent("记录、SDK JSONL 转录与执行日志会被删除");
+    expect(dialog).toHaveTextContent("未发送草稿与待确认请求记录会被丢弃");
+    expect(dialog).toHaveTextContent("任务工作区、仓库与用户原始目录不受影响");
+    expect(dialog).toHaveTextContent("定时任务执行记录会保留");
+    expect(dialog).toHaveTextContent("会话已删除");
+    // Nothing was deleted by the first click.
+    expect(fixture.ops.some((entry) => entry.op === "task/sessionDelete")).toBe(false);
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByTestId("session-delete-confirm")).not.toBeInTheDocument());
+    expect(fixture.ops.some((entry) => entry.op === "task/sessionDelete")).toBe(false);
+    expect(screen.getByTestId("session-row-main")).toBeInTheDocument();
+  });
+
+  it("keeps the delete confirmation reachable and the entries readable at 900 and 560 window heights", async () => {
+    const fixture = setup({ sessions: [session("main", "主会话")], activeSessionId: "main" });
+    const view = mount(fixture);
+    await screen.findByRole("tab", { name: "主会话" });
+    for (const height of [900, 560]) {
+      Object.defineProperty(window, "innerHeight", { value: height, configurable: true });
+      fireEvent(window, new Event("resize"));
+      await openPanel();
+      const row = await screen.findByTestId("session-row-main");
+      expect(within(row).getByRole("button", { name: "删除" })).toBeVisible();
+      fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+      const dialog = await screen.findByTestId("session-delete-confirm");
+      expect(dialog).toBeVisible();
+      expect(within(dialog).getByTestId("session-delete-confirm-button")).toBeVisible();
+      // The dialog is a scroll-free centered card: it never depends on a pixel
+      // height, so 560 shows the same actions as 900.
+      expect(dialog.querySelector(".max-h-\\[80vh\\]")).toBeNull();
+      fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+      await waitFor(() => expect(screen.queryByTestId("session-delete-confirm")).not.toBeInTheDocument());
+      fireEvent.click(within(screen.getByRole("dialog", { name: "全部会话" })).getByRole("button", { name: "关闭会话列表" }));
+    }
+    view.unmount();
   });
 });

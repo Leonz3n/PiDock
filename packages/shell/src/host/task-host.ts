@@ -2897,6 +2897,22 @@ export class TaskWorkspaceHost {
     return saved?.permission ?? null;
   }
 
+  /**
+   * [#146] Whether one session has live work the lifecycle must settle first,
+   * read **without** opening or creating the session: a running/approval-waiting
+   * Host turn and the confirmations parked on it. A session with no snapshot is
+   * simply not live (never an error: the index is the authority on existence).
+   */
+  sessionActivity(sessionId: string): { running: boolean; pendingApprovals: number } {
+    const live = this.channels.get(sessionId);
+    const snapshot = live ? live.snapshot() : this.store.readSession(this.taskDir, sessionId);
+    if (!snapshot) return { running: false, pendingApprovals: 0 };
+    return {
+      running: snapshot.runState === "running" || snapshot.runState === "approval",
+      pendingApprovals: snapshot.approvals.filter((approval) => approval.status === "pending").length,
+    };
+  }
+
   openSession(
     sessionId: string,
     options?: { providerId?: string; model?: string; credentialRef?: string; permission?: PiPermission },

@@ -225,14 +225,59 @@ export const createSession = (taskId: string, input: { name?: string } = {}) =>
   sessionMutation(taskId, "task/sessionCreate", { ...(input.name === undefined ? {} : { name: input.name }) });
 export const renameSession = (taskId: string, sessionId: string, name: string) =>
   sessionMutation(taskId, "task/sessionRename", { sessionId, name });
-export const archiveSession = (taskId: string, sessionId: string) =>
-  sessionMutation(taskId, "task/sessionArchive", { sessionId });
+
+/**
+ * [#146] 停止 / 归档 / 删除 share the Host's ordered lifecycle policy and answer
+ * with what really happened beside the new list: `stopped` is true only when a
+ * live turn/confirmation was actually aborted, and `abortedTurnIds` names the
+ * turns. The page therefore never claims "已停止" for a session that was idle.
+ */
+export type SessionLifecycleReply = { list: SessionList; stopped: boolean; abortedTurnIds: string[] };
+async function lifecycleMutation(taskId: string, op: Parameters<typeof shellTaskOp>[1], sessionId: string) {
+  try {
+    const result = await run(taskId, op, { sessionId });
+    if (!result.ok) return { ok: false as const, error: result.error ?? "会话操作失败" };
+    const list = parseSessionList(result.payload);
+    announceSessionWrite(taskId);
+    const payload = result.payload as Record<string, unknown>;
+    const ids = Array.isArray(payload["abortedTurnIds"]) ? payload["abortedTurnIds"].filter((id): id is string => typeof id === "string") : [];
+    // Same `list` key as every other session writer (#139); the lifecycle
+    // outcome rides beside it so a page can quote what really happened.
+    return { ok: true as const, list, stopped: payload["stopped"] === true, abortedTurnIds: ids };
+  } catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : String(error) }; }
+}
+
+export const stopSession = (taskId: string, sessionId: string) => lifecycleMutation(taskId, "task/sessionStop", sessionId);
+export const archiveSession = (taskId: string, sessionId: string) => lifecycleMutation(taskId, "task/sessionArchive", sessionId);
+export const deleteSession = (taskId: string, sessionId: string) => lifecycleMutation(taskId, "task/sessionDelete", sessionId);
 export const restoreSession = (taskId: string, sessionId: string) =>
   sessionMutation(taskId, "task/sessionRestore", { sessionId });
-export const deleteSession = (taskId: string, sessionId: string) =>
-  sessionMutation(taskId, "task/sessionDelete", { sessionId });
 export const activateSession = (taskId: string, sessionId: string) =>
   sessionMutation(taskId, "task/sessionActivate", { sessionId });
+
+/**
+ * [#146] The six entries every session row offers (新建 lives on the list
+ * itself) and whether each one applies to this state. The Host still enforces
+ * the same rule by name; this only decides what the menu may present, so the
+ * page never offers an action the Host would refuse for a reason it can see
+ * (an archived session cannot be stopped/archived twice, a live one cannot be
+ * restored, and 续聊 is the current session's already-open conversation).
+ */
+export type SessionActionId = "new" | "resume" | "stop" | "archive" | "restore" | "delete";
+export interface SessionActionRow { id: SessionActionId; label: string; enabled: boolean; reason: string | null }
+export function sessionActionRows(session: Pick<TaskSession, "id" | "archived">, state: { current: boolean }): SessionActionRow[] {
+  return [
+    { id: "resume", label: state.current ? "当前会话" : "继续对话", enabled: !session.archived && !state.current,
+      reason: session.archived ? "已归档的会话不能继续对话；请先恢复" : state.current ? "已经是当前会话" : null },
+    { id: "stop", label: "停止", enabled: !session.archived,
+      reason: session.archived ? "已归档的会话没有正在执行的回合" : null },
+    { id: "archive", label: "归档", enabled: !session.archived,
+      reason: session.archived ? "该会话已归档" : null },
+    { id: "restore", label: "恢复", enabled: session.archived,
+      reason: session.archived ? null : "该会话未归档" },
+    { id: "delete", label: "删除", enabled: true, reason: null },
+  ];
+}
 
 /** One session's readout (identity + bound model + declared levels + real SDK numbers). */
 export async function readSessionReadout(taskId: string, sessionId: string): Promise<{ ok: true; readout: SessionReadout } | { ok: false; error: string }> {
