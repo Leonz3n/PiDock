@@ -49,6 +49,12 @@ export type WorkspaceRootView = {
   /** OBSERVED: whether the worktree really has uncommitted (including untracked) changes. */
   dirty?: WorkspaceObservationView<boolean>;
   baseCommit?: string;
+  /**
+   * Worktree only, RECORDED: the registered source checkout's resolved real
+   * path ([Pencil T07] ticket 142). Shown beside the worktree path so the task never
+   * reads as "the worktree IS the repository".
+   */
+  sourceRealPath?: string;
   /** Existing-git only: the root is the original checkout, not a copy. */
   sharedOriginal?: boolean;
   /** Existing-git only, OBSERVED: the checkout's real HEAD. */
@@ -396,6 +402,7 @@ export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRoot
     const workingBranch = observation(item["workingBranch"], str);
     const dirty = observation(item["dirty"], bool);
     const baseCommit = str(item["baseCommit"]);
+    const sourceRealPath = str(item["sourceRealPath"]);
     const sharedOriginal = bool(item["sharedOriginal"]);
     const headCommit = observation(item["headCommit"], str);
     const verification = verificationView(item["verification"]);
@@ -412,6 +419,7 @@ export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRoot
       ...(workingBranch !== undefined ? { workingBranch } : {}),
       ...(dirty !== undefined ? { dirty } : {}),
       ...(baseCommit !== undefined ? { baseCommit } : {}),
+      ...(sourceRealPath !== undefined ? { sourceRealPath } : {}),
       ...(sharedOriginal !== undefined ? { sharedOriginal } : {}),
       ...(headCommit !== undefined ? { headCommit } : {}),
       ...(verification !== undefined ? { verification } : {}),

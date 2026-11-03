@@ -218,7 +218,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
                   {hostText(repo.name, "Host 未上报仓库名称")} · 原检出 {hostText(repo.path, "Host 未上报原检出路径")} · 当前分支 {hostText(repo.remoteBranch, "Host 未上报当前分支")} · HEAD {hostText(repo.commit, "Host 未上报提交")}（共享原文件，不创建 Worktree 或任务分支）
                 </p>)
               : intent.repos.map((repo) => <p className="break-all text-xs" key={repo.id}>
-                  {hostText(repo.name, "Host 未上报仓库名称")} · {hostText(repo.remote, "Host 未上报远程名")}/{hostText(repo.remoteBranch, "Host 未上报远程分支")} · {hostText(repo.commit, "Host 未上报提交")} → {intent.taskDir}/{hostText(repo.repoDir, "Host 未上报目录名")}
+                  {hostText(repo.name, "Host 未上报仓库名称")} · 原检出 {hostText(repo.path, "Host 未上报原检出路径")} · {hostText(repo.remote, "Host 未上报远程名")}/{hostText(repo.remoteBranch, "Host 未上报远程分支")} · 固定基线 {hostText(repo.commit, "Host 未上报提交")} → {intent.taskDir}/{hostText(repo.repoDir, "Host 未上报目录名")}
                   <span className="text-accent"> · ⚡ 自动创建隔离 Worktree</span>
                 </p>)}
             {intent.directories.map((dir) => <p className="break-all text-xs" key={dir.id}>{hostText(dir.name, "Host 未上报目录名称")} · {hostText(dir.path, "Host 未上报目录路径")} → {intent.taskDir}/{hostText(dir.linkName, "Host 未上报链接名")}（共享可写）</p>)}

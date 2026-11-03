@@ -795,6 +795,22 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
       </div>
     </div>
     <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} />
+    {/* [Pencil T07] ticket 142: a created task lands on its `main` conversation entry
+        even when no Provider/model is configured. The entry names that missing
+        configuration and routes to 能力管理 → Providers; it never picks a
+        profile, never sends a turn and never calls a model on its own. */}
+    {provider !== null && provider.state !== "configured" && (
+      <div role="status" data-testid="provider-requirement"
+        className="shrink-0 border-b border-line bg-soft px-4 py-2 text-[11px] leading-5 text-[#9a6032] below-mid:px-3">
+        <p>
+          尚未配置可用的 Provider / 模型（{PROVIDER_STATE_TEXT[provider.state]}）：任务已创建，但本任务不会自动选择或调用模型。
+          请先在「能力管理 → Providers」完成配置后，再在此会话开始对话。
+        </p>
+        <Button type="button" size="sm" variant="outline" className="mt-1" onClick={onOpenProviders} aria-label="前往能力管理 · Providers 配置模型">
+          前往能力管理 · Providers
+        </Button>
+      </div>
+    )}
     {archivePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
       <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
         <h2 className="text-base font-semibold">归档当前任务</h2>

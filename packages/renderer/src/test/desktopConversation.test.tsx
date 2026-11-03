@@ -97,9 +97,9 @@ function setup(taskId = "task-a") {
   });
   return { bridge, calls, drafts, setDraftRefuse: (value: string) => { draftRefuse = value; }, setDraftSaveRefuse: (value: string) => { draftSaveRefuse = value; }, setDraftRecord: (value: unknown) => { draftRecord = value; }, setTaskOp: (handler: (taskId: string, op: string, payload: Record<string, unknown>) => unknown) => { bridge.taskOp = taskOpWithDraft(handler) as never; }, emit: (value: unknown) => listener?.(value), setStatus: (value: unknown) => { status = value; }, setMessages: (value: unknown[]) => { messages = value; }, setFail: (value: string) => { fail = value; }, invalidate: () => { associationState = "unavailable"; }, unreadable: () => { unreadable = true; }, subscribed: () => Boolean(listener) };
 }
-function mount(fixture: ReturnType<typeof setup>, taskId = "task-a") {
+function mount(fixture: ReturnType<typeof setup>, taskId = "task-a", onOpenProviders = vi.fn()) {
   window.pidock = fixture.bridge;
-  return render(<DesktopConversation taskId={taskId} name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association(taskId))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={vi.fn()} />);
+  return render(<DesktopConversation taskId={taskId} name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association(taskId))} onBack={vi.fn()} onOpenProviders={onOpenProviders} onArchived={vi.fn()} />);
 }
 const send = async (text: string) => {
   fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: text } });
@@ -108,6 +108,24 @@ const send = async (text: string) => {
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop SDK conversation", () => {
+  it("requires Provider configuration on the conversation entry instead of choosing a model or calling one", async () => {
+    // [Pencil T07] #142: landing on a freshly created task's `main` entry must
+    // not invent a Provider/model selection and must not auto-call a model. The
+    // conversation entry stays open; the missing configuration is a named state
+    // with the route to 能力管理 → Providers.
+    const fixture = setup();
+    const openProviders = vi.fn();
+    mount(fixture, "task-a", openProviders);
+    const requirement = await screen.findByTestId("provider-requirement");
+    expect(requirement).toHaveTextContent(/未配置/);
+    expect(requirement).toHaveTextContent(/不会自动选择或调用模型/);
+    expect(requirement).toHaveTextContent(/能力管理 → Providers/);
+    fireEvent.click(within(requirement).getByRole("button", { name: /前往能力管理/ }));
+    expect(openProviders).toHaveBeenCalledTimes(1);
+    // Mounting the entry (and opening Providers) sent nothing to a model.
+    expect(fixture.calls.some((request) => request["action"] === "start")).toBe(false);
+  });
+
   it("offers the remaining desktop tools without a terminal launcher or terminal IPC", async () => {
     const fixture = setup();
     const taskOp = vi.fn(async (_taskId: string, _op: string) => ({ ok: false as const, error: "fixture" }));
