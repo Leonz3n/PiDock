@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, afterAll, expect, it, vi } from "vitest";
@@ -740,4 +740,81 @@ it("keeps a cancelled loopback stream free of the credential and raw error text"
     expect(JSON.stringify(reopened.projection("main"))).not.toContain(secret);
     await reopened.dispose();
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+/**
+ * Pi 1.5 `SessionManager` contract this kernel relies on (#11460): an entry the
+ * session file REFUSED must not stay on the in-memory parent chain. Without the
+ * rollback, the next entry is written with a `parentId` that exists in memory but
+ * not in the file - a dangling parent that cold recovery cannot walk.
+ *
+ * Pi 1.4 evidence for this area was "new version writes, then recovers"; this is
+ * the 1.5 write-failure evidence, measured on the real `SessionManager`.
+ */
+it("keeps memory and disk in one parent chain when the SDK session write fails", async () => {
+  // Root can append to a 0400 file, so the failure this test needs would not happen.
+  if (process.getuid?.() === 0) return;
+  const dir = mkdtempSync(join(tmpdir(), "pidock-sdk-session-write-"));
+  roots.push(dir);
+  const file = join(dir, "session.jsonl");
+  writeFileSync(file, "");
+  const manager = SessionManager.open(file, dir, dir);
+  const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: Date.now() });
+  expect(manager.getLeafId()).toBe(firstId);
+  const written = readFileSync(file, "utf8");
+  const lines = written.trim().split("\n");
+  expect(JSON.parse(lines.at(-1)!)).toMatchObject({ type: "message", id: firstId, parentId: null });
+
+  chmodSync(file, 0o400);
+  let failure: unknown;
+  try {
+    manager.appendMessage({ role: "user", content: "never written", timestamp: Date.now() });
+  } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(Error);
+
+  // Memory: the refused entry is gone, and the leaf is the last entry the file
+  // really holds (not the one it refused).
+  expect(manager.getLeafId()).toBe(firstId);
+  expect(manager.getBranch().map((entry) => entry.id)).toEqual([firstId]);
+  // Disk: byte-identical. No half-written line and no entry chained to a parent
+  // that was never written.
+  expect(readFileSync(file, "utf8")).toBe(written);
+  // The next entry chains to the real leaf, so disk and memory agree again.
+  chmodSync(file, 0o600);
+  const secondId = manager.appendMessage({ role: "user", content: "second", timestamp: Date.now() });
+  const reopened = SessionManager.open(file, dir, dir);
+  expect(reopened.getBranch().map((entry) => entry.id)).toEqual([firstId, secondId]);
+  expect(reopened.getEntry(secondId)?.parentId).toBe(firstId);
+});
+
+it("fails a turn whose JSONL write is refused and reopens without a dangling parent or a replayed prompt", async () => {
+  if (process.getuid?.() === 0) return;
+  const dir = task("task-sdk-write-failure");
+  const fake = await kernel(dir, (texts) => `reply-${texts.filter((x) => x !== "assistant").length}`);
+  const opened = await fake.instance.open("main");
+  expect((await fake.instance.prompt("main", "first")).state).toBe("done");
+  const committed = readFileSync(opened.file, "utf8");
+
+  chmodSync(opened.file, 0o400);
+  const failed = await fake.instance.prompt("main", "never-committed");
+  expect(failed.state).toBe("failed");
+  // Nothing was appended while the write was refused.
+  expect(readFileSync(opened.file, "utf8")).toBe(committed);
+  chmodSync(opened.file, 0o600);
+  await fake.instance.dispose();
+
+  const reopened = await kernel(dir, () => "after-recovery");
+  const reopenedOpened = await reopened.instance.open("main");
+  expect(reopenedOpened.file).toBe(opened.file);
+  // Disk == memory: every entry's parent is an entry the file really holds.
+  const manager = SessionManager.open(reopenedOpened.file, join(dir, ".pidock-sdk-sessions", "main"), dir);
+  const ids = new Set(manager.getBranch().map((entry) => entry.id));
+  expect(manager.getBranch().length).toBeGreaterThan(0);
+  for (const entry of manager.getBranch()) if (entry.parentId !== null) expect(ids.has(entry.parentId)).toBe(true);
+  // Cold recovery neither replays the refused prompt nor loses the committed one.
+  expect(reopened.instance.projection("main").messages.some((message) => message.text.includes("never-committed"))).toBe(false);
+  expect((await reopened.instance.prompt("main", "next")).state).toBe("done");
+  expect(reopened.seen.at(-1)!.join("\n")).toContain("first");
+  expect(reopened.seen.at(-1)!.join("\n")).not.toContain("never-committed");
+  await reopened.instance.dispose();
 });
