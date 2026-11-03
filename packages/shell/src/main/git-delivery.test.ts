@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertSafeGitArguments,
   classifyGitFailure,
@@ -34,6 +34,10 @@ import {
   type GitRunner,
 } from "./git-delivery.js";
 import { WorktreeMetadataLock } from "./worktree-metadata-lock.js";
+
+// These cases spawn REAL git (init/clone/push) against a local bare remote; a
+// loaded full-suite run can legitimately take longer than vitest's 5s default.
+vi.setConfig({ testTimeout: 30_000 });
 
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));

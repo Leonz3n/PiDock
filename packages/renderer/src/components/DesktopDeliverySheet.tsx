@@ -5,6 +5,7 @@ import {
   deliveryCommitThroughShell,
   deliveryPlanThroughShell,
   deliveryPushThroughShell,
+  isShellConnected,
   deliverySettingsThroughShell,
   saveDeliverySettingsThroughShell,
 } from "../data/shellBridge";
@@ -50,6 +51,12 @@ export function DesktopDeliverySheet({ taskId }: { taskId: string }) {
   const epoch = useRef(0);
 
   const load = async () => {
+    // The in-memory dev adapter has no repository, no remote and no git: the
+    // sheet says so instead of pretending a delivery surface exists.
+    if (!isShellConnected()) {
+      setError("当前是内存模拟数据（不在桌面壳内）：没有真实 Git 仓库，提交、推送与 PR 引导都不可用。");
+      return;
+    }
     const request = ++epoch.current;
     const settingsResult = await deliverySettingsThroughShell(taskId);
     if (epoch.current !== request) return;

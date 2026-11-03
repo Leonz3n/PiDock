@@ -74,7 +74,7 @@ afterEach(() => {
 
 describe("delivery sheet", () => {
   it("previews the local branch and push target per repository before anything runs", async () => {
-    const taskOp = vi.fn(async (_taskId: string, op: string) => {
+    const taskOp = vi.fn(async (_taskId: string, op: string, _payload?: Record<string, unknown>) => {
       if (op === "task/deliverySettings") {
         return hostAnswer({ settings: { branchTemplate: "ticket/{taskId}-{slug}", remote: "origin", savedAt: "2026-11-04T00:00:00.000Z" } });
       }
@@ -92,7 +92,7 @@ describe("delivery sheet", () => {
   });
 
   it("commits only on an explicit click and lists the real per-repo result", async () => {
-    const taskOp = vi.fn(async (_taskId: string, op: string) => {
+    const taskOp = vi.fn(async (_taskId: string, op: string, _payload?: Record<string, unknown>) => {
       if (op === "task/deliverySettings") return hostAnswer({ settings: { branchTemplate: "ticket/{taskId}-{slug}", remote: "origin", savedAt: null } });
       if (op === "task/deliveryPlan") return hostAnswer({ plan });
       if (op === "task/deliveryCommit") {
@@ -124,7 +124,7 @@ describe("delivery sheet", () => {
   });
 
   it("shows push outcomes with a copyable PR instruction and never claims a PR exists", async () => {
-    const taskOp = vi.fn(async (_taskId: string, op: string) => {
+    const taskOp = vi.fn(async (_taskId: string, op: string, _payload?: Record<string, unknown>) => {
       if (op === "task/deliverySettings") return hostAnswer({ settings: { branchTemplate: "ticket/{taskId}-{slug}", remote: "origin", savedAt: null } });
       if (op === "task/deliveryPlan") return hostAnswer({ plan });
       if (op === "task/deliveryPush") {
@@ -157,7 +157,7 @@ describe("delivery sheet", () => {
   });
 
   it("names an unset convention per repository and offers no submit action", async () => {
-    const taskOp = vi.fn(async (_taskId: string, op: string) => {
+    const taskOp = vi.fn(async (_taskId: string, op: string, _payload?: Record<string, unknown>) => {
       if (op === "task/deliverySettings") return hostAnswer({ settings: { branchTemplate: "", remote: "origin", savedAt: null } });
       if (op === "task/deliveryPlan") {
         return hostAnswer({
@@ -180,7 +180,7 @@ describe("delivery sheet", () => {
   });
 
   it("keeps a named save refusal visible instead of pretending the settings saved", async () => {
-    const taskOp = vi.fn(async (_taskId: string, op: string) => {
+    const taskOp = vi.fn(async (_taskId: string, op: string, _payload?: Record<string, unknown>) => {
       if (op === "task/deliverySettings") return hostAnswer({ settings: { branchTemplate: "", remote: "", savedAt: null } });
       if (op === "task/deliveryPlan") return hostAnswer({ plan: { ...plan, ready: false, rows: [] } });
       if (op === "task/saveDeliverySettings") return { ok: false, error: "branch-template-invalid: 分支规范必须包含 {taskId}" };
