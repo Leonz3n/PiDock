@@ -42,7 +42,7 @@ const PROVIDER_CONFIG = {
   maxTokens: 8192,
   authRef: "PIDOCK_PROVIDER_EXAMPLE",
   generation: 1,
-};
+  protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "gpt-5-mini", name: "gpt-5-mini", contextWindow: 128000, maxTokens: 8192, reasoning: false }]};
 
 const GIT_ENV = {
   ...process.env,

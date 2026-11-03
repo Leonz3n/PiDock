@@ -23,6 +23,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { buildSdkContextEnv, type SdkContextTaskBinding } from "./sdk-context-env.js";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { validateExplicitTextProvider, type ExplicitTextProvider } from "./explicit-text-provider.js";
 import type { SdkTextEvent, SdkTextResult } from "./sdk-text-kernel.js";
 import type { SdkAgentToolOutcome, SdkAgentToolRequest } from "./sdk-agent-tool-contract.js";
@@ -65,6 +66,12 @@ export interface SdkContextOptions {
   task: SdkContextTaskBinding;
   config: ExplicitTextProvider;
   credential: string;
+  /**
+   * The reasoning level the user selected for the bound model. Validated by
+   * main against the model's declared capability; the SDK clamps anything the
+   * model does not support, so this is never a value the UI invented.
+   */
+  thinkingLevel?: ModelThinkingLevel;
   /** Workspace id for log correlation only. */
   workspaceId?: string;
   /**
@@ -133,7 +140,11 @@ export class SdkContextClient implements SdkTextKernelPort {
       // `toolsEnabled` is the broker marker the worker gates its tool
       // declarations on: absent (no `toolHost`) means the isolated context must
       // declare no tools, so a tool can never exist without a Host executor.
-      const workerData = { task: this.options.task, config: this.options.config, credential: this.options.credential, toolsEnabled: this.options.toolHost !== undefined };
+      const workerData = {
+        task: this.options.task, config: this.options.config, credential: this.options.credential,
+        toolsEnabled: this.options.toolHost !== undefined,
+        ...(this.options.thinkingLevel === undefined ? {} : { thinkingLevel: this.options.thinkingLevel }),
+      };
       const worker = this.options.spawn?.(env, workerData) ?? new Worker(new URL("./sdk-context-worker.js", import.meta.url), { env, workerData });
       this.worker = worker;
       await new Promise<void>((resolve, reject) => {

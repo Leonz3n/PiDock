@@ -490,7 +490,7 @@ it("aborts a pending SDK stream, guards concurrent task prompts and surfaces cal
 });
 
 it("refuses invalid explicit endpoints and missing keys despite ambient Provider credentials", async () => {
-  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }]};
   vi.stubEnv("OPENAI_API_KEY", "SYNTHETIC_AMBIENT_KEY");
   try {
     await expect(createExplicitTextRuntime(base, "")).rejects.toThrow("provider-not-configured");
@@ -505,7 +505,7 @@ it("refuses invalid explicit endpoints and missing keys despite ambient Provider
 });
 
 it("refuses an explicit SDK runtime without the trusted isolation opt-in", async () => {
-  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }]};
   const saved = process.env["PIDOCK_SDK_ISOLATED"];
   delete process.env["PIDOCK_SDK_ISOLATED"];
   try {
@@ -518,7 +518,7 @@ it("refuses an explicit SDK runtime without the trusted isolation opt-in", async
 
 it("rejects a same-name endpoint or credential reference change in a bound SDK session", async () => {
   const dir = task("task-explicit-identity");
-  const base = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const base = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }]};
   const first = await createExplicitTextRuntime(base, "synthetic");
   const original = new PiSdkTextKernel("task-explicit-identity", dir, { model: first.model, modelRuntime: first.runtime, bindingIdentity: first.bindingIdentity });
   const file = (await original.open("main")).file;
@@ -539,7 +539,7 @@ it("rejects a same-name endpoint or credential reference change in a bound SDK s
 it("normalizes explicit Provider errors before the SDK writes JSONL", async () => {
   const dir = task("task-explicit-error");
   const secret = "SYNTHETIC_CREDENTIAL_46_DO_NOT_USE";
-  const config = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const config = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }]};
   const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime(config, secret);
   const provider: Provider = {
     id: selected.provider, name: "Synthetic error", auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: {} }) } },
@@ -583,6 +583,8 @@ it("keeps real OpenAI-compatible SDK text and usage with the guarded runtime", a
     const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime({
       profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
       modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+      protocol: "openai-completions", credentialSource: "env",
+      models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }],
     }, secret);
     const instance = new PiSdkTextKernel("task-explicit-success", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
     const file = (await instance.open("main")).file;
@@ -611,6 +613,8 @@ it("keeps explicit OpenAI-compatible auth on the original origin across redirect
     const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime({
       profileId: "explicit", baseUrl: `http://127.0.0.1:${(primary.address() as { port: number }).port}/v1`,
       modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+      protocol: "openai-completions", credentialSource: "env",
+      models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }],
     }, secret);
     const instance = new PiSdkTextKernel("task-explicit-redirect", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
     const file = (await instance.open("main")).file;
@@ -666,7 +670,12 @@ it("normalizes loopback non-2xx and mid-stream failures before JSONL, projection
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
-    const config = { profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+    const config = {
+      profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture",
+      contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+      protocol: "openai-completions" as const, credentialSource: "env" as const,
+      models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }],
+    };
     const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime(config, secret);
     const instance = new PiSdkTextKernel("task-explicit-error-paths", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
     const file = (await instance.open("main")).file;
@@ -711,7 +720,12 @@ it("keeps a cancelled loopback stream free of the credential and raw error text"
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
-    const config = { profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+    const config = {
+      profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture",
+      contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+      protocol: "openai-completions" as const, credentialSource: "env" as const,
+      models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }],
+    };
     const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime(config, secret);
     const instance = new PiSdkTextKernel("task-explicit-cancel", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
     const file = (await instance.open("main")).file;

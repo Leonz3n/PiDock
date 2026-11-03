@@ -14,6 +14,7 @@
  */
 
 import { parentPort, workerData } from "node:worker_threads";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { assertSdkContextEnv, type SdkContextTaskBinding } from "./sdk-context-env.js";
 import { createExplicitTextRuntime, validateExplicitTextProvider, type ExplicitTextProvider } from "./explicit-text-provider.js";
 import { PiSdkTextKernel, type SdkTextEvent } from "./sdk-text-kernel.js";
@@ -31,6 +32,16 @@ export interface SdkContextInput {
    * cannot honor is a tool surface that outlives its decision point.
    */
   toolsEnabled: boolean;
+  /** Reasoning level selected for the bound model; absent = `off`. */
+  thinkingLevel?: ModelThinkingLevel;
+}
+
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+function thinkingLevel(value: unknown): ModelThinkingLevel | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !(THINKING_LEVELS as readonly string[]).includes(value)) throw new Error("sdk-context-input-invalid");
+  return value as ModelThinkingLevel;
 }
 
 export type SdkContextRequestPayload =
@@ -136,6 +147,7 @@ function input(value: unknown): SdkContextInput {
     // Anything but an explicit `true` disables tools: a missing marker is a
     // context nobody wired a broker to, and must not advertise one.
     toolsEnabled: record["toolsEnabled"] === true,
+    ...(record["thinkingLevel"] === undefined ? {} : { thinkingLevel: thinkingLevel(record["thinkingLevel"]) }),
   };
 }
 
@@ -158,6 +170,7 @@ async function main(): Promise<void> {
     model,
     modelRuntime: runtime,
     bindingIdentity,
+    ...(parsed.thinkingLevel === undefined ? {} : { thinkingLevel: parsed.thinkingLevel }),
     ...(tools ? { callTool: (sessionId, request) => tools.callTool(sessionId, request) } : {}),
   });
   const send = (message: SdkContextMessage) => port.postMessage(message);

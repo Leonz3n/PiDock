@@ -52,7 +52,7 @@ import { codeObservationFields } from "./service-code-observation.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
 import { performProjectOperation, projectFailureMessage } from "./project-ipc.js";
-import type { ProviderWiring } from "./provider-ipc.js";
+import { PROVIDER_REFUSAL_TEXT, ProviderRefusal, type ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
 import { performCreationOperation } from "./project-task-ipc.js";
 import type { ProjectTaskAppend } from "./task-append.js";
@@ -2384,6 +2384,10 @@ export function registerIpc(
       return { ok: true as const, payload: result };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      // A bounded refusal the UI can act on (missing key, unavailable keychain,
+      // unparseable models.json). Everything else stays a generic sentence so no
+      // raw SDK/HTTP/file text can reach a renderer.
+      if (error instanceof ProviderRefusal) return { ok: false as const, error: PROVIDER_REFUSAL_TEXT[error.code] };
       return { ok: false as const, error: "Provider 配置操作失败，请检查本机凭据环境后重试" };
     }
   });

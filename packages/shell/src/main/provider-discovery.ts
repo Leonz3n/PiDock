@@ -36,7 +36,7 @@ export interface DiscoveryConnection {
 
 export type ModelListTransport = (
   request: { baseUrl: string; protocol: string; path: string },
-) => Promise<{ ok: true; ids: unknown[] } | { ok: false; message: string }>;
+) => Promise<{ ok: true; ids: unknown[] } | { ok: false; message: string; unsupported?: boolean }>;
 
 /**
  * One sync attempt. Fail-closed on an unknown endpoint and on a transport
@@ -58,7 +58,7 @@ export async function syncModelCandidates(input: {
       ignored: 0,
     };
   }
-  let response: { ok: true; ids: unknown[] } | { ok: false; message: string };
+  let response: { ok: true; ids: unknown[] } | { ok: false; message: string; unsupported?: boolean };
   try {
     response = await input.transport({ baseUrl: input.connection.baseUrl, protocol: input.connection.protocol, path });
   } catch (error) {
@@ -71,8 +71,10 @@ export async function syncModelCandidates(input: {
     };
   }
   if (!response.ok) {
+    // The transport can distinguish "this endpoint exposes no discovery" from a
+    // real failure; the UI must not call a 404 "连接失败".
     return {
-      status: "failure",
+      status: response.unsupported === true ? "unsupported" : "failure",
       candidates: [],
       fingerprint,
       message: `模型发现失败：${response.message}；已保留表单与已配置模型`,

@@ -146,6 +146,7 @@ import { SdkContextClient } from "./sdk-context-client.js";
 import { SdkAgentToolBroker, derivedPrimaryCheckouts, type SdkAgentServiceHost, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
 import type { ServiceTemplateEditPort } from "../rpc/service-template-request.js";
 import type { ExplicitTextProvider } from "./explicit-text-provider.js";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
   PI_USAGE_GROUP_LABELS,
   UNVERSIONED_PROVIDER_CONFIG,
@@ -853,7 +854,7 @@ export class TaskWorkspaceHost {
    * and it is only kept when that open succeeded: a failed install must leave the
    * task unconfigured (fail closed), never pointing at a dead context.
    */
-  configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
+  configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; thinkingLevel?: ModelThinkingLevel; workspaceId?: string } | null): Promise<{ generation: number }> {
     if (this.sdkShutdown) return Promise.reject(Error("sdk-host-closing"));
     if (this.executionClosing) return Promise.reject(Error("task-host-closing"));
     if (this.sdkDisposalFailed) return Promise.reject(Error("sdk-host-shutdown-unconfirmed"));
@@ -867,7 +868,7 @@ export class TaskWorkspaceHost {
     try { await shutdownDeadline(context.dispose(), 35_000, "sdk-host-shutdown-timeout"); }
     catch { this.sdkDisposalFailed = true; throw Error("sdk-host-shutdown-unconfirmed"); }
   }
-  private async installSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
+  private async installSdkProvider(provider: { config: ExplicitTextProvider; credential: string; thinkingLevel?: ModelThinkingLevel; workspaceId?: string } | null): Promise<{ generation: number }> {
     const previous = this.sdkContext;
     this.sdkContext = null;
     this.sdkRouter = null;
@@ -879,6 +880,7 @@ export class TaskWorkspaceHost {
         task: { taskId: this.taskId, taskDir: this.taskDir },
         config: provider.config,
         credential: provider.credential,
+        ...(provider.thinkingLevel === undefined ? {} : { thinkingLevel: provider.thinkingLevel }),
         // [PiDock 02m] #5: the Agent's tool calls are executed and decided by
         // this Host, never inside the isolated model context.
         toolHost: this.sdkTools,

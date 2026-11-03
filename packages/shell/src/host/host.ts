@@ -55,6 +55,7 @@ import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import type { PromptContextEntry } from "./sdk-prompt-context.js";
 import { validateExplicitTextProvider } from "./explicit-text-provider.js";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { ServiceRunObservation } from "../main/execution-ledger.js";
 import { SharedPathCoordinator } from "./path-coordination.js";
@@ -1028,6 +1029,7 @@ async function performTaskOp(
         const result = await host.configureSdkProvider({
           config: validateExplicitTextProvider(binding["config"]),
           credential: binding["credential"] as string,
+          ...(binding["thinkingLevel"] === undefined ? {} : { thinkingLevel: binding["thinkingLevel"] as ModelThinkingLevel }),
           workspaceId: boundWorkspaceId(),
         });
         // The transport holds the previous kernel/context; re-create it so the

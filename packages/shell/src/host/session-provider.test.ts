@@ -24,7 +24,7 @@ const ANTHROPIC: ProviderProfileRow = {
 const LOCAL: ProviderProfileRow = {
   id: "provider-local",
   name: "本地推理",
-  protocol: "openai-chat-completions",
+  protocol: "openai-completions",
   baseUrl: "http://127.0.0.1:11434/v1",
   enabled: true,
   models: [{ id: "本地 Qwen", contextWindow: 32, thinking: { mode: "custom", levels: ["low", "medium"], default: "low" } }],

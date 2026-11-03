@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { SdkContextClient } from "../dist/host/sdk-context-client.js";
 const root = mkdtempSync(join(tmpdir(), "pidock-sdk-shutdown-"));
-const config = { profileId: "explicit", baseUrl: "https://models.example.test/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+const config = { profileId: "explicit", baseUrl: "https://models.example.test/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+  protocol: /** @type {const} */ ("openai-completions"), credentialSource: /** @type {const} */ ("env"), models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }] };
 const workers = [], results = [];
 const script = `
   const {parentPort,workerData} = require("node:worker_threads");

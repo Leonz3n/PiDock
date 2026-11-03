@@ -58,7 +58,7 @@ async function bindExecution(lifecycle, start) {
       };
     } }, { taskId: lifecycle.taskId, epoch: lifecycle.epoch });
     const active = lifecycle.activeSdk;
-    const sdk = new SdkContextClient({ task: { taskId: lifecycle.taskId, taskDir: lifecycle.taskDir }, config: { profileId: "fixture", baseUrl: active?.baseUrl ?? "https://models.example.test/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 }, credential: "synthetic-shutdown-credential",
+    const sdk = new SdkContextClient({ task: { taskId: lifecycle.taskId, taskDir: lifecycle.taskDir }, config: { profileId: "fixture", baseUrl: active?.baseUrl ?? "https://models.example.test/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, protocol: "openai-completions", credentialSource: "env", models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }] }, credential: "synthetic-shutdown-credential",
       ...(active ? { shutdownTimeoutMs: active.mode === "missing-termination-receipt" ? 200 : 5000, spawn: (env, workerData) => {
         sdkWorker = new Worker(new URL("../dist/host/sdk-context-worker.js", import.meta.url), { env, workerData });
         sdkWorker.once("exit", () => send({ event: "sdk-native-exit" }));

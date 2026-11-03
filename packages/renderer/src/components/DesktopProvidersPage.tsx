@@ -175,7 +175,7 @@ export function DesktopProvidersPage({
               </div>
               <h3 className="mt-3 text-[15px] font-semibold text-ink">{hostText(profile.name, "Host 未上报配置名称")}</h3>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                <Badge>openai-chat-completions</Badge>
+                <Badge>openai-completions</Badge>
                 <Badge>第 {profile.generation} 代</Badge>
               </div>
               <p className="mt-2.5 font-mono text-[11px] break-words text-muted" style={{ overflowWrap: "anywhere" }}>

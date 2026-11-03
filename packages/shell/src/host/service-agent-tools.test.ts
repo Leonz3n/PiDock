@@ -229,7 +229,7 @@ async function harness(options: HarnessOptions = {}): Promise<Harness> {
   // factory above replaces only the worker hop and captured that same broker.
   await host.configureSdkProvider({
     config: { profileId: "p-11111111-2222-3333-4444-555555555555", baseUrl: "https://models.example.test/v1", modelId: "gpt-5-mini",
-      contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1 },
+      contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "gpt-5-mini", name: "gpt-5-mini", contextWindow: 128000, maxTokens: 8192, reasoning: false }]},
     credential: "synthetic-key",
   });
   if (!broker) throw Error("broker-not-captured");

@@ -86,12 +86,15 @@ describe("trusted Electron view modes", () => {
       await loadTrustedViews(views);
       const store = new ProviderProfileStore(root);
       const env: Record<string, string | undefined> = { PIDOCK_PROVIDER_START_TEST: "synthetic-start-gate-only" };
-      const profile = store.save({ name: "Synthetic", baseUrl: "https://models.example.test/v1", modelId: "text-model",
-        contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_START_TEST" });
+      const profile = store.save({
+        name: "Synthetic", protocol: "openai-completions", baseUrl: "https://models.example.test/v1", modelId: "text-model",
+        credentials: { kind: "env", ref: "PIDOCK_PROVIDER_START_TEST" },
+        models: [{ id: "text-model", name: "text-model", contextWindow: 128000, maxTokens: 8192, reasoning: false }],
+      });
       let active = false;
       const install = vi.fn(async () => { if (active) throw Error("sdk-turn-journal-uncommitted"); });
       const providers = new ProviderWiring(store, install, env);
-      await providers.select("task-a", profile.id, views.shellView.webContents.id);
+      await providers.select("task-a", profile.id, undefined, undefined, views.shellView.webContents.id);
       const routeTaskOp = vi.fn(async ({ op }: { op: string }) => ({ payload: op === "task/sendMessage"
         ? { turn: { turnId: "11111111-2222-3333-4444-555555555555", state: "accepted" } }
         : op === "task/sdkStatus" ? { turn: { state: "accepted" } }
@@ -106,7 +109,7 @@ describe("trusted Electron view modes", () => {
       expect(await sdk!(shell, { action: "subscribe", ...identity })).toMatchObject({ ok: true });
       expect(await sdk!(shell, { action: "start", ...identity, requestId: "original", text: "original" })).toMatchObject({ ok: true });
       active = true;
-      delete env[profile.authRef];
+      delete env["PIDOCK_PROVIDER_START_TEST"];
       const startsBefore = routeTaskOp.mock.calls.filter(([request]) => request.op === "task/sendMessage").length;
       const refused = await sdk!(shell, { action: "start", ...identity, requestId: "must-not-start", text: "next" });
       const startsAfter = routeTaskOp.mock.calls.filter(([request]) => request.op === "task/sendMessage").length;
@@ -116,8 +119,8 @@ describe("trusted Electron view modes", () => {
       expect({ refused: refused.ok === false, newStartDispatches: startsAfter - startsBefore,
         selectionRetained: store.selection("task-a")?.profileId === profile.id })
         .toEqual({ refused: true, newStartDispatches: 0, selectionRetained: true });
-      env[profile.authRef] = "synthetic-restored-start-test-only";
-      expect(await providers.select("task-a", profile.id, views.shellView.webContents.id))
+      env["PIDOCK_PROVIDER_START_TEST"] = "synthetic-restored-start-test-only";
+      expect(await providers.select("task-a", profile.id, undefined, undefined, views.shellView.webContents.id))
         .toMatchObject({ state: "credential-missing" });
       active = false;
       expect(await sdk!(shell, { action: "start", ...identity, requestId: "after-terminal", text: "next" }))
@@ -125,7 +128,7 @@ describe("trusted Electron view modes", () => {
       expect(routeTaskOp.mock.calls.filter(([request]) => request.op === "task/sendMessage")).toHaveLength(startsBefore);
       expect(await sdk!(shell, { action: "status", ...identity, requestId: "original" })).toMatchObject({ ok: true });
       expect(await sdk!(shell, { action: "projection", ...identity })).toMatchObject({ ok: true });
-      expect(await providers.select("task-a", profile.id, views.shellView.webContents.id)).toMatchObject({ state: "configured" });
+      expect(await providers.select("task-a", profile.id, undefined, undefined, views.shellView.webContents.id)).toMatchObject({ state: "configured" });
       expect(await sdk!(shell, { action: "start", ...identity, requestId: "after-idle-select", text: "next" }))
         .toMatchObject({ ok: true });
       expect(routeTaskOp.mock.calls.filter(([request]) => request.op === "task/sendMessage")).toHaveLength(startsBefore + 1);

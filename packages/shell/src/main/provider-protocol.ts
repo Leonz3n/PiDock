@@ -14,7 +14,7 @@
  * recorded frames (real provider connectivity stays a recorded residual).
  */
 
-export const PROVIDER_PROTOCOLS = ["anthropic-messages", "openai-responses", "openai-chat-completions"] as const;
+export const PROVIDER_PROTOCOLS = ["anthropic-messages", "openai-responses", "openai-completions"] as const;
 
 export type ProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number];
 
@@ -28,6 +28,11 @@ export interface ProtocolDescriptor {
   systemField: string | null;
   /** Body field carrying tool declarations. */
   toolField: string;
+  /**
+   * Path appended to the profile's base URL for one model request (the base URL
+   * already carries the API version prefix, e.g. `https://api.openai.com/v1`).
+   */
+  requestPath: string;
   /** Frame name carrying a text delta in the stream. */
   textFrame: string;
   /** Frame name carrying incremental tool-call arguments in the stream. */
@@ -37,11 +42,19 @@ export interface ProtocolDescriptor {
   /** Path to the usage object, relative to the frame/payload root. */
   usagePath: readonly string[];
   /**
-   * Standard model-discovery endpoint this protocol exposes, or `null` when
-   * it declares none (the UI must then not offer 同步模型列表). A connection
-   * can additionally report `unsupported` at runtime.
+   * Model-discovery endpoint this protocol exposes, appended to the profile's
+   * configured base URL (which already carries the API version prefix, e.g.
+   * `https://api.deepseek.com/v1`), or `null` when the protocol declares none
+   * (the UI must then not offer 模型发现). A connection can additionally
+   * report `unsupported` at runtime when its own endpoint answers 404/405.
    */
   modelListPath: string | null;
+  /**
+   * How the credential rides the discovery request for this protocol. Both
+   * are real, verified request conventions — a protocol is never assumed to
+   * accept the other one's header.
+   */
+  modelListAuth: "bearer" | "x-api-key";
   /**
    * Where a selected reasoning tier lands in this protocol's body. `null`
    * means the protocol has no reasoning parameter: a tier is then never
@@ -95,11 +108,13 @@ const DESCRIPTORS: Record<ProviderProtocol, ProtocolDescriptor> = {
     messageField: "messages",
     systemField: "system",
     toolField: "tools",
+    requestPath: "/messages",
     textFrame: "content_block_delta",
     toolFrame: "input_json_delta",
     doneFrame: "message_stop",
     usagePath: ["usage"],
-    modelListPath: "/v1/models",
+    modelListPath: "/models",
+    modelListAuth: "x-api-key",
     // Anthropic takes an explicit thinking block; `off` sends no block at all
     // (the API has no "disabled" budget value).
     reasoning: {
@@ -117,11 +132,13 @@ const DESCRIPTORS: Record<ProviderProtocol, ProtocolDescriptor> = {
     messageField: "input",
     systemField: "instructions",
     toolField: "tools",
+    requestPath: "/responses",
     textFrame: "response.output_text.delta",
     toolFrame: "response.function_call_arguments.delta",
     doneFrame: "response.completed",
     usagePath: ["response", "usage"],
-    modelListPath: "/v1/models",
+    modelListPath: "/models",
+    modelListAuth: "bearer",
     // Responses API nests the effort under `reasoning`; `minimal` is its own
     // value, `off` is expressed by omitting the block.
     reasoning: {
@@ -132,18 +149,20 @@ const DESCRIPTORS: Record<ProviderProtocol, ProtocolDescriptor> = {
       efforts: { minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: "high", max: "high" },
     },
   },
-  "openai-chat-completions": {
-    id: "openai-chat-completions",
+  "openai-completions": {
+    id: "openai-completions",
     label: "OpenAI Chat Completions",
     messageField: "messages",
     // Chat Completions carries the system prompt as the first message.
     systemField: null,
     toolField: "tools",
+    requestPath: "/chat/completions",
     textFrame: "choices.0.delta.content",
     toolFrame: "choices.0.delta.tool_calls",
     doneFrame: "choices.0.finish_reason",
     usagePath: ["usage"],
-    modelListPath: "/v1/models",
+    modelListPath: "/models",
+    modelListAuth: "bearer",
     // Chat Completions takes the flat `reasoning_effort` string.
     reasoning: {
       kind: "effort",
@@ -278,7 +297,7 @@ export function buildProtocolRequest(protocol: string, input: ProtocolRequestInp
   }
   if (input.tools !== undefined && input.tools.length > 0) {
     body[descriptor.toolField] =
-      protocol === "openai-chat-completions"
+      protocol === "openai-completions"
         ? input.tools.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.inputSchema } }))
         : protocol === "openai-responses"
           ? input.tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.inputSchema }))

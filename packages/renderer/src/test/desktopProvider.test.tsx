@@ -73,7 +73,7 @@ it("renders the saved profile as a card with the real reference state", async ()
   const card = await screen.findByText("Local gateway");
   expect(card).toBeInTheDocument();
   expect(screen.getByText("当前任务已选用")).toBeInTheDocument();
-  expect(screen.getByText("openai-chat-completions")).toBeInTheDocument();
+  expect(screen.getByText("openai-completions")).toBeInTheDocument();
   expect(screen.getByText("gpt-5-mini")).toBeInTheDocument();
   expect(screen.getByText(/PIDOCK_PROVIDER_EXAMPLE/)).toBeInTheDocument();
   // The page never claims a global switch: selection belongs to this task.

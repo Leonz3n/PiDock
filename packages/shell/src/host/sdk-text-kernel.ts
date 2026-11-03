@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   createExtensionRuntime,
@@ -93,6 +93,12 @@ export class PiSdkTextKernel {
       model: Model<Api>;
       modelRuntime: ModelRuntime;
       bindingIdentity?: string;
+      /**
+       * The level the user selected for this model, already validated against
+       * the model's declared capability by main. Defaults to `off`; the SDK
+       * clamps anything the model does not support.
+       */
+      thinkingLevel?: ModelThinkingLevel;
       /**
        * The Host-side tool execution seam ([PiDock 02m] #5). Supplied only by
        * the isolated context worker (which forwards the call to the Host) or by
@@ -198,7 +204,7 @@ export class PiSdkTextKernel {
       noTools: "all",
       tools: expectedTools,
       ...(callTool ? { customTools: buildSdkAgentToolDefinitions(sessionId, callTool) } : {}),
-      thinkingLevel: "off",
+      thinkingLevel: this.selection.thinkingLevel ?? "off",
     });
     const offered = [...session.getActiveToolNames()].sort();
     const registered = session.getAllTools().map((tool) => tool.name).sort();

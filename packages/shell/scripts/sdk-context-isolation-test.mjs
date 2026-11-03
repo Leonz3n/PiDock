@@ -53,6 +53,9 @@ const config = {
   maxTokens: 8192,
   authRef: "PIDOCK_PROVIDER_ISSUE46",
   generation: 1,
+  protocol: /** @type {const} */ ("openai-completions"),
+  credentialSource: /** @type {const} */ ("env"),
+  models: [{ id: "issue46-model", name: "issue46-model", contextWindow: 128000, maxTokens: 8192, reasoning: false }],
 };
 const cleanups = [];
 const fail = (message) => { throw new Error(message); };
