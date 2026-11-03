@@ -35,12 +35,12 @@ describe("Desktop task creation", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /我确认普通目录/ }));
     fireEvent.click(screen.getByRole("button", { name: "固定基线并预览路径" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "prepare", input: { projectId: project.id, name: "Work",
-      repositories: [{ sourceId: project.repositories[0]!.id, remote: "origin", remoteBranch: "main" }], directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true, override: false } }));
+      repositories: [{ sourceId: project.repositories[0]!.id, remote: "origin", remoteBranch: "main" }], directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true, override: false, workspaceMode: "worktree" } }));
     expect(await screen.findByText(intent.taskDir)).toBeInTheDocument();
     expect(screen.getByText(/a{40}/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认创建 / 恢复" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "commit", id: intent.id }));
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project.id));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project.id, intent.taskId));
     expect(createTask.mock.calls.filter(([request]) => request.op === "commit")).toHaveLength(1);
   });
   it("names a blank field in the path preview instead of printing an empty path segment", async () => {
@@ -119,7 +119,7 @@ describe("Desktop task creation", () => {
     expect(await screen.findByText(intent.taskDir)).toBeInTheDocument();
     const expected = { op: "prepare", input: { projectId: project.id, name: "Retained draft",
       repositories: [{ sourceId: project.repositories[0]!.id, remote: "origin", remoteBranch: "main" }],
-      directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true, override: true } };
+      directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true, override: true, workspaceMode: "worktree" } };
     expect(createTask.mock.calls.filter(([request]) => request.op === "prepare").map(([request]) => request)).toEqual([expected, expected]);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(onCreated).not.toHaveBeenCalled();
@@ -211,10 +211,10 @@ describe("Desktop task creation", () => {
     expect(submit).toBeEnabled();
     fireEvent.click(submit);
     await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "prepare", input: { projectId: noRepoProject.id, name: "Docs work",
-      repositories: [], directoryIds: [noRepoProject.directories[0]!.id], sharedWriteConfirmed: true, override: false } }));
+      repositories: [], directoryIds: [noRepoProject.directories[0]!.id], sharedWriteConfirmed: true, override: false, workspaceMode: "plain-dirs" } }));
     expect(await screen.findByText(pureIntent.taskDir)).toBeInTheDocument();
     expect(screen.getByText(/dir-e2eb192a/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认创建 / 恢复" }));
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(noRepoProject.id));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(noRepoProject.id, pureIntent.taskId));
   });
 });

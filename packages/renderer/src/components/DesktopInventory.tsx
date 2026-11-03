@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Icon } from "./Icon";
 import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { DesktopConversation } from "./DesktopConversation";
+import { DesktopTaskFacts } from "./DesktopTaskFacts";
 import { desktopMode, importDesktopTaskRoot } from "../data/desktopInventory";
 import { abandonCreation, commitCreation, currentCreation, CREATION_RETENTION_NOTICE, type CreationIntentView } from "../data/desktopCreation";
 import { DESKTOP_LABELS, DesktopRootErrors, DesktopShell, type DesktopLocalPageKey, type DesktopView } from "./DesktopShell";
@@ -534,7 +535,15 @@ export function DesktopInventory() {
     availableTasks={shellTasks}
     onOpenTask={(taskId) => navigate({ view: "task", taskId })}
   />);
-  if (activeTask) return shell(<DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />);
+  // [Pencil T02] #137 / S08: a task opens on its workspace facts (one row per
+  // source, mode badge, per-source verification) with the existing conversation
+  // entry directly below — no invented sessions, no fixture roots.
+  if (activeTask) return shell(<div className="flex h-full min-h-0 flex-col">
+    <DesktopTaskFacts taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? {}} />
+    <div className="min-h-0 flex-1">
+      <DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
+    </div>
+  </div>);
   if (localPage === "capabilities") return shell(<DesktopCapabilitiesPage />);
   if (localPage === "settings") return shell(<DesktopSettingsPage />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
@@ -602,9 +611,11 @@ export function DesktopInventory() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">工作空间与任务</h1>
         <div className="flex gap-2"><button className={button} type="button" disabled={busy || pendingCreate !== null} onClick={openCreateWorkspace}><Icon name="plus" />新建工作空间</button>
           <button className={button} type="button" disabled={busy} onClick={() => void importRoot()}><Icon name="folder" />找回任务根</button></div></div>
-      <DesktopTaskCreation project={project} bridge={window.pidock ?? emptyBridge} onCreated={async (projectId) => {
+      <DesktopTaskCreation project={project} bridge={window.pidock ?? emptyBridge} onCreated={async (projectId, taskId) => {
         if (!(await load())) throw new Error("任务已创建，但本机清单无法核验；请重试读取");
+        // Land on the NEW task's facts view (S08), not the project overview.
         setSelection({ kind: "project", id: projectId });
+        await openTask(taskId);
       }} />
       {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
       {pendingCreate && <button className={`${button} mb-3`} type="button" onClick={() => void load()}>重新核验</button>}

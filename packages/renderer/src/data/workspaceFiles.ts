@@ -14,7 +14,16 @@
 
 import type { Task, WorkspaceFile } from "./types";
 
-export type WorkspaceRootKindView = "worktree" | "shared-dir";
+export type WorkspaceRootKindView = "worktree" | "shared-dir" | "existing-git";
+
+/** How the task treats its Git sources ([Pencil T02] #137). */
+export type WorkspaceModeView = "worktree" | "existing-git" | "plain-dirs";
+
+/** Per-source reopen verification result ([Pencil T02] #137). */
+export type WorkspaceVerificationView = {
+  state: "ready" | "missing" | "mismatch" | "repair-required";
+  reason: string;
+};
 
 /**
  * One fact the Host really read, or its named reason for not reading one. A
@@ -40,6 +49,12 @@ export type WorkspaceRootView = {
   /** OBSERVED: whether the worktree really has uncommitted (including untracked) changes. */
   dirty?: WorkspaceObservationView<boolean>;
   baseCommit?: string;
+  /** Existing-git only: the root is the original checkout, not a copy. */
+  sharedOriginal?: boolean;
+  /** Existing-git only, OBSERVED: the checkout's real HEAD. */
+  headCommit?: WorkspaceObservationView<string>;
+  /** Every source: the per-source reopen verification result. */
+  verification?: WorkspaceVerificationView;
 };
 
 export type WorkspaceAttributionView = {
@@ -284,7 +299,7 @@ function attribution(value: unknown): WorkspaceAttributionView | undefined {
   if (
     taskId === undefined ||
     rootId === undefined ||
-    (rootKind !== "worktree" && rootKind !== "shared-dir") ||
+    (rootKind !== "worktree" && rootKind !== "shared-dir" && rootKind !== "existing-git") ||
     rootLabel === undefined ||
     piWorkDir === undefined
   ) {
@@ -355,11 +370,13 @@ export function hostText(value: string | undefined, absent: string): string {
 }
 
 /** Parse the `task/fileRoots` payload; `undefined` when the shape is unusable. */
-export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRootView[]; taskDir: string } | undefined {
+export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRootView[]; taskDir: string; workspaceMode?: WorkspaceModeView } | undefined {
   const source = record(payload);
   const taskDir = source ? str(source["taskDir"]) : undefined;
   const roots = source ? source["roots"] : undefined;
   if (taskDir === undefined || !Array.isArray(roots)) return undefined;
+  const mode = source ? str(source["workspaceMode"]) : undefined;
+  if (mode !== undefined && mode !== "worktree" && mode !== "existing-git" && mode !== "plain-dirs") return undefined;
   const parsed: WorkspaceRootView[] = [];
   for (const entry of roots) {
     const item = record(entry);
@@ -368,7 +385,7 @@ export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRoot
     const kind = str(item["kind"]);
     const label = str(item["label"]);
     const path = str(item["path"]);
-    if (id === undefined || (kind !== "worktree" && kind !== "shared-dir") || label === undefined || path === undefined) {
+    if (id === undefined || (kind !== "worktree" && kind !== "shared-dir" && kind !== "existing-git") || label === undefined || path === undefined) {
       return undefined;
     }
     const repo = str(item["repo"] ?? item["repoDir"]);
@@ -379,6 +396,9 @@ export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRoot
     const workingBranch = observation(item["workingBranch"], str);
     const dirty = observation(item["dirty"], bool);
     const baseCommit = str(item["baseCommit"]);
+    const sharedOriginal = bool(item["sharedOriginal"]);
+    const headCommit = observation(item["headCommit"], str);
+    const verification = verificationView(item["verification"]);
     parsed.push({
       id,
       kind,
@@ -392,9 +412,24 @@ export function workspaceRootsFromHost(payload: unknown): { roots: WorkspaceRoot
       ...(workingBranch !== undefined ? { workingBranch } : {}),
       ...(dirty !== undefined ? { dirty } : {}),
       ...(baseCommit !== undefined ? { baseCommit } : {}),
+      ...(sharedOriginal !== undefined ? { sharedOriginal } : {}),
+      ...(headCommit !== undefined ? { headCommit } : {}),
+      ...(verification !== undefined ? { verification } : {}),
     });
   }
-  return { roots: parsed, taskDir };
+  return { roots: parsed, taskDir, ...(mode !== undefined ? { workspaceMode: mode } : {}) };
+}
+
+/** Parse one per-source verification row; an unknown state is dropped, never defaulted. */
+function verificationView(value: unknown): WorkspaceVerificationView | undefined {
+  const item = record(value);
+  if (!item) return undefined;
+  const state = str(item["state"]);
+  const reason = str(item["reason"]);
+  if ((state !== "ready" && state !== "missing" && state !== "mismatch" && state !== "repair-required") || reason === undefined) {
+    return undefined;
+  }
+  return { state, reason };
 }
 
 export function workspaceTreeFromHost(payload: unknown): WorkspaceTreeView | undefined {
@@ -551,7 +586,7 @@ export function externalEditorLaunchFromHost(payload: unknown): ExternalEditorLa
   if (
     !attributionView ||
     rootId === undefined ||
-    (rootKind !== "worktree" && rootKind !== "shared-dir") ||
+    (rootKind !== "worktree" && rootKind !== "shared-dir" && rootKind !== "existing-git") ||
     program === undefined ||
     args === undefined ||
     cwd === undefined ||

@@ -615,7 +615,7 @@ export function FilesPanel({
               className={`rounded border px-2 py-1 text-[11px] ${selected?.rootId === root.id ? "border-accent text-ink" : "border-line text-muted"}`}
             >
               {hostText(root.label, "Host 未上报根名称")}
-              <span className="ml-1 text-[10px] text-muted">{root.kind === "shared-dir" ? "普通目录" : hostText(root.repo ?? root.id, "Host 未上报根身份")}</span>
+              <span className="ml-1 text-[10px] text-muted">{root.kind === "shared-dir" ? "普通目录" : root.kind === "existing-git" ? "已有 Git 目录 · 共享原检出" : hostText(root.repo ?? root.id, "Host 未上报根身份")}</span>
             </button>
           ))}
         </div>
