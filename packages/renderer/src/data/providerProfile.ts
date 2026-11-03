@@ -282,14 +282,35 @@ export function parseSaved(value: unknown): { profile: ProviderView; written: bo
   return { profile: parseView(value.profile), written: value.written, conflict: conflict as NativeState | null };
 }
 
-export type DiscoveryResult = { status: "ok" | "empty" | "failed" | "unsupported" | "refused"; candidates: string[]; message: string };
+/**
+ * [#138] main 的 `DiscoveryOutcome.status`（`shell/src/main/provider-discovery.ts`）
+ * 是唯一权威，只有这四个键；渲染层按原样解析，不再自带一套近义词（曾经渲染层认
+ * `ok/failed`，于是 main 的每一次发现都变成「模型列表返回异常」）。`success` 必须
+ * 带候选，其余三个必须不带——两端共用同一组不变量，`discoveryContract.parity.test.ts`
+ * 用 main 的真实回包逐状态核对。
+ */
+export const DISCOVERY_STATUSES = ["success", "empty", "failure", "unsupported"] as const;
+export type DiscoveryStatus = (typeof DISCOVERY_STATUSES)[number];
+export type DiscoveryResult = { status: DiscoveryStatus; candidates: string[]; message: string };
+/**
+ * `refused` does not exist in main: it is this page's own state for an attempt
+ * that never got a main answer (bridge refused, or a payload that is not one of
+ * the four statuses). It is named, never folded into `failure`, so a contract
+ * break cannot be mistaken for the endpoint's own error.
+ */
+export type DiscoveryRead = DiscoveryResult | { status: "refused"; candidates: []; message: string };
+
 export function parseDiscovery(value: unknown): DiscoveryResult {
-  if (!object(value) || !["ok", "empty", "failed", "unsupported", "refused"].includes(String(value.status)) ||
-      !Array.isArray(value.candidates) || value.candidates.some((id) => typeof id !== "string" || id.length === 0 || id.length > 200) ||
-      value.candidates.length > 500 || typeof value.message !== "string" || value.message.length > 500) {
+  const status = object(value) ? value.status : undefined;
+  const candidates = object(value) ? value.candidates : undefined;
+  if (!object(value) || !DISCOVERY_STATUSES.includes(status as DiscoveryStatus) ||
+      !Array.isArray(candidates) || candidates.some((id) => typeof id !== "string" || id.length === 0 || id.length > 200) ||
+      candidates.length > 500 || typeof value.message !== "string" || value.message.length > 500 ||
+      // main's own invariant: only `success` carries candidates.
+      (status === "success") !== ((candidates as unknown[]).length > 0)) {
     throw new Error("模型列表返回异常");
   }
-  return { status: value.status as DiscoveryResult["status"], candidates: value.candidates as string[], message: value.message };
+  return { status: status as DiscoveryStatus, candidates: candidates as string[], message: value.message };
 }
 
 export type ProbeResult = { ok: boolean; code: string; message: string; status: number | null; latencyMs: number | null };
@@ -382,8 +403,8 @@ export function draftIssues(draft: ProviderDraft, existing: ProviderView[] = [])
  * typed id (or a row the endpoint stopped listing) stays saveable. Returns []
  * when there is no successful discovery to compare against.
  */
-export function discoveryMisses(draft: ProviderDraft, discovery: DiscoveryResult | null): string[] {
-  if (discovery === null || discovery.status !== "ok") return [];
+export function discoveryMisses(draft: ProviderDraft, discovery: DiscoveryRead | null): string[] {
+  if (discovery === null || discovery.status !== "success") return [];
   return draft.models
     .map((row) => row.id.trim())
     .filter((id) => id.length > 0 && !discovery.candidates.includes(id));

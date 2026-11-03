@@ -21,7 +21,7 @@ import {
   parseProbe,
   parseSaved,
   providerCall,
-  type DiscoveryResult,
+  type DiscoveryRead,
   type FieldIssue,
   type ProviderDraft,
   type ProviderStatus,
@@ -87,7 +87,7 @@ export function DesktopProvidersPanel({
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [showKey, setShowKey] = useState(false);
-  const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
+  const [discovery, setDiscovery] = useState<DiscoveryRead | null>(null);
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [conflict, setConflict] = useState<{ state: string; draft: ProviderDraft } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -193,6 +193,8 @@ export function DesktopProvidersPanel({
       }));
       setDiscovery(payload);
     } catch (caught) {
+      // Not a main status: the attempt never produced one (bridge refusal or a
+      // payload outside the four-status contract). Kept distinct from `failure`.
       setDiscovery({ status: "refused", candidates: [], message: caught instanceof Error ? caught.message : "模型列表获取失败" });
     } finally { setBusy(false); }
   };
@@ -407,7 +409,7 @@ function ProviderForm({
 }: {
   draft: ProviderDraft; presetKey: string | null; issues: FieldIssue[]; notice: string;
   conflict: { state: string; draft: ProviderDraft } | null; busy: boolean; showKey: boolean;
-  discovery: DiscoveryResult | null; probe: ProbeResult | null;
+  discovery: DiscoveryRead | null; probe: ProbeResult | null;
   formRef: MutableRefObject<HTMLFormElement | null>; issueFor: (name: string) => string | undefined;
   onPatch: (changes: Partial<ProviderDraft>) => void; onPatchRow: (index: number, changes: Partial<Row>) => void;
   onApplyPreset: (preset: Preset) => void; onToggleReasoning: (index: number, reasoning: boolean) => void;
@@ -513,7 +515,7 @@ function ProviderForm({
       {error("models")}
       {discovery ? <div className="mt-2 border border-line bg-soft px-3 py-2 text-[11px]">
         <p className="text-muted">{discovery.message}</p>
-        {discovery.status === "ok" ? <ul aria-label="可选模型" className="mt-2 flex flex-wrap gap-1">
+        {discovery.status === "success" ? <ul aria-label="可选模型" className="mt-2 flex flex-wrap gap-1">
           {discovery.candidates.map((id) => <li key={id}><button type="button" onClick={() => onAddCandidate(id)}
             className="border border-line bg-paper px-1.5 py-0.5 text-[11px] hover:bg-bg">＋ {id}</button></li>)}
         </ul> : null}

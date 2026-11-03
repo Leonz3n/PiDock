@@ -910,7 +910,7 @@ describe("Desktop SDK conversation", () => {
     expect(b.calls.filter((call) => call.action === "start")).toHaveLength(0);
   });
 
-  it("cold reopens exact SDK history and resyncs a sequence gap without appending a reply", async () => {
+  it("cold reopens exact SDK history, anchors a late-arriving stream and resyncs a real sequence gap", async () => {
     const f = setup();
     f.setMessages([{ role: "user", text: "earlier", usage: null }, { role: "assistant", text: "stored", usage: null }]);
     const view = mount(f);
@@ -919,13 +919,141 @@ describe("Desktop SDK conversation", () => {
     await send("now");
     await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument());
     const requestId = String(f.calls.find((call) => call.action === "start")?.requestId);
-    act(() => f.emit({ kind: "sdk-turn-event", event: { taskId: "task-a", sessionId: "main", turnId: turn("task-a", requestId).turnId, sequence: 2, type: "delta", text: "unverified" } }));
-    await waitFor(() => expect(f.calls.some((call) => call.action === "projection")).toBe(true));
-    expect(screen.queryByText("unverified")).not.toBeInTheDocument();
+    const emit = (sequence: number, text: string) => f.emit({ kind: "sdk-turn-event", event: { taskId: "task-a", sessionId: "main", turnId: turn("task-a", requestId).turnId, sequence, type: "delta", text } });
+    const projections = f.calls.filter((call) => call.action === "projection").length;
+    // [#138] The first observed delta of a turn anchors the baseline: sequence 2
+    // (this page subscribed after 1) is staged instead of being called a gap.
+    act(() => emit(2, "unverified-"));
+    expect(await screen.findByText("unverified-")).toBeInTheDocument();
+    expect(f.calls.filter((call) => call.action === "projection")).toHaveLength(projections);
+    // A real hole after the baseline (2 then 4, 3 missing) is still resynced and
+    // nothing is appended to the history.
+    act(() => emit(4, "unverified-rest"));
+    await waitFor(() => expect(f.calls.filter((call) => call.action === "projection")).toHaveLength(projections + 1));
+    expect(screen.queryByText(/unverified/)).not.toBeInTheDocument();
     view.unmount();
     mount(f);
     expect(await screen.findByText("stored")).toBeInTheDocument();
-    expect(screen.queryByText("unverified")).not.toBeInTheDocument();
+    expect(screen.queryByText(/unverified/)).not.toBeInTheDocument();
+  });
+
+  it("streams a second turn whose deltas beat the ACK and whose sequence begins at 3", async () => {
+    // [#138] Real Electron: the Host buffers a turn's deltas and replays them as
+    // soon as it hands out the ACK, so the renderer can receive delta 1..n
+    // BEFORE `start` has written `turnId`. The old gate dropped those and then
+    // treated the first accepted delta (sequence > 1) as a gap, clearing the
+    // staging on every delta — no turn after the first one ever streamed.
+    const f = setup();
+    mount(f);
+    await screen.findByText(/尚未开始/);
+    await send("first turn");
+    await screen.findByRole("button", { name: "停止" });
+    const firstId = String(f.calls.find((call) => call.action === "start")?.requestId);
+    f.setStatus(turn("task-a", firstId, "done"));
+    act(() => f.emit({ kind: "sdk-turn-status", turn: turn("task-a", firstId, "done") }));
+    await screen.findByText(/已从 SDK 历史核验/);
+
+    // Delay this turn's ACK so deltas can arrive first.
+    const sdkTurn = f.bridge.sdkTurn!;
+    let release: (() => void) | undefined;
+    let pending: Record<string, unknown> | undefined;
+    f.bridge.sdkTurn = (request) => {
+      if (request.action !== "start") return sdkTurn(request);
+      pending = request as unknown as Record<string, unknown>;
+      return new Promise((resolve) => { release = () => { void sdkTurn(request).then(resolve); }; });
+    };
+    await send("second turn");
+    await waitFor(() => expect(release).toBeDefined());
+    const turnId = turn("task-a", String(pending!.requestId)).turnId;
+    const emit = (sequence: number, text: string, id = turnId) =>
+      act(() => f.emit({ kind: "sdk-turn-event", event: { taskId: "task-a", sessionId: "main", turnId: id, sequence, type: "delta", text } }));
+    // Three deltas, starting at 3 (1 and 2 never reached this page), all before
+    // the ACK: buffered, not dropped and not rendered as verified text.
+    emit(3, "STREAM-B-3 ");
+    emit(4, "STREAM-B-4 ");
+    emit(5, "STREAM-B-5");
+    expect(screen.queryByText(/STREAM-B/)).not.toBeInTheDocument();
+    await act(async () => release!());
+    await screen.findByRole("button", { name: "停止" });
+    // The ACK replays them in sequence order: visible staged text at last.
+    expect(await screen.findByText("STREAM-B-3 STREAM-B-4 STREAM-B-5")).toBeInTheDocument();
+    // Duplicate/out-of-order replays do not wipe the staging.
+    emit(5, "STREAM-B-5");
+    emit(4, "STREAM-B-4 ");
+    expect(screen.getByText("STREAM-B-3 STREAM-B-4 STREAM-B-5")).toBeInTheDocument();
+    // The live stream continues from the anchored sequence.
+    emit(6, " STREAM-B-6");
+    expect(await screen.findByText("STREAM-B-3 STREAM-B-4 STREAM-B-5 STREAM-B-6")).toBeInTheDocument();
+    // A delta belonging to another turn is still ignored.
+    emit(7, " wrong", "00000000-0000-0000-0000-000000000000");
+    expect(screen.queryByText(/wrong/)).not.toBeInTheDocument();
+  });
+
+  it("owns its scrolling so the composer stays reachable at 900 and 560 window heights", async () => {
+    // [#138] 720×560 实测：`desktop-conversation` 高 ~239px、内容 ~512px，历史区的
+    // `flex-1` 被顶部 `shrink-0` 区域挤到 0，composer 被面板的 `overflow-hidden` 裁掉，
+    // 而祖先（包括 desktop-shell-content）没有可滚动区能到达它。
+    // jsdom 没有布局，所以这里锁的是结构契约：面板自己拥有滚动区（历史连同任务头在
+    // `overflow-y-auto` 内），composer 是该列最后一个 `shrink-0` 行；像素验证仍属于
+    // 真实 Electron 采集（见 docs/evidence/pencil-v1-t03 README §5.4 的残留项）。
+    const f = setup();
+    f.setMessages(Array.from({ length: 40 }, (_, index) => ({ role: index % 2 === 0 ? "user" : "assistant", text: `message ${index}`, usage: null })));
+    const view = mount(f);
+    await screen.findByText("message 0");
+    const panel = screen.getByTestId("desktop-conversation");
+    // A definite-height column: it never grows with its content, and nothing in
+    // it may be silently clipped instead of scrolled.
+    expect(panel.className).toContain("h-full");
+    expect(panel.className).toContain("min-h-0");
+    expect(panel.className).toContain("flex-col");
+    expect(panel.className).not.toContain("overflow-y-hidden");
+    expect(panel.className).not.toMatch(/\bh-\[/);
+
+    const scroller = screen.getByTestId("desktop-conversation-scroll");
+    expect(scroller.className).toContain("overflow-y-auto");
+    expect(scroller.className).toContain("flex-1");
+    expect(scroller.className).toContain("min-h-0");
+    expect(scroller.className).not.toContain("overflow-hidden");
+    expect(panel.contains(scroller)).toBe(true);
+
+    // The header, the session strip and the whole history scroll together, so
+    // a short window loses none of them.
+    expect(scroller.contains(screen.getByTestId("desktop-conversation-header"))).toBe(true);
+    expect(scroller.contains(screen.getByTestId("desktop-session-strip"))).toBe(true);
+    const history = screen.getByLabelText("SDK 对话历史");
+    expect(scroller.contains(history)).toBe(true);
+    const messages = [...history.querySelectorAll("article")];
+    expect(messages).toHaveLength(40);
+    for (const message of messages) expect(scroller.contains(message)).toBe(true);
+    // No intermediate element opens a second scroller or a clipping box between
+    // the messages and the panel's own scroll region.
+    for (let node = history.parentElement; node && node !== panel; node = node.parentElement) {
+      expect(node.className).not.toContain("overflow-hidden");
+      // The only scroller in the chain is the panel's own scroll region.
+      if (node !== scroller) expect(node.className).not.toContain("overflow-y-auto");
+    }
+
+    // The composer is pinned: the last `shrink-0` row of the same column that
+    // owns the scroll region, a sibling of it, and not inside it.
+    const form = screen.getByRole("textbox", { name: "消息" }).closest("form")!;
+    expect(scroller.contains(form)).toBe(false);
+    const composerRow = form.parentElement?.parentElement ?? null;
+    expect(composerRow).not.toBeNull();
+    expect(composerRow!.className).toContain("shrink-0");
+    expect(composerRow!.previousElementSibling).toBe(scroller);
+    expect(composerRow!.parentElement).toBe(scroller.parentElement);
+    expect(scroller.parentElement!.className).toContain("flex-col");
+    // Reachability does not depend on the window height: there is no pixel
+    // height in the chain, so 560px only shrinks the scroll region (the
+    // composer keeps its natural height) instead of clipping it.
+    for (const height of [900, 560]) {
+      Object.defineProperty(window, "innerHeight", { value: height, configurable: true });
+      fireEvent(window, new Event("resize"));
+      expect(screen.getByRole("textbox", { name: "消息" })).toBeVisible();
+      expect(composerRow!).toBeVisible();
+      expect(scroller.isConnected).toBe(true);
+    }
+    view.unmount();
   });
 
   it("restores the exact unresolved ID and original text after a renderer restart, scoped to its task", async () => {
