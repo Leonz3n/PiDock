@@ -9,6 +9,8 @@ import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSe
 import { readHostDraft, saveHostDraft } from "../data/draftStore";
 import { executionStateThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell, shellTaskOp } from "../data/shellBridge";
 import { DesktopApprovalCard, type ApprovalRead } from "./DesktopApprovalCard";
+import { DesktopDeliverySheet } from "./DesktopDeliverySheet";
+import { TaskActionMenu, type TaskActionMenuItem } from "./TaskActionMenu";
 import { approvalFailureText, approvalRequest, parseTaskApprovals, type ApprovalDecision, type TaskApproval } from "../data/toolApproval";
 import { executionStateFromHost, runRecordFromExecutionState, runStateOfExecution, type SessionExecutionView } from "../data/executionLedger";
 import { executionLabel, executionStepLabel } from "../pages/executionView";
@@ -166,7 +168,7 @@ function ExecutionCardSection({ children }: { children: ReactNode }) {
  * record shape `TaskPage` renders). The stop entry is NOT duplicated here — the
  * composer's 停止 button stays the single one.
  */
-function ExecutionStateCard({ taskId, sessionId: session, read }: { taskId: string; sessionId: string; read: ExecutionRead }) {
+function ExecutionStateCard({ taskId, sessionId: session, read, approvals }: { taskId: string; sessionId: string; read: ExecutionRead; approvals: readonly TaskApproval[] }) {
   if (read.phase === "reading") {
     return <ExecutionCardSection><p role="status" className="text-[11px] text-muted">正在读取 Host 执行状态…</p></ExecutionCardSection>;
   }
@@ -178,7 +180,15 @@ function ExecutionStateCard({ taskId, sessionId: session, read }: { taskId: stri
     </ExecutionCardSection>;
   }
   const record = runRecordFromExecutionState(taskId, session, read.view);
-  const state = runStateOfExecution(read.view.session) ?? record?.state;
+  const reported = runStateOfExecution(read.view.session) ?? record?.state;
+  // [Pencil T05] ticket 140: a tool call parked on a pending confirmation is still an
+  // `executing` turn in the Host's execution ledger, so the card used to say
+  // 执行中 while the approval card asked for a decision. The REAL pending record
+  // (`task/listApprovals`) wins: 等待确认 until that record is settled, then the
+  // ledger's own state (执行中/…) returns. A foreign session's record never
+  // turns THIS session's card into a waiting state.
+  const pendingApproval = approvals.some((approval) => approval.status === "pending" && !approval.foreign);
+  const state = pendingApproval ? "approval" : reported;
   if (state === undefined) {
     return <ExecutionCardSection>
       <p role="status" data-testid="desktop-execution-unreported" className="break-words text-[11px] text-muted">
@@ -374,7 +384,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const readoutRefresh = useRef<() => void>(() => {});
   const executionReadAttempt = useRef(0);
   const approvalReadAttempt = useRef(0);
-  const [taskMenu, setTaskMenu] = useState(false);
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [archivePrompt, setArchivePrompt] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
@@ -407,15 +417,23 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     if (archivePrompt) archiveCancelRef.current?.focus();
   }, [archivePrompt]);
   useEffect(() => {
-    if (!taskMenu && !archivePrompt) return;
+    if (!archivePrompt) return;
     const dismiss = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (archivePrompt && !archiveBusy) setArchivePrompt(false);
-      else if (!archivePrompt) setTaskMenu(false);
+      if (event.key === "Escape" && !archiveBusy) setArchivePrompt(false);
     };
     window.addEventListener("keydown", dismiss);
     return () => window.removeEventListener("keydown", dismiss);
-  }, [taskMenu, archivePrompt, archiveBusy]);
+  }, [archivePrompt, archiveBusy]);
+  // The delivery sheet is a modal surface of its own; Escape closes it without
+  // reaching the archive prompt (the two are never open together).
+  useEffect(() => {
+    if (!deliveryOpen) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDeliveryOpen(false);
+    };
+    window.addEventListener("keydown", dismiss);
+    return () => window.removeEventListener("keydown", dismiss);
+  }, [deliveryOpen]);
   useEffect(() => {
     if (invalidated) { setConnected(false); setValid(false); return; }
     // [#139] Wait for the session list before connecting: a page that subscribed
@@ -1069,6 +1087,16 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     : readoutRead.phase === "failed" ? `本会话上下文读数读取失败：${readoutRead.error}`
     : readout === null ? "Host 未返回会话读数"
       : `本会话最近一次请求的提示词占用 ${readout.context.used === null ? "未报告（未知）" : `${readout.context.used} tokens`} · 绑定模型窗口 ${readout.context.window === null ? "未知" : `${readout.context.window} tokens`} · 来源 ${readout.context.source}；SDK 未报告时保持未知，不按 0 显示`;
+  // [Pencil T13] ticket 148: both task-level surfaces the real Electron page could not
+  // reach are entries of the SAME `任务操作` menu the web task page uses. A task
+  // with zero repositories has no Git delivery to review, so that entry is
+  // omitted (the sheet would have no row); an unreported count is not zero.
+  const taskMenuItems: TaskActionMenuItem[] = [
+    ...(repoCount === null || repoCount > 0
+      ? [{ id: "delivery", label: "审阅与交付", detail: "逐仓库审阅变更；提交与推送需显式触发", onSelect: () => { setArchiveError(""); setDeliveryOpen(true); } }]
+      : []),
+    { id: "archive-task", label: "归档当前任务", detail: "停止执行并保留代码、会话与草稿", onSelect: () => { setArchiveError(""); setArchivePrompt(true); } },
+  ];
 
   return <TooltipProvider><main data-testid="desktop-conversation" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
     {/* [#138] 720×560 裁切：面板只有 ~239px 高（breadcrumb + 汇总条后），旧结构把
@@ -1155,12 +1183,11 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           {typeof bridge?.appendTaskRepos === "function" ? (
             <Button type="button" onClick={() => setSourcesOpen(true)} aria-label="追加仓库或目录" title="从项目登记中选择仓库或普通目录并追加到本任务"><Icon name="plus" /><span className="below-narrow:hidden">追加仓库或目录</span></Button>
           ) : null}
-          <div className="relative">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="任务操作" aria-expanded={taskMenu} onClick={() => setTaskMenu((open) => !open)}><Icon name="more" /></Button>
-            {taskMenu && <div className="absolute top-full right-0 z-20 min-w-[150px] rounded-[7px] border border-line bg-paper p-1 shadow-sm">
-              <Button type="button" variant="ghost" className="w-full justify-start" onClick={() => { setTaskMenu(false); setArchiveError(""); setArchivePrompt(true); }}><Icon name="archive" />归档当前任务</Button>
-            </div>}
-          </div>
+          {/* The shared `任务操作` menu (#27) is the ONE task-actions surface: the
+              desktop page previously carried a hand-written archive-only popover,
+              so `data-testid=task-action-menu` and the 审阅与交付 entry (ticket 148)
+              never existed here even though the trigger announced a menu. */}
+          <TaskActionMenu items={taskMenuItems} />
           <Button type="button" disabled={!connected} onClick={() => void refresh()} title={connected ? "核验 SDK 会话与任务身份" : "等待 SDK 会话连接后核验"}><Icon name="refresh" /><span className="below-narrow:hidden">核验</span></Button>
           <Button type="button" size="icon" onClick={onBack} aria-label="返回任务列表" title="返回任务列表"><Icon name="arrow" className="-rotate-90" /></Button>
         </div>
@@ -1186,7 +1213,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         {sessions.length === 0 && sessionList.phase === "read" && <span data-testid="desktop-sessions-empty" className="pb-2 text-[11px] text-[#9a6032]">本任务暂无会话；新建一个会话后才能对话</span>}
       </div>
     </div>
-    <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} />
+    <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} approvals={approvalRead.phase === "read" ? approvalRead.approvals : []} />
     {/* [Pencil T05] ticket 140 S01 的审批位：只呈现 Host 已记录的确认，批准/拒绝走
         `task/approve|reject`。没有待确认时也说明「记录为空」，不把空读数当成功。 */}
     <DesktopApprovalCard read={approvalRead} onResolve={resolveToolApproval} />
@@ -1358,6 +1385,21 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           <Button type="button" variant="outline" disabled={archiveBusy || blocked} onClick={() => void archive("archive-and-cleanup")}>{archiveBusy ? "归档中…" : "归档并清理…"}</Button>
         <Button type="button" disabled={archiveBusy || blocked} onClick={() => void archive()}>{archiveBusy ? "归档中…" : "确认归档"}</Button>
         </div>
+      </div>
+    </div>}
+    {/* [Pencil T13] ticket 148 S07 `CbsS5` / S10 `d0dQe`: the delivery sheet the
+        `审阅与交付` menu entry opens. It is the same `DesktopDeliverySheet` the
+        web task page's modal mounts, so the real Host ops are the only source. */}
+    {deliveryOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" role="presentation">
+      <div role="dialog" aria-modal="true" aria-label="审阅与交付" data-testid="desktop-delivery-dialog" className="max-h-[90vh] w-[min(880px,100%)] overflow-y-auto rounded-[10px] border border-line bg-paper p-4 shadow-lg">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h2 className="text-[14px] font-semibold">审阅与交付</h2>
+            <p className="mt-0.5 text-[11px] leading-5 text-muted">逐仓库审阅变更；提交与推送需显式触发，任务完成不推送。补丁是交付辅助，不是交付证明。</p>
+          </div>
+          <Button type="button" size="sm" variant="ghost" aria-label="关闭审阅与交付" onClick={() => setDeliveryOpen(false)}>×</Button>
+        </div>
+        <div className="mt-3 min-w-0"><DesktopDeliverySheet taskId={taskId} /></div>
       </div>
     </div>}
     {sourcesOpen && bridge?.appendTaskRepos ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">

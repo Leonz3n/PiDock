@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { DesktopTaskCreation } from "../components/DesktopTaskCreation";
+import { currentCreation, prepareCreation } from "../data/desktopCreation";
 import type { DesktopProject } from "../data/desktopProjects";
 import type { PidockBridge } from "../data/shellBridge";
 
@@ -299,4 +300,37 @@ it("creates a dedicated scheduled task: the form sends kind=scheduled with its d
     schedule: expect.objectContaining({ ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "p-11111111-2222-3333-4444-555555555555", model: "model-x", permission: "default", enabled: true }),
   }) }));
   delete window.pidock;
+});
+
+it("reads the Host's real scheduled plain-dirs intent: an empty branch is truthful, not a broken answer", async () => {
+  // [Pencil T17] #152 real Electron evidence: a scheduled task on 仅普通目录 was
+  // prepared by main (intent written, `branch: ""` because that mode creates no
+  // branch), but the renderer's reader required `branch` non-empty and threw
+  // `本机任务创建意图返回异常`, so the preview and `current()` stayed empty. This is
+  // the exact payload shape the real IPC answers with, including the schedule.
+  const dirProject: DesktopProject = { id: "c0ffee00-0000-4000-8000-000000000002", name: "Docs", description: "",
+    repositories: [], directories: [{ id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "Documents", path: "/local/documents" }],
+    environment: [], branchTemplate: "" };
+  const scheduledIntent = {
+    id: "b71e61e1-d112-487e-a7e8-113943b91073", taskId: "task-sched", name: "每日巡检", projectId: dirProject.id,
+    root: "/local/tasks", taskDir: "/local/tasks/task-sched", branch: "", state: "pending", sharedWriteConfirmed: true,
+    workspaceMode: "plain-dirs", kind: "scheduled",
+    repos: [], directories: [{ id: dirProject.directories[0]!.id, name: "Documents", path: "/local/documents", linkName: "dir-e2eb192a" }],
+    schedule: { name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险",
+      providerId: "p-11111111-2222-3333-4444-555555555555", model: "model-x", permission: "default" as const, enabled: true },
+  };
+  const createTask = vi.fn(async (request: { op: string }) => request.op === "current"
+    ? { ok: true, payload: scheduledIntent }
+    : { ok: true, payload: { canceled: false, intent: scheduledIntent } });
+  const testBridge = bridge(createTask);
+  await expect(currentCreation(testBridge)).resolves.toMatchObject({ kind: "scheduled", branch: "", workspaceMode: "plain-dirs", schedule: scheduledIntent.schedule });
+  await expect(prepareCreation(testBridge, { projectId: dirProject.id, name: "每日巡检",
+    repositories: [], directoryIds: [dirProject.directories[0]!.id], sharedWriteConfirmed: true, override: false,
+    workspaceMode: "plain-dirs", kind: "scheduled", schedule: scheduledIntent.schedule }))
+    .resolves.toMatchObject({ kind: "scheduled", taskId: "task-sched", taskDir: scheduledIntent.taskDir, branch: "", schedule: scheduledIntent.schedule });
+  // The page resumes the pending creation from `current()` and renders the path
+  // preview instead of the generic refusal.
+  render(<DesktopTaskCreation project={dirProject} bridge={testBridge} onCreated={async () => {}} />);
+  expect(await screen.findByText(scheduledIntent.taskDir)).toBeInTheDocument();
+  expect(screen.queryByText("本机任务创建意图返回异常")).toBeNull();
 });

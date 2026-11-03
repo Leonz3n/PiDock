@@ -779,6 +779,47 @@ describe("Desktop SDK conversation", () => {
     expect(screen.getByRole("button", { name: "核验" })).not.toBeDisabled();
   });
 
+  it("opens the shared task-action menu and reaches both the delivery sheet and the archive dialog", async () => {
+    // [Pencil T13] #148 real Electron evidence: the desktop page had its own
+    // archive-only popover, so the trigger said `aria-expanded=true` while
+    // `[data-testid=task-action-menu]` and `审阅与交付` never existed. This drives
+    // the shared menu end to end: delivery first, then archive.
+    const f = setup();
+    f.setTaskOp((_taskId, op) => {
+      if (op === "task/deliverySettings") {
+        return { ok: true, payload: { settings: { branchTemplate: "ticket/{taskId}-{slug}", remote: "origin", savedAt: null } } };
+      }
+      if (op === "task/deliveryPlan") {
+        return { ok: true, payload: { plan: { branchTemplate: "ticket/{taskId}-{slug}", remote: "origin", slug: "git", ready: true, problem: null,
+          rows: [{ repoId: "repo-1", name: "frontend", repoPath: "/tasks/task-a/frontend", branch: "ticket/task-a-git", remote: "origin",
+            pushTarget: "origin ticket/task-a-git", remoteUrl: "git@github.com:acme/frontend.git", problem: null }] } } };
+      }
+      return undefined;
+    });
+    mount(f);
+    await screen.findByText(/尚未开始/);
+
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
+    const menu = await screen.findByTestId("task-action-menu");
+    expect(menu).toHaveAttribute("role", "menu");
+    expect(screen.getByRole("button", { name: "任务操作" })).toHaveAttribute("aria-expanded", "true");
+    expect(within(menu).getByRole("menuitem", { name: "审阅与交付" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "归档当前任务" })).toBeInTheDocument();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "审阅与交付" }));
+    const delivery = await screen.findByRole("dialog", { name: "审阅与交付" });
+    // The sheet itself read the real Host plan through `task/deliveryPlan`.
+    expect(await within(delivery).findByTestId("delivery-row-repo-1-branch")).toHaveTextContent("ticket/task-a-git");
+    expect(screen.queryByTestId("task-action-menu")).toBeNull();
+    fireEvent.click(within(delivery).getByRole("button", { name: "关闭审阅与交付" }));
+    expect(screen.queryByRole("dialog", { name: "审阅与交付" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
+    const again = await screen.findByTestId("task-action-menu");
+    fireEvent.click(within(again).getByRole("menuitem", { name: "归档当前任务" }));
+    expect(screen.getByRole("dialog", { name: "归档当前任务" })).toBeInTheDocument();
+  });
+
   it("archives only after confirmation and a verified Host result", async () => {
     const f = setup();
     const taskOp = vi.fn(async (taskId: string, op: string) => ({ ok: true, payload: { lifecycle: { taskId, archived: op === "task/archive", archivedAt: "2026-09-29T09:00:00Z" } } }));
@@ -788,7 +829,7 @@ describe("Desktop SDK conversation", () => {
     render(<DesktopConversation taskId="task-a" name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={onArchived} />);
     await screen.findByText(/尚未开始/);
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
-    fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "归档当前任务" }));
     // [#117 第 4 项] The dialog names the real scope: the Agent turn stops,
     // running services and terminals do not.
     expect(screen.getByRole("dialog", { name: "归档当前任务" }))
@@ -817,7 +858,7 @@ describe("Desktop SDK conversation", () => {
     render(<DesktopConversation taskId="task-a" name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={onArchived} />);
     await screen.findByText(/尚未开始/);
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
-    fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "归档当前任务" }));
     const dialog = screen.getByRole("dialog", { name: "归档当前任务" });
     expect(dialog).toHaveTextContent("仅归档保留副本：保留每个仓库的工作副本，不删除任何文件");
     expect(dialog).toHaveTextContent("未知交付状态不当作已交付");
@@ -836,7 +877,7 @@ describe("Desktop SDK conversation", () => {
     await send("active");
     await screen.findByRole("button", { name: "停止" });
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
-    fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "归档当前任务" }));
     expect(screen.getByRole("button", { name: "确认归档" })).toBeDisabled();
     expect(screen.getByText(/会话尚未连接、正在执行或请求状态未核验/)).toBeInTheDocument();
     // The status reads (会话列表/会话读数/执行状态) still issue nothing else:
@@ -853,7 +894,7 @@ describe("Desktop SDK conversation", () => {
     mount(f);
     await screen.findByText(/尚未开始/);
     fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
-    fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "归档当前任务" }));
     fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("task-locked");
     expect(screen.getByRole("button", { name: "查看归档状态" })).toBeInTheDocument();

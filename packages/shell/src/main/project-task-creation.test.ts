@@ -745,6 +745,26 @@ describe("dedicated scheduled task creation (#152)", { timeout: GIT_CASE_TIMEOUT
     expect(env.getCalls()).toBe(0);
   });
 
+  it("produces a scheduled plain-directory intent through the real IPC (empty branch, definition attached)", async () => {
+    // [Pencil T17] #152 real Electron reproduction: the S02 scheduled form uses
+    // 仅普通目录, where the creation mode names NO branch. The IPC answer is
+    // therefore `branch: ""` with the definition attached; the renderer's
+    // reader must accept exactly this shape instead of reporting a broken intent.
+    const env = await setup();
+    const plainRequest = { ...env.request, repositories: [], workspaceMode: "plain-dirs" as const };
+    const prepared = await performCreationOperation(env.service,
+      { op: "prepare", input: { ...plainRequest, kind: "scheduled", schedule } }, async () => null, () => undefined);
+    const answer = prepared as { canceled: boolean; intent: { id: string; kind: string; branch: string; workspaceMode: string; repos: unknown[]; schedule: Record<string, unknown> } };
+    expect(answer.canceled).toBe(false);
+    expect(answer.intent).toMatchObject({
+      kind: "scheduled", branch: "", workspaceMode: "plain-dirs", repos: [],
+      schedule: expect.objectContaining({ name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true }),
+    });
+    // The same real IPC read answers the same intent (what `current()` shows).
+    const current = (await performCreationOperation(env.service, { op: "current" }, async () => null, () => undefined)) as typeof answer.intent;
+    expect(current).toMatchObject({ id: answer.intent.id, kind: "scheduled", branch: "", schedule: answer.intent.schedule });
+  });
+
   it("accepts kind+schedule at the IPC boundary and refuses a mismatched or invalid shape", async () => {
     const env = await setup();
     await expect(performCreationOperation(env.service, { op: "prepare", input: { ...env.request, schedule } }, async () => null, () => undefined))
