@@ -7,7 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
 import { readHostDraft, saveHostDraft } from "../data/draftStore";
-import { executionStateThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell, shellTaskOp } from "../data/shellBridge";
+import { executionStateThroughShell, fileStatThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell, shellTaskOp } from "../data/shellBridge";
 import { DesktopApprovalCard, type ApprovalRead } from "./DesktopApprovalCard";
 import { DesktopDeliverySheet } from "./DesktopDeliverySheet";
 import { TaskActionMenu, type TaskActionMenuItem } from "./TaskActionMenu";
@@ -28,7 +28,7 @@ import { DesktopToolDock, DESKTOP_TOOL_ICONS, DESKTOP_TOOL_LABELS, DESKTOP_TOOLS
 import { DesktopTaskSources } from "./DesktopTaskSources";
 import { BrandMark, LocalUserAvatar } from "./ui";
 import { hostText } from "../data/workspaceFiles";
-import { REFERENCE_KIND_TEXT, referenceIssues, referenceRootFacts, referenceSendRefusal, rootReferenceIssue, type ReferenceIssue } from "../data/referenceGuard";
+import { REFERENCE_KIND_TEXT, referenceFileFact, referenceFileIssue, referenceIssues, referenceRootFacts, referenceRootId, referenceSendRefusal, rootReferenceIssue, type ReferenceIssue } from "../data/referenceGuard";
 import { splitPromptContext } from "../data/historyReferences";
 import { useDraftStore } from "../stores/drafts";
 
@@ -60,6 +60,8 @@ type ReadoutRead = { phase: "reading" } | { phase: "read"; readout: SessionReado
 type SessionListRead = { phase: "reading" } | { phase: "read"; list: SessionList } | { phase: "failed"; error: string };
 type Receipt = { schema: 1; taskId: string; sessionId: string; requestId: string; text: string };
 const receiptKey = (taskId: string, sessionId: string) => `pidock-sdk-pending-v1:${encodeURIComponent(taskId)}:${encodeURIComponent(sessionId)}`;
+/** [Pencil T19] #145 one keystroke burst becomes one Host draft write. */
+const DRAFT_SAVE_DEBOUNCE_MS = 200;
 function readReceipt(taskId: string, sessionId: string): { receipt: Receipt | null; error: string | null } {
   try {
     const raw = localStorage.getItem(receiptKey(taskId, sessionId));
@@ -274,12 +276,24 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const draftLoaded = useRef(false);
   const draftRevision = useRef(0);
   /**
-   * [#117 第 7 项 / 业主定 A] The draft lives in the Host now, so every keystroke
-   * would be an IPC round trip. Writes are serialized behind one slot: the
-   * newest payload wins, an in-flight save finishes first, and nothing is
-   * dropped silently — the last one always reaches the Host.
+   * [#117 第 7 项 / 业主定 A] The draft lives in the Host now. Writes are
+   * debounced and serialized behind one slot: the newest payload wins, an
+   * in-flight save finishes first, and nothing is dropped silently — the last
+   * one always reaches the Host.
+   *
+   * [Pencil T19] #145 B1: a save is NOT gated on the SDK connection. The Host
+   * task process can store a draft before `subscribe` settles; gating on
+   * `valid && connected` dropped exactly the text typed while the page was
+   * connecting (the evidence's "readDraft returns null" case). A refusal is
+   * named and the payload stays pending, so the next connect/keystroke retries.
    */
-  const draftSave = useRef<{ running: boolean; pending?: { sessionId: string; text: string; references: Reference[] } }>({ running: false });
+  type DraftPayload = { sessionId: string; text: string; references: Reference[]; revision: number };
+  const draftSave = useRef<{
+    timer?: ReturnType<typeof setTimeout>;
+    pending?: DraftPayload;
+  }>({});
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   const [receiptError, setReceiptError] = useState(recovered.current.error);
   const [attempt, setAttempt] = useState<Attempt | null>(recovered.current.receipt ? { ...recovered.current.receipt, phase: "unknown" } : null);
   const attemptRef = useRef<Attempt | null>(recovered.current.receipt ? { ...recovered.current.receipt, phase: "unknown" } : null);
@@ -304,26 +318,50 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
    * switching sessions while a save is in flight must not write the old text into
    * the new session (or the new text into the old one).
    */
+  const writeDraft = useCallback((payload: DraftPayload) => {
+    void (async () => {
+      // An emptied composer is stored as an EMPTY draft, not as "no draft":
+      // the composer tells "cleared" apart from "never saved" (a pending
+      // receipt's text fills the box only when no draft record exists), so
+      // clearing here would revive the text of an already-acknowledged send.
+      const failure = await saveHostDraft(taskId, { text: payload.text, references: payload.references }, payload.sessionId);
+      if (payload.sessionId === sessionIdRef.current) setDraftError(failure);
+      if (failure !== null && payload.sessionId === sessionIdRef.current &&
+          payload.revision === draftRevision.current && draftSave.current.pending === undefined) {
+        // Keep the newest unsaved text: a refused write is named and retried
+        // by the next keystroke/connect instead of silently disappearing.
+        draftSave.current.pending = payload;
+      }
+    })();
+  }, [taskId]);
+  /**
+   * Hand the newest pending text to the Host's per-key chain immediately. The
+   * chain lives in `draftStore`, so an unmount/remount cannot read the older
+   * record: the read awaits every write enqueued before it.
+   */
+  const runDraftSaves = useCallback(() => {
+    const state = draftSave.current;
+    const payload = state.pending;
+    if (payload === undefined) return;
+    state.pending = undefined;
+    writeDraft(payload);
+  }, [writeDraft]);
+  /** Write the newest draft immediately (send acknowledged, switch, unmount). */
+  const flushDraftSave = useCallback((next?: { text: string; references: Reference[] }) => {
+    const state = draftSave.current;
+    if (next !== undefined) state.pending = { sessionId, ...next, revision: draftRevision.current };
+    if (state.timer !== undefined) { clearTimeout(state.timer); state.timer = undefined; }
+    runDraftSaves();
+  }, [runDraftSaves, sessionId]);
   const queueDraftSave = useCallback((next: { text: string; references: Reference[] }) => {
     const state = draftSave.current;
-    state.pending = { sessionId, ...next };
-    if (state.running) return;
-    state.running = true;
-    void (async () => {
-      try {
-        while (state.pending !== undefined) {
-          const payload = state.pending;
-          state.pending = undefined;
-          // An emptied composer is stored as an EMPTY draft, not as "no draft":
-          // the composer tells "cleared" apart from "never saved" (a pending
-          // receipt's text fills the box only when no draft record exists), so
-          // clearing here would revive the text of an already-acknowledged send.
-          const failure = await saveHostDraft(taskId, { text: payload.text, references: payload.references }, payload.sessionId);
-          if (payload.sessionId === sessionId) setDraftError(failure);
-        }
-      } finally { state.running = false; }
-    })();
-  }, [sessionId, taskId]);
+    state.pending = { sessionId, ...next, revision: draftRevision.current };
+    if (state.timer !== undefined) clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      state.timer = undefined;
+      runDraftSaves();
+    }, DRAFT_SAVE_DEBOUNCE_MS);
+  }, [runDraftSaves, sessionId]);
   const request = useCallback(async (action: string, fields: Record<string, unknown> = {}) => {
     if (!bridge?.sdkTurn) throw new Error("桌面壳 SDK 接口不可用");
     const result = await bridge.sdkTurn({ action, taskId, sessionId, ...fields });
@@ -510,6 +548,11 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           if (saved.draft && draftRevision.current === 0) {
             setDraft(saved.draft.text);
             setReferences(saved.draft.references);
+          } else if (draftRevision.current > 0) {
+            // Text typed while the page was still connecting is local-only:
+            // write it now that the session is live, instead of leaving the
+            // Host record null (the T10 evidence defect).
+            flushDraftSave();
           }
         }
         if (!bridge?.onSdkTurnEvent) throw new Error("SDK 事件接口不可用");
@@ -526,7 +569,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     };
     void connect();
     return () => { if (generationRef.current === epoch) generationRef.current++; window.clearInterval(poll); off?.(); if (subscribed) void request("unsubscribe").catch(() => {}); };
-  }, [bridge, connectionKey, invalidated, queueDraftSave, reconcile, request, sessionId, sessionList, taskId, verify]);
+  }, [bridge, connectionKey, flushDraftSave, invalidated, queueDraftSave, reconcile, request, sessionId, sessionList, taskId, verify]);
   const refresh = async () => {
     const epoch = generation.current;
     try { await verify(); if (epoch !== generation.current) return; await reconcile(epoch, attemptRef.current?.requestId); if (epoch === generation.current) setValid(true); }
@@ -542,15 +585,46 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const named = new Set(issues.map((issue) => issue.id));
     const pending = list.filter((reference) => !named.has(reference.id) && reference.kind !== "attachment" && reference.kind !== "skill");
     if (pending.length === 0) return issues;
-    const failed = (message: string): ReferenceIssue[] => [...issues, ...pending.map((reference) => ({ id: reference.id, label: reference.label, message }))];
+    const failed = (message: string, references: readonly Reference[] = pending): ReferenceIssue[] =>
+      [...issues, ...references.map((reference) => ({ id: reference.id, label: reference.label, message }))];
     let read;
     try { read = await shellTaskOp(taskId, "task/fileRoots"); }
     catch (error) { return failed(`来源重检失败：${error instanceof Error ? error.message : String(error)}；请重试或重新选择引用`); }
     if (!read.ok) return failed(`来源重检失败：${read.error}；请重试或重新选择引用`);
     const facts = referenceRootFacts(read.payload);
     if (facts.error !== null) return failed(facts.error);
+    // [Pencil T19] #145 B2: the root alone is not the reference. After the root
+    // identity matches, ask the Host whether the file itself is STILL at that
+    // recorded source path (`task/fileStat`), so a file moved on disk is refused
+    // by name even though its chip and root still look valid.
+    const needsStat: Reference[] = [];
     for (const reference of pending) {
       const message = rootReferenceIssue(reference, facts.roots);
+      if (message !== null) issues.push({ id: reference.id, label: reference.label, message });
+      else needsStat.push(reference);
+    }
+    for (const reference of needsStat) {
+      const rootId = referenceRootId(reference, facts.roots);
+      if (rootId === null || reference.relativePath === undefined) {
+        issues.push({ id: reference.id, label: reference.label, message: "来源已失效（无法定位引用的来源路径），请重新选择来源" });
+        continue;
+      }
+      let stat;
+      try { stat = await fileStatThroughShell({ taskId, rootId, relative: reference.relativePath }); }
+      catch (error) {
+        issues.push({ id: reference.id, label: reference.label, message: `来源重检失败：${error instanceof Error ? error.message : String(error)}；请重试或重新选择引用` });
+        continue;
+      }
+      if (!stat.ok) {
+        issues.push({ id: reference.id, label: reference.label, message: `来源重检失败：${stat.error}；请重试或重新选择引用` });
+        continue;
+      }
+      const file = referenceFileFact(stat.payload);
+      if (file.fact === null) {
+        issues.push({ id: reference.id, label: reference.label, message: file.error ?? "来源重检失败：Host 未上报文件状态；请重试或重新选择引用" });
+        continue;
+      }
+      const message = referenceFileIssue(reference, file.fact);
       if (message !== null) issues.push({ id: reference.id, label: reference.label, message });
     }
     return issues;
@@ -559,6 +633,10 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     if (busy.current || !connected || !valid || receiptError || (!reuse && (attemptRef.current?.phase === "unknown" || attemptRef.current?.phase === "accepted" || snapshot?.pending))) return;
     const text = reuse ? attemptRef.current?.text : draft;
     if (!text?.trim()) return;
+    // A send writes the draft NOW (before any slow verification/refusal path):
+    // a debounce timer must not leave the send-time text unsaved or let the
+    // empty post-ACK clear race an older queued write.
+    if (!reuse) flushDraftSave({ text, references });
     // [Pencil T10] #145 引用先重检再发送：芯片上的来源身份与 Host 真实读到的任务
     // 根目录对比，失效／跨任务／越界的来源按名字提示修正。草稿与引用都留在本会话，
     // 发送被拒绝时不丢输入也不静默改用源仓库或另一个任务里的同名文件。按原 ID 重试
@@ -636,7 +714,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       if (turn.state === "accepted" && !reuse) {
         if (draftRevision.current === submittedRevision) {
           setDraft("");
-          queueDraftSave({ text: "", references: [] });
+          // Clearing is immediate and exact-key: the sent text must not linger
+          // in a debounce timer while the acknowledged turn settles.
+          flushDraftSave({ text: "", references: [] });
         }
         // Only the chips that were part of this turn leave the composer; a
         // reference added while the request was in flight stays.
@@ -676,7 +756,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       const next = [...current, reference];
       // A reference is part of the draft the Host stores: attaching one without
       // typing anything must still survive a restart.
-      if (valid && connected && !invalidated) queueDraftSave({ text: draft, references: next });
+      queueDraftSave({ text: draft, references: next });
       return next;
     });
   };
@@ -684,7 +764,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     setReferenceProblems((problems) => problems.filter((entry) => entry.id !== id));
     setReferenceReport(null);
     const next = current.filter((entry) => entry.id !== id);
-    if (valid && connected && !invalidated) queueDraftSave({ text: draft, references: next });
+    queueDraftSave({ text: draft, references: next });
     return next;
   });
   // [PiDock 16] (#16 盒 1): every picked file passes the mirrored pre-send rule
@@ -877,6 +957,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   useEffect(() => {
     messageInput.current?.focus();
   }, [sessionId]);
+  // Leaving the page flushes the newest draft; a timer must not die with the
+  // component and take the last keystrokes with it.
+  useEffect(() => () => { flushDraftSave(); }, [flushDraftSave]);
   const sessions = sessionList.phase === "read" ? sessionList.list.sessions : [];
   const activeSession = sessions.find((session) => session.id === sessionId) ?? null;
   /**
@@ -887,6 +970,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
    * nothing is cross-delivered.
    */
   const resetForSession = useCallback((next: string) => {
+    // The outgoing session's newest text is written NOW, before the switch can
+    // take over the page state; a debounce timer must not follow the new id.
+    flushDraftSave();
     const receipt = readReceipt(taskId, next);
     draftRevision.current = 0;
     draftLoaded.current = false;
@@ -905,7 +991,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     setNotice("正在连接 SDK 会话");
     picked.current = true;
     setActiveSessionId(next);
-  }, [taskId]);
+  }, [flushDraftSave, taskId]);
   const switchToSession = async (target: TaskSession) => {
     if (target.id === sessionId) { setSessionsOpen(false); return; }
     if (target.archived) { setSessionNotice(`「${target.name}」已归档，不能继续对话；请先恢复。`); return; }
@@ -1314,7 +1400,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           </ul>
           <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件。</p>
         </div>}
-        <textarea ref={messageInput} aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
+        <textarea ref={messageInput} aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
             <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="text-muted"><Icon name="plus" /></Button>

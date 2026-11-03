@@ -78,7 +78,32 @@ export function draftFromHost(payload: unknown): { draft: HostDraft | null; skip
   return { draft: { text, references }, skipped, error: skipped > 0 ? `已跳过 ${skipped} 项无法读取的引用；草稿文字已恢复` : null };
 }
 
+/**
+ * [Pencil T19] #145 writes are serialized per TASK+SESSION across component
+ * instances. Leaving a task unmounts its composer, but the last debounced write
+ * may still be in flight when the same task is opened again; a read that ran
+ * first would restore the older record. The chain makes the next read observe
+ * the newest accepted write.
+ */
+const draftWrites = new Map<string, Promise<unknown>>();
+const draftKey = (taskId: string, sessionId: string) => `${taskId}\u0000${sessionId}`;
+
+function enqueueDraftWrite<T>(taskId: string, sessionId: string, work: () => Promise<T>): Promise<T> {
+  const key = draftKey(taskId, sessionId);
+  const previous = draftWrites.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(work);
+  draftWrites.set(key, next);
+  void next.finally(() => { if (draftWrites.get(key) === next) draftWrites.delete(key); }).catch(() => undefined);
+  return next;
+}
+
+async function waitForDraftWrites(taskId: string, sessionId: string): Promise<void> {
+  const pending = draftWrites.get(draftKey(taskId, sessionId));
+  if (pending !== undefined) await pending.catch(() => undefined);
+}
+
 export async function readHostDraft(taskId: string, sessionId: string = SDK_SESSION_ID): Promise<{ draft: HostDraft | null; error: string | null }> {
+  await waitForDraftWrites(taskId, sessionId);
   try {
     const result = await shellTaskOp(taskId, "task/readDraft", { sessionId });
     if (!result.ok) {
@@ -96,15 +121,17 @@ export async function saveHostDraft(taskId: string, draft: HostDraft, sessionId:
   if (bytes(draft.text) > MAX_DRAFT_BYTES) {
     return "草稿未保存：文字超过 16 KiB；原记录保留，仍可编辑，发送遵循 SDK 消息上限";
   }
-  try {
-    const result = await shellTaskOp(taskId, "task/saveDraft", {
-      sessionId,
-      text: draft.text,
-      ...(draft.references.length > 0 ? { references: draft.references } : {}),
-    });
-    if (!result.ok) return `草稿未保存：${result.error}；原记录保留，仍可编辑和发送`;
-    return null;
-  } catch (error) {
-    return `草稿未保存：${error instanceof Error ? error.message : String(error)}；原记录保留，仍可编辑和发送`;
-  }
+  return enqueueDraftWrite(taskId, sessionId, async () => {
+    try {
+      const result = await shellTaskOp(taskId, "task/saveDraft", {
+        sessionId,
+        text: draft.text,
+        ...(draft.references.length > 0 ? { references: draft.references } : {}),
+      });
+      if (!result.ok) return `草稿未保存：${result.error}；原记录保留，仍可编辑和发送`;
+      return null;
+    } catch (error) {
+      return `草稿未保存：${error instanceof Error ? error.message : String(error)}；原记录保留，仍可编辑和发送`;
+    }
+  });
 }
