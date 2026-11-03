@@ -66,7 +66,7 @@ export async function prepareCreation(bridge: PidockBridge, input: CreationInput
  * half-made workspace is still there before creating a replacement.
  */
 /**
- * [Pencil T08] #143: which resources an abandon touches. `keep` is the
+ * [Pencil T08]: which resources an abandon touches. `keep` is the
  * historical behaviour (nothing is deleted); `owned` removes only resources
  * whose ownership and identity main confirms and never the user's source.
  */
@@ -86,7 +86,7 @@ export async function commitCreation(bridge: PidockBridge, id: string): Promise<
   return value.taskId;
 }
 
-/** [Pencil T08] #143: one repository's real provisioning state. */
+/** [Pencil T08]: one repository's real provisioning state. */
 export type RepoPhaseView = "pending" | "created" | "failed";
 export interface CreationRepoStatusView {
   repoDir: string;

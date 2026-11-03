@@ -38,7 +38,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
   const [sharedWriteConfirmed, setSharedWriteConfirmed] = useState(false);
   const [override, setOverride] = useState(false);
   const [busy, setBusy] = useState(false);
-  // [Pencil T08] #143: the real per-repository state, read from Host after an
+  // [Pencil T08]: the real per-repository state, read from Host after an
   // interrupted/partial creation. Never derived from the preview the page holds.
   const [recovery, setRecovery] = useState<CreationStatusView | null>(null);
   const [adoptOrphans, setAdoptOrphans] = useState(false);

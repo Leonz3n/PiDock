@@ -22,7 +22,7 @@ export type WorkspaceModeView = "worktree" | "existing-git" | "plain-dirs";
 /** Per-source reopen verification result ([Pencil T02] #137). */
 export type WorkspaceVerificationView = {
   /**
-   * `branch-mismatch` / `base-mismatch` ([Pencil T08] #143) name a worktree
+   * `branch-mismatch` / `base-mismatch` ([Pencil T08]) name a worktree
    * whose path still exists but whose branch or pinned baseline no longer
    * matches the task binding: repair is explicit, never a silent re-creation.
    */
