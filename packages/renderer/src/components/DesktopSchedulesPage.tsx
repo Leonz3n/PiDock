@@ -8,9 +8,15 @@ import { Button } from "./ui/button";
 type Task = { taskId: string; name: string };
 type Permission = "read" | "default" | "auto";
 type Schedule = { scheduleId: string; taskId: string; name: string; ruleText: string; timezone: string; enabled: boolean; providerId: string; model: string; prompt: string; permission: Permission; repairIssue?: string };
-type Run = { runId: string; scheduleId: string; taskId: string; startedAt: string; result: "completed" | "awaiting-approval" | "skipped" | "failed"; reason?: string };
+/**
+ * [Pencil T17] #152 one run as the Host persisted it. `running` is an accepted
+ * SDK turn that has not settled yet; `actualModel` is the model that really
+ * served it (absent = never started); `sessionId` is the run's own session, the
+ * one 「继续对话」 opens.
+ */
+type Run = { runId: string; scheduleId: string; taskId: string; startedAt: string; result: "running" | "completed" | "awaiting-approval" | "skipped" | "failed"; reason?: string; model?: string; actualModel?: string; sessionId?: string; failureCode?: string };
 type Result = { schedules: Schedule[]; runs: Run[]; errors: string[] };
-const runLabels: Record<Run["result"], string> = { completed: "已完成", "awaiting-approval": "待确认", skipped: "已跳过", failed: "失败" };
+const runLabels: Record<Run["result"], string> = { running: "执行中", completed: "已完成", "awaiting-approval": "待确认", skipped: "已跳过", failed: "失败" };
 const permissionLabels: Record<Permission, string> = { read: "只读", default: "默认权限 · 需要时等待确认", auto: "自动执行 · 仍受任务边界约束" };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string";
@@ -28,7 +34,12 @@ function parseRuns(value: unknown, taskId: string): Run[] {
   if (!object(value) || !Array.isArray(value.runs)) throw new Error("执行记录返回异常");
   return value.runs.map((item: unknown) => {
     if (!object(item) || !["runId", "scheduleId", "taskId", "startedAt"].every((key) => text(item[key])) || item.taskId !== taskId ||
-        !["completed", "awaiting-approval", "skipped", "failed"].includes(String(item.result)) || (item.reason !== undefined && !text(item.reason))) throw new Error("执行记录返回异常");
+        !["running", "completed", "awaiting-approval", "skipped", "failed"].includes(String(item.result)) ||
+        (item.reason !== undefined && !text(item.reason)) ||
+        (item.model !== undefined && !text(item.model)) ||
+        (item.actualModel !== undefined && !text(item.actualModel)) ||
+        (item.sessionId !== undefined && !text(item.sessionId)) ||
+        (item.failureCode !== undefined && !text(item.failureCode))) throw new Error("执行记录返回异常");
     return item as Run;
   });
 }
@@ -52,7 +63,7 @@ async function readSchedules(tasks: readonly Task[]): Promise<Result> {
   return { schedules: settled.flatMap((row) => row.schedules), runs: settled.flatMap((row) => row.runs).sort((a, b) => b.startedAt.localeCompare(a.startedAt)), errors: settled.map((row) => row.error).filter(Boolean) };
 }
 
-export function DesktopSchedulesPage({ tasks, onOpenTask }: { tasks: readonly Task[]; onOpenTask: (taskId: string) => void }) {
+export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession }: { tasks: readonly Task[]; onOpenTask: (taskId: string) => void; onOpenSession?: (taskId: string, sessionId: string) => void }) {
   const [result, setResult] = useState<Result | null>(null);
   const [filter, setFilter] = useState<"all" | "active" | "paused">("all");
   const [revision, setRevision] = useState(0);
@@ -173,7 +184,7 @@ export function DesktopSchedulesPage({ tasks, onOpenTask }: { tasks: readonly Ta
       <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Scheduled Tasks</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">定时任务</h1></div>
       <Button type="button" variant="outline" size="sm" onClick={() => setRevision((value) => value + 1)}>刷新</Button>
     </div>
-    <p className="mt-1.5 text-xs text-muted">每项配置属于一个真实任务；执行记录来自任务 Host。启用、暂停、立即运行与编辑由 Host 决定并回执；新建定时任务的生产入口未接线。</p>
+    <p className="mt-1.5 text-xs text-muted">每项配置属于一个真实任务；执行记录来自任务 Host。启用、暂停、立即运行与编辑由 Host 决定并回执；新建定时任务在项目工作空间选择「定时任务」类型创建专属任务。</p>
     {actionError && <p role="alert" data-testid="desktop-schedule-action-error" className="mt-2 break-words text-xs text-[#ad4545]">{actionError}</p>}
     {!result ? <p role="status" className="mt-6 text-xs text-muted">正在读取任务的定时配置…</p> : <>
       {result.errors.length > 0 && <div role="alert" className="mt-5 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">部分数据读取失败，以下仅展示成功读取的配置与记录。<ul className="mt-1 list-inside list-disc">{result.errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
@@ -197,10 +208,11 @@ export function DesktopSchedulesPage({ tasks, onOpenTask }: { tasks: readonly Ta
         {shown.length === 0 && <p className="py-7 text-center text-xs text-muted">{result.errors.length ? "成功读取的任务中没有符合筛选的定时配置。" : "当前筛选下没有定时任务。"}</p>}
       </div>
       <div className="mt-7 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">执行记录</h2><span className="text-xs text-muted">{result.runs.length} 条{result.errors.length ? "（部分）" : ""}</span></div>
-      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[550px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">开始时间</th><th className="font-medium">定时任务</th><th className="font-medium">结果</th><th className="font-medium">详情</th></tr></thead><tbody>{result.runs.map((run) => <tr key={`${run.taskId}:${run.runId}`} className="border-b border-line" data-schedule-run={run.runId}><td className="py-2">{hostText(run.startedAt, "Host 未上报开始时间")}</td>{/* `parseSchedules` reads `name` with `text = typeof === "string"`, so a blank
+      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[720px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">开始时间</th><th className="font-medium">定时任务</th><th className="font-medium">状态</th><th className="font-medium">实际模型</th><th className="font-medium">会话 / 结果 / 失败原因</th></tr></thead><tbody>{result.runs.map((run) => <tr key={`${run.taskId}:${run.runId}`} className="border-b border-line" data-schedule-run={run.runId}><td className="py-2">{hostText(run.startedAt, "Host 未上报开始时间")}</td>{/* `parseSchedules` reads `name` with `text = typeof === "string"`, so a blank
               name is a reachable value; `??` only catches a MISSING schedule, so
               the blank one is named like the card's own heading instead of
-              rendering an empty 定时任务 cell. */}<td>{scheduleNames.get(run.scheduleId) === undefined ? "已删除的定时任务" : hostText(scheduleNames.get(run.scheduleId), "Host 未上报定时任务名称")}</td><td>{runLabels[run.result]}</td><td className="break-words">{hostText(run.reason, "—")}</td></tr>)}</tbody></table>{result.runs.length === 0 && <p className="py-4 text-xs text-muted">{result.errors.length ? "成功读取的任务中没有执行记录。" : "暂无执行记录。"}</p>}</div>
+              rendering an empty 定时任务 cell. */}<td>{scheduleNames.get(run.scheduleId) === undefined ? "已删除的定时任务" : hostText(scheduleNames.get(run.scheduleId), "Host 未上报定时任务名称")}</td><td>{runLabels[run.result]}</td>{/* The ACTUAL model the SDK reported; a run that never started has none and
+              shows the configured model only when the Host recorded it. */}<td>{run.actualModel !== undefined ? hostText(run.actualModel, "Host 未上报模型") : run.model !== undefined ? <span className="text-muted">{hostText(run.model, "Host 未上报模型")}（未实际运行）</span> : "—"}</td><td className="break-words">{run.sessionId !== undefined && onOpenSession ? <Button size="sm" variant="ghost" className="mr-2" onClick={() => onOpenSession(run.taskId, run.sessionId as string)}>继续对话</Button> : run.sessionId !== undefined ? <code className="mr-2 font-mono text-[11px]">{run.sessionId}</code> : null}{run.failureCode !== undefined ? <span className="text-[#ad4545]">{run.failureCode}：</span> : null}{hostText(run.reason, "—")}</td></tr>)}</tbody></table>{result.runs.length === 0 && <p className="py-4 text-xs text-muted">{result.errors.length ? "成功读取的任务中没有执行记录。" : "暂无执行记录。"}</p>}</div>
     </>}
     {editing && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
       <div role="dialog" aria-modal="true" aria-label="编辑定时任务" className="max-h-[90vh] w-full max-w-[560px] overflow-y-auto rounded-[7px] border border-line bg-paper p-5 shadow-lg">

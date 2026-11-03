@@ -266,3 +266,37 @@ describe("Desktop task creation", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(noRepoProject.id, pureIntent.taskId));
   });
 });
+
+it("creates a dedicated scheduled task: the form sends kind=scheduled with its definition", async () => {
+  const dirProject: DesktopProject = { id: "c0ffee00-0000-4000-8000-000000000001", name: "Docs", description: "",
+    repositories: [], directories: [{ id: "e2eb192a-108b-4f9b-89a4-cd1fd8fb1fd0", name: "Documents", path: "/local/documents" }],
+    environment: [], branchTemplate: "feature/{task-name}" };
+  const createTask = vi.fn(async (request: { op: string; input?: unknown }) => {
+    if (request.op === "current") return { ok: true, payload: null };
+    return { ok: true, payload: { canceled: false, intent: { ...intent, projectId: dirProject.id, kind: "scheduled" } } };
+  });
+  const providerOp = vi.fn(async () => ({ ok: true, payload: { state: "configured", profileId: null, generation: null, profiles: [{
+    id: "p-11111111-2222-3333-4444-555555555555", name: "Loopback", baseUrl: "https://127.0.0.1:8443", modelId: "model-x", contextWindow: 128000, maxTokens: 8192,
+    authRef: "PIDOCK_PROVIDER_TEST", generation: 1, credentialAvailable: true,
+    models: [{ id: "model-x", name: "Model X", contextWindow: 128000, maxTokens: 8192, reasoning: false, reasoningLevels: ["off"], cost: null }],
+  }] } }));
+  window.pidock = { createTask, providerOp } as never;
+  render(<DesktopTaskCreation project={dirProject} bridge={bridge(createTask)} onCreated={async () => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "任务" }));
+  fireEvent.click(screen.getByRole("radio", { name: "定时任务" }));
+  fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "每日巡检" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: /Documents/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /我确认普通目录/ }));
+  fireEvent.change(await screen.findByLabelText("定时任务规则"), { target: { value: "每日 09:15" } });
+  fireEvent.change(screen.getByLabelText("定时任务时区"), { target: { value: "Asia/Shanghai" } });
+  fireEvent.change(await screen.findByLabelText("定时任务提示词"), { target: { value: "检查风险" } });
+  await waitFor(() => expect(screen.getByLabelText("定时任务模型").querySelectorAll("option").length).toBeGreaterThan(1));
+  fireEvent.change(screen.getByLabelText("定时任务模型"), { target: { value: "p-11111111-2222-3333-4444-555555555555\u0000model-x" } });
+  fireEvent.click(screen.getByRole("button", { name: "预览路径" }));
+  await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "prepare", input: expect.objectContaining({
+    projectId: dirProject.id, name: "每日巡检", workspaceMode: "plain-dirs",
+    kind: "scheduled",
+    schedule: expect.objectContaining({ ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "p-11111111-2222-3333-4444-555555555555", model: "model-x", permission: "default", enabled: true }),
+  }) }));
+  delete window.pidock;
+});

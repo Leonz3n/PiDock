@@ -517,7 +517,7 @@ export function DesktopInventory() {
   if (environmentOpen) return shell(<DesktopEnvironmentPage projects={shellProjects} projectId={environmentProject?.id ?? null} taskCount={environmentProject ? shellTasks.filter((task) => task.projectId === environmentProject.id).length : 0} tasks={environmentProject ? activeTasks.filter((task) => task.projectId === environmentProject.id) : []} tasksPending={!lifecycleReady} onSelectProject={(id) => { pinned.current = true; setSelection({ kind: "project", id }); }} />);
   if (attentionOpen) return shell(<DesktopAttentionPage tasks={activeTasks} projects={shellProjects} lifecyclePending={!lifecycleReady} lifecycleErrors={lifecycleIndex?.errors ?? []} onOpenTask={(taskId) => navigate({ view: "task", taskId })} />);
   if (archiveOpen) return shell(<DesktopArchivePage tasks={shellTasks} onRestored={() => { void load(); }} />);
-  if (schedulesOpen) return shell(<DesktopSchedulesPage tasks={shellTasks} onOpenTask={(taskId) => navigate({ view: "task", taskId })} />);
+  if (schedulesOpen) return shell(<DesktopSchedulesPage tasks={shellTasks} onOpenTask={(taskId) => navigate({ view: "task", taskId })} onOpenSession={(taskId, sessionId) => navigate({ view: "task", taskId, sessionId })} />);
   if (usageOpen) return shell(<DesktopUsagePage
     tasks={shellTasks}
     taskId={usageTaskId}
