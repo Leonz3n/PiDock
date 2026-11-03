@@ -39,7 +39,9 @@ export function DesktopWorkspaceDeleteDialog({
       <div role="dialog" aria-modal="true" aria-label={`删除工作空间「${projectName}」`} className="w-full max-w-[560px] rounded-[10px] border border-line bg-paper p-5 shadow-xl">
         <h2 className="text-[15px] font-semibold text-ink">删除工作空间「{projectName}」</h2>
         {tasks === null
-          ? <p className="mt-3 text-xs text-muted">正在核对关联任务…</p>
+          ? <p className="mt-3 text-xs text-muted">{error
+            ? "关联任务核对失败：无法确认是否有任务仍关联此工作空间，因此暂不能删除。请重试，或到「项目管理」逐条解绑/转移。"
+            : "正在核对关联任务…"}</p>
           : blocked
             ? <>
               <p className="mt-2 text-xs text-muted">有 {tasks.length} 个任务仍关联此工作空间。请先为每个任务选择转移或解绑，才能删除工作空间。</p>

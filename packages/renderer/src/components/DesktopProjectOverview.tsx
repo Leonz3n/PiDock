@@ -171,7 +171,7 @@ export function DesktopProjectOverview({
           <span data-testid="overview-repo-count">{project.repositories.length}</span> 来源代码库 · {project.directories.length} 普通目录 ·
           {" "}<span data-testid="overview-task-count">{lifecyclePending ? "未核验" : scoped.length}</span> 进行中的任务
         </Badge>
-        <span>下载盘上身份由 Host 保存；重命名不改变工作空间身份。</span>
+        <span>磁盘上的身份由 Host 保存；重命名不改变工作空间身份。</span>
       </div> : null}
 
       {project ? <>

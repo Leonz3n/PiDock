@@ -125,6 +125,26 @@ describe("#136 S07 workspace navigation, source verification and recovery", () =
     expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
   });
 
+  it("fails closed when main cannot list the delete blockers", async () => {
+    const projectOp = vi.fn(async (request: { op: string }) => {
+      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project] } };
+      if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: TASK_ID, projectId: PROJECT_ID, state: "assigned" }] } };
+      if (request.op === "verifySources") return { ok: true, payload: { projectId: PROJECT_ID, sources: [] } };
+      if (request.op === "blockers") return { ok: false, error: "任务根读取失败" };
+      return { ok: true, payload: {} };
+    });
+    window.pidock = bridge(projectOp);
+    render(<App />);
+    const overview = await screen.findByTestId("desktop-project-overview");
+    fireEvent.click(within(overview).getByRole("button", { name: "删除" }));
+    const dialog = await screen.findByRole("dialog", { name: "删除工作空间「真实项目」" });
+    // An unread blocker list is "unknown", never "nothing blocks the delete".
+    await waitFor(() => expect(within(dialog).getByText(/关联任务核对失败/)).toBeInTheDocument());
+    expect(within(dialog).queryByText(/没有关联任务/)).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "删除工作空间" })).toBeDisabled();
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "delete")).toHaveLength(0);
+  });
+
   it("fails closed when no backup can restore the registry", async () => {
     const projectOp = vi.fn(async (request: { op: string }) => {
       if (request.op === "status") return { ok: true, payload: { initialized: true, primary: "invalid", backup: "missing", recoverable: false } };

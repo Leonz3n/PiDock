@@ -281,6 +281,12 @@ export function DesktopInventory() {
       repositories: input.repositories.map((row) => ({ ...row, name: row.name.trim(), path: row.path.trim() })),
       directories: input.directories.map((row) => ({ ...row, name: row.name.trim(), path: row.path.trim() })) };
     const target = form === "edit" ? data?.projects.find((item) => item.id === editProjectId) : undefined;
+    if (form === "edit" && !target) {
+      // An edit whose workspace is no longer in the authoritative list must fail by
+      // name. Falling through to the create branch would silently duplicate it.
+      setActionError("要编辑的工作空间已不在本机清单中，请关闭对话框后重新选择");
+      return;
+    }
     if (form === "edit" && target) {
       // One `update` carries name + description + sources + settings: a single
       // registry write, so a rename can no longer half-commit (#136 bullet 2).
@@ -328,7 +334,9 @@ export function DesktopInventory() {
       const names = new Map((data?.inventory.tasks ?? []).map((task) => [task.taskId, task.name]));
       setDeleting({ projectId, tasks: blockers.tasks.map((row) => ({ ...row, name: names.get(row.taskId) ?? row.taskId })), error: null });
     } catch (error) {
-      setDeleting({ projectId, tasks: [], error: errorMessage(error) });
+      // Unknown blockers stay unknown: an empty list would claim "nothing blocks
+      // deletion" without main having said so.
+      setDeleting({ projectId, tasks: null, error: errorMessage(error) });
     }
   };
   const openDelete = async (projectId: string) => { await readBlockers(projectId, true); };
