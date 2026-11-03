@@ -491,6 +491,22 @@ function isGatedTool(name: string): PiToolDefinition | undefined {
   return PI_GATED_TOOLS.find((tool) => tool.name === name);
 }
 
+/**
+ * [Pencil T15] #150: an MCP tool is registered as `mcp__<server>__<tool>` and
+ * has no entry in the fixed `PI_GATED_TOOLS` table (the server chooses it at
+ * runtime). It is still decided by the same `previewGate` tier rules: the Host
+ * broker passes the tool's own `readOnlyHint` as the kind, so a read-only MCP
+ * tool is `read` and any other MCP tool is `command` (never `write`: the MCP
+ * server, not this app, writes). The name shape is the only thing accepted.
+ */
+export function isMcpGatedToolName(name: string): boolean {
+  return /^mcp__[A-Za-z0-9][A-Za-z0-9_-]{0,127}__[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(name);
+}
+
+function gatedTool(name: string, mcpKind?: PiToolKind): PiToolDefinition | undefined {
+  return isGatedTool(name) ?? (mcpKind !== undefined && isMcpGatedToolName(name) ? { name, kind: mcpKind } : undefined);
+}
+
 /** Lexical path normalization (no fs access): unify `\`, drop `.`, resolve `..`. */
 function normalizeToolTarget(target: string): string {
   const unified = target.replace(/\\/g, "/");
@@ -819,9 +835,9 @@ export class PiSessionChannel {
    * turn owns approval creation via `requestApproval` so previews cannot
    * collide on anticipated call ids.
    */
-  previewGate(toolName: string, target: string): PiGateDecision {
+  previewGate(toolName: string, target: string, mcpKind?: PiToolKind): PiGateDecision {
     if (this.executionClosing) return { verdict: "deny", reason: "task-host-closing" };
-    const tool = isGatedTool(toolName);
+    const tool = gatedTool(toolName, mcpKind);
     if (!tool) return { verdict: "deny", reason: `工具未接入门禁：${toolName}` };
     if (!targetInTask(this.taskDir, target)) {
       return { verdict: "deny", reason: `越界目标：${target} 不在任务目录内` };
@@ -850,10 +866,10 @@ export class PiSessionChannel {
    * Permission changes apply to later calls only: the approval stores the
    * requesting tier.
    */
-  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope, operation?: string): PiGateDecision {
-    const preview = this.previewGate(toolName, target);
+  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope, operation?: string, mcpKind?: PiToolKind): PiGateDecision {
+    const preview = this.previewGate(toolName, target, mcpKind);
     if (preview.verdict !== "ask") return preview;
-    const tool = isGatedTool(toolName);
+    const tool = gatedTool(toolName, mcpKind);
     if (!tool) return { verdict: "deny", reason: `\u5de5\u5177\u672a\u63a5\u5165\u95e8\u7981\uff1a${toolName}` };
     piApprovalSequence += 1;
     const approval: PiApproval = {

@@ -314,3 +314,39 @@ it("refuses an unusable selection before any context exists", () => {
   expect(() => new SdkContextClient({ task: { taskId: "task-context-guard", taskDir: dir }, config: { ...config, baseUrl: "http://example.com/v1" }, credential: "synthetic-key" })).toThrow("provider-endpoint-invalid");
   expect(() => new SdkContextClient({ task: { taskId: "task-context-guard", taskDir: dir }, config: { ...config, authRef: "OPENAI_API_KEY" }, credential: "synthetic-key" })).toThrow("provider-configuration-invalid");
 });
+
+it("passes the exact MCP config path only when a tool host is wired, and never as an env value", async () => {
+  const dir = task("task-context-mcp");
+  const probe = scripted();
+  const mcpPath = join(dir, ".pidock-sdk-agent", "mcp.json");
+  const toolHost = { call: async () => ({ outcome: "ok" as const, text: "ok" }) };
+  const client = new SdkContextClient({
+    task: { taskId: "task-context-mcp", taskDir: dir }, config, credential: "synthetic-key",
+    toolHost, mcpConfigPath: mcpPath,
+    spawn: (env, workerData) => { probe.spawned.push({ env, workerData }); return probe.worker; },
+  });
+  await client.open("main");
+  expect((probe.spawned[0]!.workerData as Record<string, unknown>)["mcpConfigPath"]).toBe(mcpPath);
+  // The path is worker input, not environment (nothing a spawned MCP server inherits).
+  expect(JSON.stringify(probe.spawned[0]!.env)).not.toContain(mcpPath);
+  await client.dispose();
+});
+
+it("drops the MCP path without a tool host and refuses a relative path", async () => {
+  const dir = task("task-context-mcp-refused");
+  const probe = scripted();
+  const client = new SdkContextClient({
+    task: { taskId: "task-context-mcp-refused", taskDir: dir }, config, credential: "synthetic-key",
+    mcpConfigPath: join(dir, "mcp.json"),
+    spawn: (env, workerData) => { probe.spawned.push({ env, workerData }); return probe.worker; },
+  });
+  await client.open("main");
+  expect((probe.spawned[0]!.workerData as Record<string, unknown>)["mcpConfigPath"]).toBeUndefined();
+  await client.dispose();
+  const bad = new SdkContextClient({
+    task: { taskId: "task-context-mcp-refused", taskDir: dir }, config, credential: "synthetic-key",
+    toolHost: { call: async () => ({ outcome: "ok" as const, text: "ok" }) }, mcpConfigPath: "mcp.json",
+    spawn: () => probe.worker,
+  });
+  await expect(bad.open("main")).rejects.toThrow("sdk-context-input-invalid");
+});

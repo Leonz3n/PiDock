@@ -88,6 +88,9 @@ export type McpFailureCode =
   | "mcp-exposure-invalid"
   | "mcp-credential-literal"
   | "mcp-not-managed"
+  // The row is gone (removed in another window or edited by hand): a named
+  // miss, not a silent no-op.
+  | "mcp-not-found"
   | "mcp-servers-invalid";
 
 export class McpFailure extends Error {

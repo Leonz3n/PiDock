@@ -18,7 +18,10 @@ it("connects to a real stdio MCP server, lists its tools and disposes the child"
   const result = await testMcpConnection(stdioEntry(log), { env: { ...process.env }, timeoutMs: 15_000 });
   expect(result.state).toBe("connected");
   expect(result.server).toMatchObject({ name: "pidock-mcp-fixture", version: "1.0.0" });
-  expect(result.tools).toEqual([{ name: "echo", description: "Echo the given text back, prefixed with `fixture:`." }]);
+  expect(result.tools).toEqual([
+    { name: "echo", description: "Echo the given text back, prefixed with `fixture:`." },
+    { name: "mutate", description: "Pretend to change state; used to prove a non-read MCP call is gated." },
+  ]);
   // The fixture really ran and served the handshake + tool list.
   const seen = readFileSync(log, "utf8");
   expect(seen).toContain("initialize");

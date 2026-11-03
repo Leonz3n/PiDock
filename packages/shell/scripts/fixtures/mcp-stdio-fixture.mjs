@@ -9,9 +9,18 @@
  *
  * `MCP_FIXTURE_LOG` (optional) appends one line per request so a test can prove
  * the process really ran and which tool input arrived.
+ *
+ * `MCP_FIXTURE_PID` (optional) writes this process's pid at startup. A test can
+ * then assert the real child is gone after a session stop/cancel (no orphan),
+ * instead of inferring it from the absence of further log lines.
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
+
+const pidPath = process.env["MCP_FIXTURE_PID"];
+if (pidPath) {
+  try { writeFileSync(pidPath, String(process.pid)); } catch { /* best effort */ }
+}
 
 const PROTOCOL = "2025-06-18";
 const tools = [
@@ -25,6 +34,18 @@ const tools = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
+  },
+  {
+    // No `readOnlyHint`: the permission gate must treat it as a command tool,
+    // so `default` asks first and a read-only session refuses it.
+    name: "mutate",
+    description: "Pretend to change state; used to prove a non-read MCP call is gated.",
+    inputSchema: {
+      type: "object",
+      properties: { value: { type: "string", description: "Value to record" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
   },
 ];
 
@@ -54,6 +75,11 @@ function handle(request) {
       return { tools };
     case "tools/call": {
       const params = request.params ?? {};
+      if (params.name === "mutate") {
+        const value = params.arguments?.value;
+        if (typeof value !== "string") return { content: [{ type: "text", text: "missing value" }], isError: true };
+        return { content: [{ type: "text", text: `mutated: ${value}` }], isError: false };
+      }
       if (params.name !== "echo") {
         return { __error: { code: -32602, message: `unknown tool ${String(params.name)}` } };
       }

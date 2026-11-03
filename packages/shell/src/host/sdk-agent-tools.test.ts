@@ -181,7 +181,7 @@ interface Harness {
  * necessarily main's catalog: the seam under test is "what values does the Host
  * receive and bind", so a recording port is the honest stand-in for main.
  */
-async function harness(options: { templates?: () => ServiceTemplateEditPort | undefined } = {}): Promise<Harness> {
+async function harness(options: { templates?: () => ServiceTemplateEditPort | undefined; mcp?: boolean } = {}): Promise<Harness> {
   const parts = fixture();
   const seenModels: string[] = [];
   const runtime = await stubRuntime(parts.taskDir, seenModels);
@@ -199,6 +199,7 @@ async function harness(options: { templates?: () => ServiceTemplateEditPort | un
       const kernel = new PiSdkTextKernel("task-aaaaaaaa", parts.taskDir, {
         model, modelRuntime: runtime,
         callTool: (sessionId, request) => caller.call(sessionId, request),
+        ...(options.mcp ? { mcpConfigPath: join(parts.taskDir, ".pidock-sdk-agent", "mcp.json") } : {}),
       });
       return {
         open: (sessionId: string) => kernel.open(sessionId),
@@ -1238,5 +1239,163 @@ it("keeps the explicit model binding across real turns (no SDK default-model fal
   // explicit selection must still be the only model the SDK asks for.
   expect(h.seenModels.length).toBeGreaterThan(0);
   expect(new Set(h.seenModels)).toEqual(new Set([`${model.provider}/${model.id}`]));
+  await h.host.shutdownSdk();
+});
+
+// ---------------------------------------------------------------------------
+// [Pencil T15] #150: real managed MCP server, real SDK turn, real Host gate.
+// ---------------------------------------------------------------------------
+
+const MCP_FIXTURE = join(import.meta.dirname, "..", "..", "scripts", "fixtures", "mcp-stdio-fixture.mjs");
+const MCP_SERVER = "pidock-mcp-fixture";
+const MCP_ECHO = "mcp__pidock_mcp_fixture__echo";
+const MCP_MUTATE = "mcp__pidock_mcp_fixture__mutate";
+
+/** Write the same native mcp.json main's manager writes, with the real fixture child. */
+function configureMcpFixture(h: Harness, options: { enabled?: boolean } = {}): { log: string; pidFile: string; path: string } {
+  const agentDir = join(h.fixture.taskDir, ".pidock-sdk-agent");
+  mkdirSync(agentDir, { recursive: true });
+  const log = join(h.fixture.root, "mcp-fixture.log");
+  const pidFile = join(h.fixture.root, "mcp-fixture.pid");
+  const path = join(agentDir, "mcp.json");
+  writeFileSync(path, JSON.stringify({
+    mcpServers: {
+      [MCP_SERVER]: {
+        type: "stdio",
+        command: process.execPath,
+        args: [MCP_FIXTURE],
+        env: { MCP_FIXTURE_LOG: log, MCP_FIXTURE_PID: pidFile },
+        exposure: "direct",
+        timeout: 30,
+        ...(options.enabled === false ? { enabled: false } : {}),
+      },
+    },
+  }));
+  return { log, pidFile, path };
+}
+
+const pidGone = async (pid: number) => {
+  await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 10_000 });
+};
+
+it("runs a real managed MCP tool through the Host approval path and records input/result in the session JSONL", async () => {
+  const h = await harness({ mcp: true });
+  const files = configureMcpFixture(h);
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "default");
+
+  const running = h.host.sdkTextKernel().prompt(
+    "main",
+    JSON.stringify({ tool: MCP_MUTATE, args: { value: "hello mcp" } }),
+    undefined,
+    "00000000-0000-4000-8000-000000000101",
+  );
+  await vi.waitFor(() => expect(h.host.listApprovals("main").some((item) => item.status === "pending")).toBe(true));
+  const approval = h.host.listApprovals("main").find((item) => item.status === "pending")!;
+  // The existing Host gate, not a second policy: AGENT_TOOL_SCOPE + the same
+  // tier, and the card names the exact MCP server/tool and the model's input.
+  expect(approval).toMatchObject({ tool: MCP_MUTATE, scope: "agent-tool", permissionAtRequest: "default" });
+  // Pi sanitizes the server part in a tool name (`-` → `_`); the approval names
+  // that same registered identity, not a second spelling.
+  expect(approval.target).toBe(`${h.fixture.taskDir}/mcp/pidock_mcp_fixture/mutate`);
+  expect(approval.operation).toContain(`{"value":"hello mcp"}`);
+  h.host.approve("main", approval.id);
+
+  const result = await running;
+  expect(result.state).toBe("done");
+  expect(result.text).toContain("tool-result:");
+  expect(result.text).toContain("mutated: hello mcp");
+
+  // The session's own JSONL holds the actual call and its actual result.
+  const transcript = await h.transcript();
+  expect(transcript).toContain(MCP_MUTATE);
+  expect(transcript).toContain("hello mcp");
+  expect(transcript).toContain("mutated: hello mcp");
+  // The same JSONL projection the conversation page renders ends with the real
+  // MCP result inside the assistant reply (the UI has no separate tool card).
+  const projected = h.host.sdkTextKernel().projection("main");
+  expect(projected.messages.at(-1)).toMatchObject({ role: "assistant" });
+  expect(projected.messages.at(-1)?.text).toContain("mutated: hello mcp");
+  // The real child process served the real call, not a stub.
+  const seen = readFileSync(files.log, "utf8");
+  expect(seen).toContain("initialize");
+  expect(seen).toContain("tools/call");
+  expect(seen).toContain("hello mcp");
+  expect(await h.host.sdkTextKernel().open("main")).toMatchObject({ tools: expect.arrayContaining([MCP_MUTATE]) });
+
+  const pid = Number(readFileSync(files.pidFile, "utf8"));
+  await h.host.shutdownSdk();
+  await pidGone(pid);
+});
+
+it("read-only refuses a non-read MCP tool before the server sees it", async () => {
+  const h = await harness({ mcp: true });
+  const files = configureMcpFixture(h);
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "read");
+
+  const result = await h.prompt(MCP_MUTATE, { value: "must-not-run" });
+  expect(result.text).toContain("tool-refused:gate-denied");
+  // The hook refused, so the extension never invoked a server tool.
+  const seen = readFileSync(files.log, "utf8");
+  expect(seen).not.toContain("mutated: must-not-run");
+  expect(h.host.listApprovals("main")).toEqual([]);
+  await h.host.shutdownSdk();
+});
+
+it("keeps a running session on its loaded servers and gives a new session the changed mcp.json", async () => {
+  const h = await harness({ mcp: true });
+  const files = configureMcpFixture(h);
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+
+  const first = await h.prompt(MCP_ECHO, { text: "before save" });
+  expect(first.text).toContain("fixture: before save");
+  expect((await h.host.sdkTextKernel().open("main")).tools).toContain(MCP_ECHO);
+  const initializes = () => readFileSync(files.log, "utf8").split("\n").filter((line) => line.startsWith("initialize ")).length;
+  expect(initializes()).toBe(1);
+
+  // Exactly what tapping 停用 in the manager writes. The open session keeps the
+  // server and its tool; the next session reads the file and has neither.
+  configureMcpFixture(h, { enabled: false });
+  expect((await h.host.sdkTextKernel().open("main")).tools).toContain(MCP_ECHO);
+  const again = await h.prompt(MCP_ECHO, { text: "still here" });
+  expect(again.text).toContain("fixture: still here");
+
+  await h.host.sdkTextKernel().open("other");
+  // Give the extension the same startup window a real connection would need.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect((await h.host.sdkTextKernel().open("other")).tools).not.toContain(MCP_ECHO);
+  expect(initializes()).toBe(1);
+
+  // Re-enable: a session that starts after the save gets the server back.
+  configureMcpFixture(h);
+  await h.host.sdkTextKernel().open("third");
+  await vi.waitFor(async () => expect((await h.host.sdkTextKernel().open("third")).tools).toContain(MCP_ECHO), { timeout: 10_000 });
+  expect(initializes()).toBe(2);
+  await h.host.shutdownSdk();
+});
+
+it("stop/cancel withdraws a parked MCP approval and recycles the real child process", async () => {
+  const h = await harness({ mcp: true });
+  const files = configureMcpFixture(h);
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "default");
+
+  const running = h.host.sdkTextKernel().prompt(
+    "main",
+    JSON.stringify({ tool: MCP_MUTATE, args: { value: "parked" } }),
+    undefined,
+    "00000000-0000-4000-8000-000000000102",
+  );
+  await vi.waitFor(() => expect(h.host.listApprovals("main").some((item) => item.status === "pending")).toBe(true));
+  const pid = Number(readFileSync(files.pidFile, "utf8"));
+  await h.host.sdkTextKernel().cancel("main");
+  const result = await running;
+  expect(result.state).not.toBe("done");
+  // A decision after the stop cannot reach a tool call for a cancelled turn.
+  expect(h.host.listApprovals("main").some((item) => item.status === "pending")).toBe(false);
+  await pidGone(pid);
+  expect(readFileSync(files.log, "utf8")).not.toContain("mutated: parked");
   await h.host.shutdownSdk();
 });

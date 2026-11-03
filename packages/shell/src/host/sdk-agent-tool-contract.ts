@@ -223,11 +223,29 @@ export function sdkAgentToolSpec(name: string): SdkAgentToolSpec | undefined {
   return SDK_AGENT_TOOL_SPECS.find((spec) => spec.name === name);
 }
 
-/** One tool invocation: the Host broker re-validates `args` from scratch. */
-export interface SdkAgentToolRequest {
-  tool: SdkAgentToolName;
-  args: unknown;
+/**
+ * [Pencil T15] #150 the one internal (never model-declared) request that routes
+ * an MCP tool call through the SAME Host permission/approval path as a task
+ * tool. The worker's MCP extension owns the server connection and executes the
+ * call itself; this request is the decision only, sent from its `tool_call`
+ * hook before the extension runs. It is absent from `SDK_AGENT_TOOL_SPECS`, so
+ * the model never sees it and `noTools`/the tool allowlist never list it.
+ */
+export const MCP_TOOL_GATE = "mcp.gate";
+
+export interface SdkMcpGateArgs {
+  /** `mcp__<server>__<tool>` exactly as Pi registered it. */
+  name: string;
+  /** The tool's MCP `readOnlyHint`; the gate decides `read` vs `command` from it. */
+  readOnly: boolean;
+  /** The model's arguments, used for the approval payload version and display. */
+  args: Record<string, unknown>;
 }
+
+/** One tool invocation: the Host broker re-validates `args` from scratch. */
+export type SdkAgentToolRequest =
+  | { tool: SdkAgentToolName; args: unknown }
+  | { tool: typeof MCP_TOOL_GATE; args: SdkMcpGateArgs };
 
 /** What the model reads: a result, or a named refusal it must work around. */
 export interface SdkAgentToolOutcome {

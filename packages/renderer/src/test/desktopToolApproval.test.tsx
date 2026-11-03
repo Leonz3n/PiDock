@@ -43,10 +43,11 @@ const IDLE_EXECUTION = { state: { session: "pending-approval", services: [], exe
 
 function setup(options: {
   approvals?: () => HostRead;
+  execution?: () => HostRead;
   resolve?: (op: string, payload: Record<string, unknown>) => HostRead;
 } = {}) {
   const taskOp = vi.fn(async (_taskId: string, op: string, payload: Record<string, unknown> = {}) => {
-    if (op === "task/executionState") return { ok: true as const, payload: IDLE_EXECUTION };
+    if (op === "task/executionState") return (options.execution ?? (() => ({ ok: true as const, payload: IDLE_EXECUTION })))();
     if (op === "task/listApprovals") return (options.approvals ?? (() => ({ ok: true, payload: { approvals: [] } })))();
     if (op === "task/approve" || op === "task/reject") {
       return (options.resolve ?? (() => ({ ok: true, payload: {} })))(op, payload);
@@ -106,6 +107,25 @@ function mount() {
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("ticket 140 会话内审批卡", () => {
+  it("says 等待确认 while an executing turn is parked on a real pending approval, then 执行中 after the decision", async () => {
+    // [Pencil T05] #140 real Electron evidence: the Host's execution ledger
+    // still reports `executing` while the tool call is parked on a pending
+    // confirmation, so the card read 执行中 next to an approval request. The
+    // pending record from `task/listApprovals` is the fact that decides.
+    let status = "pending";
+    setup({
+      execution: () => ({ ok: true, payload: { state: { session: "executing", services: [], executions: [] } } }),
+      approvals: () => ({ ok: true, payload: { approvals: [approvalRow({ status, executed: status === "approved" })] } }),
+      resolve: () => { status = "approved"; return { ok: true, payload: {} }; },
+    });
+    mount();
+    expect(await screen.findByTestId("desktop-execution-state")).toHaveTextContent("执行状态 · 等待确认");
+    // The approval card offers the decision that ends the wait.
+    fireEvent.click(await screen.findByTestId("desktop-approval-approve"));
+    await waitFor(() => expect(screen.getByTestId("desktop-execution-state")).toHaveTextContent("执行状态 · 执行中"));
+    expect(screen.queryByTestId("desktop-approval-approve")).toBeNull();
+  });
+
   it("显示 Host 记录的工具、目标、真实际命令、载荷版本与会话", async () => {
     setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow()] } }) });
     mount();

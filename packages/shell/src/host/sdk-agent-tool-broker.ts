@@ -57,7 +57,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
-import { AGENT_TOOL_SCOPE, SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
+import { AGENT_TOOL_SCOPE, SERVICE_CONTROL_SCOPE, isMcpGatedToolName } from "../main/pi-session.js";
 import { SERVICE_VALUE_MASK } from "../main/service-config.js";
 import type { ControlExecutionPort } from "./execution-ledger.js";
 import { isCredentialEnvName } from "./explicit-text-provider.js";
@@ -70,6 +70,7 @@ import type { ServiceTemplateEditContent, ServiceTemplateEditPort, ServiceTempla
 import { isServiceTemplateEdit } from "../rpc/service-template-request.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import {
+  MCP_TOOL_GATE,
   SERVICE_TEMPLATE_TOOL,
   sdkAgentToolSpec,
   type SdkAgentToolName,
@@ -163,8 +164,9 @@ export interface SdkAgentServiceHost {
 /** The gate surface of one session channel (structural `PiSessionChannel`). */
 export interface SdkAgentToolChannel {
   readonly currentPermission: PiPermission;
-  previewGate(toolName: string, target: string): PiGateDecision;
-  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope, operation?: string): PiGateDecision;
+  /** `mcpKind` is supplied only for an `mcp__…` name; every fixed tool ignores it. */
+  previewGate(toolName: string, target: string, mcpKind?: "read" | "write" | "command"): PiGateDecision;
+  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope, operation?: string, mcpKind?: "read" | "write" | "command"): PiGateDecision;
   consumeApproval(approvalId: string): boolean;
   reject(approvalId: string): void;
   snapshot(): { approvals: PiApproval[] };
@@ -1082,6 +1084,14 @@ export class SdkAgentToolBroker {
     if (this.closed || this.options.closing()) return refuse("tool-refused:task-host-closing", "任务宿主正在关闭，不接受新的工具执行");
     if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) return refuse("tool-refused:unknown-session", "工具请求未命名本任务的会话");
     const tool = typeof request?.tool === "string" ? request.tool : "";
+    // [Pencil T15] #150: an MCP call is decided here, before the worker's MCP
+    // extension executes it. Same session, gate, approval scope, write right and
+    // one-shot re-check as every task tool; only the effect stays in the worker
+    // because that is where the server connection lives.
+    if (tool === MCP_TOOL_GATE) {
+      if (!this.options.sessionKnown(sessionId)) return refuse("tool-refused:unknown-session", `会话 ${sessionId} 不属于本任务`);
+      return await this.gateMcpTool(sessionId, request.args);
+    }
     const spec = sdkAgentToolSpec(tool);
     if (!spec) return refuse("tool-refused:unknown-tool", `工具未接入门禁：${tool}`);
     const args = request.args;
@@ -1480,10 +1490,53 @@ export class SdkAgentToolBroker {
    * effect will use: the existing gate compares lexically against its own task
    * folder, and confinement on the real path has already run before this point.
    */
+  /**
+   * [Pencil T15] #150: the permission half of one MCP call. The worker's MCP
+   * `tool_call` hook sends the registered tool name, its `readOnlyHint` and the
+   * model's arguments; this method binds them to the task and runs the same
+   * `runWithGate` path as `fs.*`/`exec.run` — preview tier, write right for a
+   * non-read tool, approval, one-shot re-check. The extension performs the call
+   * only after an `ok` outcome, so a refusal never opens a connection or invokes
+   * a server tool.
+   */
+  private async gateMcpTool(sessionId: string, raw: unknown): Promise<SdkAgentToolOutcome> {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return refuse("tool-refused:invalid-arguments", "MCP 调用参数必须是一个对象");
+    const values = raw as Record<string, unknown>;
+    const name = values["name"];
+    if (typeof name !== "string" || !isMcpGatedToolName(name)) return refuse("tool-refused:unknown-tool", "MCP 工具名称不受支持");
+    const readOnly = values["readOnly"];
+    if (typeof readOnly !== "boolean") return refuse("tool-refused:invalid-arguments", "MCP 工具缺少 readOnly 标记");
+    const toolArgs = values["args"];
+    if (typeof toolArgs !== "object" || toolArgs === null || Array.isArray(toolArgs)) return refuse("tool-refused:invalid-arguments", "MCP 工具参数必须是一个对象");
+    let serialized: string;
+    try { serialized = JSON.stringify(toolArgs); }
+    catch { return refuse("tool-refused:invalid-arguments", "MCP 工具参数无法序列化"); }
+    if (Buffer.byteLength(serialized, "utf8") > MAX_COMMAND_BYTES) return refuse("tool-refused:too-large", "MCP 工具参数超过上限");
+    const match = /^mcp__(.+)__(.+)$/.exec(name);
+    if (!match) return refuse("tool-refused:unknown-tool", "MCP 工具名称不受支持");
+    const [, server, tool] = match as unknown as [string, string, string];
+    const scope = this.options.scope();
+    // The target is a lexical identity inside the task, never a filesystem path
+    // the MCP server receives: `targetInTask` is what proves the gate can decide
+    // it, and the approval names the same server/tool the model called.
+    const target = `${scope.taskDir.replace(/[\\/]+$/, "")}/mcp/${server}/${tool}`;
+    const kind = readOnly ? "read" : "command";
+    return await this.runWithGate({
+      sessionId,
+      channel: this.options.channel(sessionId),
+      name,
+      kind,
+      target,
+      operation: `${server}/${tool} ${serialized}`.slice(0, MAX_COMMAND_CHARS),
+      version: versionOf([MCP_TOOL_GATE, name, kind, serialized]),
+      effect: async () => ({ outcome: "ok", text: "已通过权限门禁，MCP 扩展将继续执行本次调用" }),
+    });
+  }
+
   private async runWithGate(input: {
     sessionId: string;
     channel: SdkAgentToolChannel;
-    name: SdkAgentToolName;
+    name: string;
     kind: "read" | "write" | "command";
     target: string;
     /** What the confirmation shows when `target` alone cannot state the real operation (an `exec.run` command). */
@@ -1497,7 +1550,7 @@ export class SdkAgentToolBroker {
     // The gate is previewed before the write right is claimed: a tier denial is
     // then reported by the permission gate itself (the same component the turn
     // flow uses), not by the write coordinator, and no claim is taken at all.
-    const preview = input.channel.previewGate(input.name, input.target);
+    const preview = input.channel.previewGate(input.name, input.target, input.kind);
     if (preview.verdict === "deny") return refuse("tool-refused:gate-denied", preview.reason);
     let claimId: string | undefined;
     if (mutating) {
@@ -1527,7 +1580,7 @@ export class SdkAgentToolBroker {
     try {
       if (preview.verdict === "ask") {
         const tier = input.channel.currentPermission;
-        const gate = input.channel.gate(input.name, input.target, input.version, undefined, AGENT_TOOL_SCOPE, input.operation);
+        const gate = input.channel.gate(input.name, input.target, input.version, undefined, AGENT_TOOL_SCOPE, input.operation, input.kind);
         if (gate.verdict !== "ask") return refuse("tool-refused:gate-denied", "确认请求未能创建，执行已拒绝");
         this.options.persist(input.sessionId);
         const verdict = await this.awaitApproval(gate.approvalId, input.sessionId);
@@ -1559,7 +1612,8 @@ export class SdkAgentToolBroker {
   private recheckApproval(input: {
     sessionId: string;
     channel: SdkAgentToolChannel;
-    name: SdkAgentToolName;
+    name: string;
+    kind: "read" | "write" | "command";
     target: string;
     version: string;
     approvalId: string;
@@ -1583,7 +1637,7 @@ export class SdkAgentToolBroker {
     if (approval.permissionAtRequest !== input.tier || approval.contentVersion !== input.version) {
       return { ok: false, code: "tool-refused:stale-approval", reason: "确认请求的请求权限或内容版本已变化，请重新发起调用" };
     }
-    if (input.channel.previewGate(input.name, input.target).verdict === "deny") {
+    if (input.channel.previewGate(input.name, input.target, input.kind).verdict === "deny") {
       return { ok: false, code: "tool-refused:gate-denied", reason: "当前权限已拒绝该目标" };
     }
     if (!input.channel.consumeApproval(input.approvalId)) {
