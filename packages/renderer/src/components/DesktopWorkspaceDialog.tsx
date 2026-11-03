@@ -86,6 +86,8 @@ export function DesktopWorkspaceDialog({
   const nameRef = useRef<HTMLInputElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const pathRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  // Read once: the repair target is chosen when the dialog opens, not on every render.
+  const openFocus = useRef(focusSourceId ?? null);
   const title = mode === "create" ? "新建工作空间" : "编辑工作空间";
   const sourceLabel = "关联 Git 仓库与目录 *";
 
@@ -112,7 +114,7 @@ export function DesktopWorkspaceDialog({
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // A repair that lands on the name field makes the user hunt for the row again.
-    const repair = focusSourceId ? pathRefs.current[focusSourceId] : null;
+    const repair = openFocus.current ? pathRefs.current[openFocus.current] : null;
     (repair ?? nameRef.current)?.focus();
     return () => { if (opener && document.contains(opener)) opener.focus(); };
   }, []);

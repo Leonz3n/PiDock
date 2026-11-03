@@ -133,7 +133,7 @@ export function branchTemplate(value: unknown): string {
   if (typeof value !== "string" || value.length < 1 || value.length > 128 || value !== value.trim()) {
     throw new Error("invalid branch template");
   }
-  if (/[\s~^:?*[\\\u0000]/.test(value) || value.includes("..") || value.includes("@{") ||
+  if (/[\s~^:?*[\\]/.test(value) || value.includes("\u0000") || value.includes("..") || value.includes("@{") ||
       value.startsWith("/") || value.endsWith("/") || value.endsWith(".") || value.includes("//") || value === "@") {
     throw new Error("invalid branch template");
   }
