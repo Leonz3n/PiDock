@@ -3,6 +3,7 @@ import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, ren
 import { isAbsolute, join, normalize, posix, win32 } from "node:path";
 import type { TaskRootIndex, VerifiedTaskIdentity } from "./task-root-index.js";
 import { isSafeTaskChildName, isTaskDirId } from "./task-provision.js";
+import { VariableInputError, variableNameRefusal } from "./workspace-variables.js";
 
 export interface ProjectSource { id: string; name: string; path: string }
 /** A workspace-level environment variable: name/value only, no renderer-chosen identity. */
@@ -113,6 +114,13 @@ function environmentVariable(value: unknown): ProjectEnvironmentVariable {
   if (typeof variableKey !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(variableKey)) {
     throw new Error("invalid environment variable name");
   }
+  // [Pencil T09] #144: a shared variable may not be an OS startup input, the
+  // Host's own PIDOCK_* binding or a credential-shaped name. The registry stores
+  // only shared, non-secret values; a credential belongs to the credential store.
+  const refusal = variableNameRefusal(variableKey);
+  // Reserved/credential refusals are named (code + key, never a value); the
+  // remaining shell-name/value checks keep their historical wording.
+  if (refusal === "reserved" || refusal === "credential") throw new VariableInputError(refusal, variableKey);
   if (typeof variableValue !== "string" || variableValue.length > 4096 || variableValue.includes("\0") || /[\r\n]/.test(variableValue)) {
     throw new Error("invalid environment variable value");
   }
@@ -512,6 +520,33 @@ export class ProjectRegistry {
       }
       value.projects[value.projects.indexOf(current)] = next;
       return next;
+    });
+  }
+  /**
+   * [Pencil T09] #144 exact-key workspace variable edit. The UI names one key
+   * and its value; the whole `environment` array is never rewritten for a
+   * single-row change, so a concurrent edit cannot drop the other rows.
+   */
+  setEnvironmentVariable(projectId: string, key: string, value: string): Promise<LocalProject> {
+    return this.mutate((value_) => {
+      const current = value_.projects.find((row) => row.id === id(projectId));
+      if (!current) throw new Error("unknown project");
+      const row = environmentVariable({ key, value });
+      const index = current.environment.findIndex((item) => item.key === row.key);
+      if (index < 0) current.environment.push(row); else current.environment[index] = row;
+      current.environment = environment(current.environment);
+      return current;
+    });
+  }
+  /** Deleting a workspace variable removes inheritance; nothing is shadowed. */
+  removeEnvironmentVariable(projectId: string, key: string): Promise<{ removed: boolean; project: LocalProject }> {
+    return this.mutate((value_) => {
+      const current = value_.projects.find((row) => row.id === id(projectId));
+      if (!current) throw new Error("unknown project");
+      if (typeof key !== "string" || key.length === 0) throw new Error("invalid environment variable name");
+      const before = current.environment.length;
+      current.environment = current.environment.filter((row) => row.key !== key);
+      return { removed: current.environment.length !== before, project: current };
     });
   }
   rename(projectId: string, name: string): Promise<LocalProject> {
