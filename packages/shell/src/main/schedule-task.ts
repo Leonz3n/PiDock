@@ -20,6 +20,7 @@
  */
 
 import {
+  nextTriggerAt,
   parseRuleText,
   type ScheduledRunRecord,
   type ScheduledRunResult,
@@ -144,17 +145,10 @@ function isIana(timezone: string): boolean {
 export function nextRunAtOf(schedule: Pick<StoredSchedule, "ruleText" | "timezone">, after: string): string | null {
   const parsed = parseRuleText(schedule.ruleText, schedule.timezone);
   if (!parsed.ok) return null;
-  return ruleNextTrigger(parsed.rule, after);
-}
-
-function ruleNextTrigger(rule: Parameters<typeof parseRuleText>[0] extends never ? never : NonNullable<ReturnType<typeof parseRuleText> extends { ok: true; rule: infer R } ? R : never>, after: string): string | null {
   // `nextTriggerAt` is the single implementation of "when does this rule next
-  // fire in its own zone"; re-exported here so callers do not grow a second one.
-  return nextTriggerAt(rule, { after });
+  // fire in its own zone"; callers must not grow a second one.
+  return nextTriggerAt(parsed.rule, { after });
 }
-
-// Imported after the type-only helper above to keep the pure dependency order.
-import { nextTriggerAt } from "./schedule-rules.js";
 
 export type ScheduleRunStatus = "running" | "completed" | "awaiting-approval" | "skipped" | "failed" | "unknown";
 

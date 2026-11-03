@@ -515,7 +515,7 @@ export type Schedule = {
   /** Set when the saved config no longer resolves: the schedule needs repair. */
   repairIssue?: string;
   /**
-   * [Pencil T17] #152 persisted plan: next instant this rule fires in its own
+   * [Pencil T17] persisted plan: next instant this rule fires in its own
    * zone. `null` = a consumed one-shot with no further occurrence.
    */
   nextRunAt?: string | null;
@@ -536,7 +536,7 @@ export type ScheduledRun = {
    * finished run, and neither is reported as success.
    */
   result: "running" | "completed" | "awaiting-approval" | "skipped" | "failed";
-  /** [Pencil T17] #152 the model that actually served the run (absent = never started). */
+  /** [Pencil T17] the model that actually served the run (absent = never started). */
   actualModel?: string;
   /** Named failure code (`credential-missing`, `directory-missing`, …). */
   failureCode?: string;
