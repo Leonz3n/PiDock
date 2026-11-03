@@ -205,6 +205,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
    * session the Host did not report.
    */
   const [sessionList, setSessionList] = useState<SessionListRead>({ phase: "reading" });
+  /** True once the reader has chosen a session in this mount; see `loadSessions`. */
+  const picked = useRef(false);
   const [activeSessionId, setActiveSessionId] = useState<string>(initialSessionId ?? SDK_SESSION_ID);
   const sessionId = activeSessionId;
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
@@ -370,6 +372,10 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   }, [taskMenu, archivePrompt, archiveBusy]);
   useEffect(() => {
     if (invalidated) { setConnected(false); setValid(false); return; }
+    // [#139] Wait for the session list before connecting: a page that subscribed
+    // to the `main` fallback first and then jumped to the Host's active session
+    // would show one session's history for a frame and issue a needless subscribe.
+    if (sessionList.phase === "reading") return;
     const epoch = ++generation.current;
     const generationRef = generation;
     const poll = window.setInterval(() => {
@@ -449,7 +455,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     };
     void connect();
     return () => { if (generationRef.current === epoch) generationRef.current++; window.clearInterval(poll); off?.(); if (subscribed) void request("unsubscribe").catch(() => {}); };
-  }, [bridge, connectionKey, invalidated, queueDraftSave, reconcile, request, sessionId, taskId, verify]);
+  }, [bridge, connectionKey, invalidated, queueDraftSave, reconcile, request, sessionId, sessionList.phase, taskId, verify]);
   const refresh = async () => {
     const epoch = generation.current;
     try { await verify(); if (epoch !== generation.current) return; await reconcile(epoch, attemptRef.current?.requestId); if (epoch === generation.current) setValid(true); }
@@ -667,14 +673,18 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
    * the page then keeps addressing the migrated `main` session, which the Host
    * always keeps for a task that predates this ticket.
    */
-  const loadSessions = useCallback(async (options: { adoptActive?: boolean } = {}) => {
+  const loadSessions = useCallback(async () => {
     const result = await readTaskSessions(taskId);
     if (!result.ok) { setSessionList({ phase: "failed", error: result.error }); return; }
     setSessionList({ phase: "read", list: result.list });
-    if (options.adoptActive !== false) {
-      const target = result.list.activeSessionId ?? result.list.sessions.find((session) => !session.archived)?.id ?? SDK_SESSION_ID;
-      setActiveSessionId((current) => (result.list.sessions.some((session) => session.id === current && !session.archived) ? current : target));
-    }
+    // The Host's active pointer wins on the first read; once the reader has picked
+    // a session, only a session that no longer exists (archived or deleted) moves
+    // them — never a silent jump back.
+    const target = result.list.activeSessionId ?? result.list.sessions.find((session) => !session.archived)?.id ?? SDK_SESSION_ID;
+    setActiveSessionId((current) => {
+      const present = result.list.sessions.some((session) => session.id === current && !session.archived);
+      return picked.current && present ? current : target;
+    });
   }, [taskId]);
   useEffect(() => { void loadSessions(); }, [loadSessions]);
   // The sidebar's session rows navigate here: an explicitly named session wins
@@ -706,6 +716,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     streamRef.current = ""; setStream(""); sequence.current.clear();
     setSnapshot(null); setInvalidated(false); setConnected(false); setValid(false);
     setNotice("正在连接 SDK 会话");
+    picked.current = true;
     setActiveSessionId(next);
   }, [taskId]);
   const switchToSession = async (target: TaskSession) => {
@@ -787,7 +798,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     if (readoutAttempt.current !== attempt) return;
     setReadoutRead(result.ok ? { phase: "read", readout: result.readout } : { phase: "failed", error: result.error });
   }, [sessionId, taskId]);
-  useEffect(() => { void loadReadout(); }, [loadReadout]);
+  // A readout is only read for a session the page has actually resolved; before
+  // the list answers there is no session to read.
+  useEffect(() => { if (sessionList.phase === "reading") return; void loadReadout(); }, [loadReadout, sessionList.phase]);
   const readout = readoutRead.phase === "read" ? readoutRead.readout : null;
   /** The model this session is actually bound to: its own binding, else the installed default. */
   const boundModelId = readout?.session.binding?.modelId
@@ -814,7 +827,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     readoutAttempt.current += 1;
     setReadoutRead({ phase: "read", readout: result.readout });
     setModelOpen(false);
-    void loadSessions({ adoptActive: false });
+    void loadSessions();
   };
   const chooseThinking = async (level: SessionThinkingLevel) => {
     if (thinkingBusy) return;
@@ -996,7 +1009,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
               <span className="text-[10px] text-muted">{session.binding?.modelId ?? "跟随任务模型"} · {session.id}</span>
             </div>}
             <div className="mt-1 flex flex-wrap items-center gap-1">
-              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy || session.archived || session.id === sessionId} onClick={() => void switchToSession(session)}>{session.archived ? "已归档" : session.id === sessionId ? "当前会话" : "继续对话"}</Button>
+              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy || session.archived || session.id === sessionId} onClick={() => void switchToSession(session)}>{session.id === sessionId ? "当前会话" : "继续对话"}</Button>
               <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => setRenaming({ id: session.id, name: session.name })}>重命名</Button>
               {session.archived
                 ? <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void restoreOne(session.id)}>恢复</Button>
@@ -1102,7 +1115,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
               : reasoningLevels.length === 0 ? <span className="px-1.5 py-0.5 text-[10px] text-muted">无推理档位</span>
               : reasoningLevels.map((level: SessionThinkingLevel) => <Button key={level} type="button" size="sm" variant={level === thinkingLevel ? "secondary" : "ghost"} aria-pressed={level === thinkingLevel} disabled={thinkingBusy} className="h-6 px-1.5 text-[10px]" onClick={() => void chooseThinking(level)}>{REASONING_LEVEL_TEXT[level] ?? level}</Button>)}
           </div>
-          {thinkingError && readoutRead.phase === "read" && <span role="alert" className="min-w-0 break-words text-[10px] text-[#ad4545]">{thinkingError}</span>}
+          {thinkingError && !modelOpen && <span role="alert" className="min-w-0 break-words text-[10px] text-[#ad4545]">{thinkingError}</span>}
           <span data-testid="composer-context" title={contextTitle} className="min-w-0 break-words">{contextLabel}</span>
           <span data-testid="composer-usage" title={`${usageDetail} 本会话 SDK 累计：${readout?.usage ? `输入 ${readout.usage.input} / 输出 ${readout.usage.output} / 缓存读 ${readout.usage.cacheRead} / 写 ${readout.usage.cacheWrite}（${readout.turns} 条回复）` : "SDK 未报告"}`} className="ml-auto min-w-0 break-words">
             {!usageSnapshot ? "近期用量未核验" : reportedMessages.length ? `近期已报告输入+输出 ${recentTokens} tokens` : "近期用量未报告"}

@@ -415,7 +415,7 @@ describe("Desktop SDK conversation", () => {
     const usage = await screen.findByTestId("composer-usage");
     await waitFor(() => expect(usage.getAttribute("title")).toContain("本会话 SDK 累计：SDK 未报告"));
     expect(usage.getAttribute("title")).not.toContain("输入 0 /");
-    expect(usage).toHaveTextContent("近期已报告输入+输出 120 tokens");
+    await waitFor(() => expect(usage).toHaveTextContent("近期已报告输入+输出 120 tokens"));
   });
 
   it("labels composer usage as recent reported input and output, not session cumulative usage", async () => {
