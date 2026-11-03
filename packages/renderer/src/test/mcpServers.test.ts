@@ -61,6 +61,11 @@ describe("MCP renderer contract", () => {
   it("parses a real test result and a real failure, and names a missing bridge", async () => {
     expect(parseMcpTest({ state: "connected", tools: [{ name: "echo", description: "Echo", readOnly: true }], credentialRefs: [], error: null })).toMatchObject({ state: "connected", tools: [{ name: "echo", readOnly: true }] });
     expect(parseMcpTest({ state: "failed", tools: [], credentialRefs: ["TOKEN"], error: { code: "mcp-timeout", message: "timeout" } })).toMatchObject({ state: "failed", credentialRefs: ["TOKEN"], error: { code: "mcp-timeout" } });
+    // [#154] the Host's OWN connected result: no `error` key, tools as Pi lists
+    // them (no description/readOnly annotation). The pane must render it.
+    expect(parseMcpTest({ state: "connected", tools: [{ name: "echo" }], credentialRefs: [], durationMs: 12 })).toMatchObject({
+      state: "connected", tools: [{ name: "echo", description: "", readOnly: false }], error: null,
+    });
     await expect(mcpCall(undefined, { op: "list" })).rejects.toThrow("桌面壳 MCP 接口不可用");
     await expect(mcpCall({ mcpOp: async () => ({ ok: false, error: "MCP 配置尚未接入" }) }, { op: "list" })).rejects.toThrow("MCP 配置尚未接入");
   });
