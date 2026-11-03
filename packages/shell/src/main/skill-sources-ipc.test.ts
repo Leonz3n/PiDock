@@ -1,6 +1,8 @@
 /**
- * [Pencil T16] #151: the Skills channel accepts exactly four named ops and
- * never a config document, a relative path or an extra field.
+ * [Pencil T16] #151: the Skills channel accepts exactly its named ops and never
+ * a config document, a relative path or an extra field. `open` resolves the
+ * row's own file from main's scan, so the page never names a path and a source
+ * that is off/removed loses the file immediately.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +48,32 @@ describe("skills op", () => {
     expect(performSkillSourcesOperation({ op: "add", path: "relative/dir" }, userData)).toMatchObject({ ok: false, error: "请添加绝对路径的本地目录" });
     expect(performSkillSourcesOperation({ op: "add", path: `${source}-gone` }, userData)).toMatchObject({ ok: false, error: "该目录不存在或不可访问" });
     expect(performSkillSourcesOperation({ op: "add", path: file }, userData)).toMatchObject({ ok: false, error: "该路径不是目录" });
+  });
+
+  it("opens a skill file from its own row and re-verifies the source per call", () => {
+    const { userData, source } = app();
+    const added = performSkillSourcesOperation({ op: "add", path: source }, userData);
+    if (!added.ok) throw new Error(added.error);
+    const row = added.view.sources[0]!;
+    const key = row.skills[0]!.key;
+    const opened = performSkillSourcesOperation({ op: "open", key }, userData);
+    expect(opened).toMatchObject({ ok: true, open: join(source, "demo", "SKILL.md") });
+
+    // A path is never accepted from the page: only the row key is.
+    expect(performSkillSourcesOperation({ op: "open", key, path: join(source, "demo", "SKILL.md") }, userData))
+      .toMatchObject({ ok: false, error: "Skills 操作包含多余字段" });
+    expect(performSkillSourcesOperation({ op: "open", key: "../etc/passwd" }, userData))
+      .toMatchObject({ ok: false });
+
+    // Switched off: the scan has no such row any more, so nothing is opened.
+    expect(performSkillSourcesOperation({ op: "setEnabled", id: row.id, enabled: false }, userData).ok).toBe(true);
+    expect(performSkillSourcesOperation({ op: "open", key }, userData))
+      .toMatchObject({ ok: false, error: "该技能来源已停用，重新启用后才能打开" });
+
+    // Removed: the id no longer exists at all.
+    expect(performSkillSourcesOperation({ op: "remove", id: row.id }, userData).ok).toBe(true);
+    expect(performSkillSourcesOperation({ op: "open", key }, userData))
+      .toMatchObject({ ok: false, error: "技能不存在或来源已被移除" });
   });
 
   it("refuses unknown ops, extra fields and malformed ids", () => {

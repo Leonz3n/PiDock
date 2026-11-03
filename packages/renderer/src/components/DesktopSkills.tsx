@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   addSkillSource,
+  openSkillFile,
   readSkillSources,
   removeSkillSource,
   setSkillSourceEnabled,
@@ -44,10 +45,11 @@ function StatusBadge({ status, label }: { status: string; label: string }) {
   return <span className={`shrink-0 rounded-[3px] border px-1 py-[1px] text-[9px] font-semibold ${tone}`}>{label}</span>;
 }
 
-function SkillRow({ entry, duplicateLabels, bridgeSource }: {
+function SkillRow({ entry, duplicateLabels, bridgeSource, onOpen }: {
   entry: SkillEntryView;
   duplicateLabels: string[];
   bridgeSource: string;
+  onOpen: () => void;
 }) {
   return (
     <li data-testid={`skill-row-${entry.key}`} className="grid gap-1 border-t border-line px-3 py-2 first:border-t-0">
@@ -59,6 +61,9 @@ function SkillRow({ entry, duplicateLabels, bridgeSource }: {
             重名 · 按来源区分：{duplicateLabels.join(" / ")}
           </span>
         ) : null}
+        <button data-testid={`skill-open-${entry.key}`} type="button" className={BUTTON} onClick={onOpen}>
+          打开 SKILL.md
+        </button>
       </div>
       <p className="text-[10px] text-muted">{entry.description || "（SKILL.md 未声明 description）"}</p>
       <dl className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 gap-y-[2px] text-[9px] text-[#8a94a2]">
@@ -196,6 +201,7 @@ export function DesktopSkills({ bridge }: { bridge?: PidockBridge }) {
                     entry={entry}
                     duplicateLabels={entry.duplicates.map((key) => sourcePathOf(key.split("::")[0] ?? ""))}
                     bridgeSource={source.path}
+                    onOpen={() => void run(() => openSkillFile(bridge, entry.key))}
                   />
                 ))}
               </ul>

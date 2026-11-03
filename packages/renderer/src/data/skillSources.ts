@@ -73,6 +73,14 @@ export function setSkillSourceEnabled(bridge: PidockBridge | undefined, id: stri
 export function removeSkillSource(bridge: PidockBridge | undefined, id: string): Promise<SkillSourcesReply> {
   return call(bridge, { op: "remove", id });
 }
+/**
+ * Issue 151: open the row's own `SKILL.md` with the OS default handler. The page
+ * names the key the row already shows; main re-derives the file from its own
+ * scan, so no path crosses this bridge and nothing is written.
+ */
+export function openSkillFile(bridge: PidockBridge | undefined, key: string): Promise<SkillSourcesReply> {
+  return call(bridge, { op: "open", key });
+}
 
 export function skillSourceStatusLabel(status: SkillSourceScanView["status"]): string {
   return { ok: "已扫描", disabled: "已停用", missing: "来源缺失", unreadable: "无法访问" }[status];

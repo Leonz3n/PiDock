@@ -113,6 +113,14 @@ describe("Skills pane (S09 · Pencil T16)", () => {
     await waitFor(() => expect(within(screen.getByTestId(`skill-source-${SOURCE_A}`)).getByText("启用")).toBeInTheDocument());
   });
 
+  it("opens a skill's own SKILL.md through main's open op", async () => {
+    const { bridge, skillsOp } = harness(view());
+    render(<DesktopSkills bridge={bridge} />);
+    const key = `${SOURCE_A}::pdf-tools`;
+    fireEvent.click(await screen.findByTestId(`skill-open-${key}`));
+    await waitFor(() => expect(skillsOp).toHaveBeenCalledWith({ op: "open", key }));
+  });
+
   it("says the list is empty and names a corrupt document instead of showing sample cards", async () => {
     const empty = harness(view({ state: "empty", sources: [] }));
     const { unmount } = render(<DesktopSkills bridge={empty.bridge} />);

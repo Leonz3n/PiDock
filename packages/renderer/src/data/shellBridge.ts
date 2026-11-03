@@ -107,8 +107,9 @@ export interface PidockBridge {
   preferencesOp?: (request: PreferencesRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
    * [Pencil T16] Pencil T16 local Skills sources: `list` / `add` / `remove` /
-   * `setEnabled`. The page names a directory or a source id only; main owns the
-   * app-private document and the real-disk scan.
+   * `setEnabled` / `open`. The page names a directory, a source id or a row key
+   * only; main owns the app-private document, the real-disk scan and the file an
+   * `open` resolves (launched with the OS default handler, never written).
    */
   skillsOp?: (request: Record<string, unknown>) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /** [Pencil T18] 工单 153 scheduler phase + last unconfirmed quit (read-only). */
