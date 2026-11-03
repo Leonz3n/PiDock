@@ -1831,6 +1831,18 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  if (op === "task/scheduleWake") {
+    // [Pencil T18] #153: main supplies the resume instant; it is a timestamp,
+    // never a path or a task target.
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/scheduleWake payload must be an object" };
+    }
+    const at = payload === undefined ? undefined : payload["at"];
+    if (at !== undefined && (typeof at !== "string" || at.length === 0 || Number.isNaN(Date.parse(at)))) {
+      return { ok: false, error: "invalid-payload: task/scheduleWake.at must be an ISO timestamp" };
+    }
+    return { ok: true };
+  }
   if (op === "task/scheduleRuns") {
     if (payload !== undefined && !isRecord(payload)) {
       return { ok: false, error: "invalid-payload: task/scheduleRuns payload must be an object" };
