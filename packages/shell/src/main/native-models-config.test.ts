@@ -157,5 +157,21 @@ it("rejects profile ids that would escape the namespaced key", () => {
 it("resolves the agent directory with the testable override", () => {
   expect(resolveAgentDir({}, "/home/user")).toBe(join("/home/user", ".pi", "agent"));
   expect(resolveAgentDir({ PIDOCK_AGENT_DIR: "/tmp/agent" }, "/home/user")).toBe("/tmp/agent");
+  // S10: the override picks the file PiDock writes, so a relative path (which
+  // would resolve against whatever cwd Electron started in) is refused.
+  expect(() => resolveAgentDir({ PIDOCK_AGENT_DIR: "relative/agent" }, "/home/user")).toThrow("provider-agent-dir-invalid");
+  expect(() => resolveAgentDir({ PIDOCK_AGENT_DIR: "./agent" }, "/home/user")).toThrow("provider-agent-dir-invalid");
+  // A blank override is not an override.
+  expect(resolveAgentDir({ PIDOCK_AGENT_DIR: "   " }, "/home/user")).toBe(join("/home/user", ".pi", "agent"));
   expect(modelsJsonPath("/tmp/agent")).toBe(join("/tmp/agent", "models.json"));
+});
+
+// S11: the `.bak` copy holds no secret but is still Pi configuration, so it
+// must be as private as the file it copies.
+it("keeps the .bak copy private (0600) instead of the umask default", () => {
+  const { models, dir } = file();
+  models.write(PROFILE, entry);
+  models.write(PROFILE, { ...entry, name: "Renamed" });
+  const mode = statSync(join(dir, "models.json.bak")).mode & 0o777;
+  expect(mode).toBe(0o600);
 });

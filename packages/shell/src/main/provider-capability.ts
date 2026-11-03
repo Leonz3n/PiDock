@@ -50,15 +50,32 @@ export function availableReasoningLevels(row: DeclaredModel): ReasoningTier[] {
   return levels;
 }
 
+/**
+ * The level a selection starts on when the user has not picked one: `high`
+ * whenever the model declares it (the S03B default), otherwise the strongest
+ * tier the model does declare. `null` means the model declares reasoning but
+ * no usable tier, so there is nothing honest to select.
+ */
+export function defaultThinkingLevel(row: DeclaredModel): ReasoningTier | null {
+  const levels = availableReasoningLevels(row);
+  if (levels.length === 0) return null;
+  if (!row.reasoning) return levels.includes("off") ? "off" : null;
+  if (levels.includes("high")) return "high";
+  // `REASONING_TIERS` is ordered weakest → strongest, and `off` is not a tier
+  // a reasoning model should silently fall back to when it declares thinking.
+  return [...levels].reverse().find((tier) => tier !== "off") ?? levels[0]!;
+}
+
 export type LevelResolution =
   | { ok: true; level: ReasoningTier; clamped: boolean }
   | { ok: false; error: { code: "thinking-unsupported" | "thinking-level-not-declared"; message: string } };
 
 /**
- * Resolve a requested level against the declared capability. An unsupported
- * request is clamped to the closest declared level (`off` for a non-reasoning
- * model) and reported as clamped, so a stale session preference cannot make the
- * request carry a level the endpoint was never declared to accept.
+ * Resolve a requested level against the declared capability. No request means
+ * `defaultThinkingLevel` (never the weakest tier); an explicit request the model
+ * does not declare is clamped to that default and reported as clamped, so a
+ * stale session preference cannot make the request carry a level the endpoint
+ * was never declared to accept.
  */
 export function resolveThinkingLevel(row: DeclaredModel, requested: unknown): LevelResolution {
   const levels = availableReasoningLevels(row);
@@ -68,14 +85,9 @@ export function resolveThinkingLevel(row: DeclaredModel, requested: unknown): Le
   if (typeof requested === "string" && (levels as string[]).includes(requested)) {
     return { ok: true, level: requested as ReasoningTier, clamped: false };
   }
-  if (!row.reasoning) {
-    // "off" is supported exactly when the SDK lists it (a non-reasoning model).
-    return levels.includes("off")
-      ? { ok: true, level: "off", clamped: requested !== undefined }
-      : { ok: false, error: { code: "thinking-unsupported", message: "当前模型不支持推理档位" } };
-  }
-  const fallback = levels.find((tier) => tier !== "off") ?? levels[0]!;
-  return { ok: true, level: fallback, clamped: true };
+  const fallback = defaultThinkingLevel(row);
+  if (fallback === null) return { ok: false, error: { code: "thinking-unsupported", message: "当前模型不支持推理档位" } };
+  return { ok: true, level: fallback, clamped: requested !== undefined };
 }
 
 /** True when the model declares that reasoning can be turned off. */

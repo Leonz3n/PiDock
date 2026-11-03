@@ -23,8 +23,8 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 
 /** The SDK API ids PiDock supports explicitly (never guessed from a vendor or URL). */
 export const NATIVE_APIS = ["openai-completions", "openai-responses", "anthropic-messages"] as const;
@@ -76,10 +76,18 @@ export function isManagedProviderId(value: unknown): value is string {
   return typeof value === "string" && PROVIDER_ID.test(value);
 }
 
-/** The default Pi agent directory; `PIDOCK_AGENT_DIR` overrides it (tests, alternate homes). */
+/**
+ * The default Pi agent directory; `PIDOCK_AGENT_DIR` overrides it (tests,
+ * alternate homes). The override decides which file PiDock writes, so it must
+ * be an absolute path: a relative one would silently resolve against whatever
+ * working directory the app was started in.
+ */
 export function resolveAgentDir(env: Record<string, string | undefined>, home: string): string {
   const override = env["PIDOCK_AGENT_DIR"];
-  if (typeof override === "string" && override.trim().length > 0) return override;
+  if (typeof override === "string" && override.trim().length > 0) {
+    if (!isAbsolute(override.trim())) throw new Error("provider-agent-dir-invalid");
+    return override.trim();
+  }
   return join(home, ".pi", "agent");
 }
 
@@ -209,9 +217,27 @@ export class NativeModelsFile {
     return true;
   }
 
+  /**
+   * Put back an entry read earlier from this file, verbatim. Used to undo a
+   * managed write whose metadata half failed, so the file never keeps a
+   * `pidock-*` provider that PiDock has no profile for.
+   */
+  restore(profileId: string, entry: unknown): void {
+    const providerId = managedProviderId(profileId);
+    const read = this.read();
+    if (!read.ok) throw new Error("provider-models-unreadable");
+    this.commit({ ...read.raw, providers: { ...read.providers, [providerId]: entry as Record<string, unknown> } }, existsSync(this.file));
+  }
+
   private commit(root: Record<string, unknown>, backup: boolean): void {
     mkdirSync(this.agentDir, { recursive: true, mode: 0o700 });
-    if (backup) copyFileSync(this.file, this.backup);
+    if (backup) {
+      copyFileSync(this.file, this.backup);
+      // `copyFileSync` does not carry the source mode, so the backup would be
+      // created with the umask defaults. It holds no secret (only `$ENV`
+      // references), but it is still Pi configuration and stays private.
+      try { chmodSync(this.backup, 0o600); } catch { /* a read-only parent keeps the copy as-is */ }
+    }
     const temporary = join(dirname(this.file), `.${FILE}.${randomUUID()}.tmp`);
     try {
       const descriptor = openSync(temporary, "wx", 0o600);

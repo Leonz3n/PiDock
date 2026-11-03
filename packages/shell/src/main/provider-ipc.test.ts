@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { ProviderWiring, type ProviderInstall, type ProviderInstaller } from "./provider-ipc.js";
 import { ProviderProfileStore, type ProviderProfileInput } from "./provider-profile-store.js";
+import { ProviderSecretStore, createTestSafeStorage } from "./provider-secret-store.js";
 
 const SECRET = "sk-live-0123456789-abcdefghijklmnop";
 const ENV = { PIDOCK_PROVIDER_EXAMPLE: SECRET };
@@ -218,4 +219,75 @@ it("does not let a stale failure mask a later success", async () => {
   const status = (await providers.perform({ op: "list", taskId: "task-1" }, 1)) as { state: string };
   expect(status.state).toBe("configured");
   expect(install).toHaveBeenCalledTimes(1);
+});
+
+// [PiDock T03] #138 W9: the level a turn runs at must be the chosen one, not
+// silently the weakest declared tier.
+it("carries the default level (high) through select into the install and the view", async () => {
+  const { store, calls, wiring: providers } = wiring();
+  const profile = store.save(input);
+  // The profile's active model does not declare reasoning: its default is off.
+  const status = await providers.select("task-1", profile.id, "gpt-5-mini", undefined, 1);
+  expect(status.thinkingLevel).toBe("off");
+  expect(status.profiles[0]!.thinkingLevel).toBe("off");
+  // The reasoning model defaults to `high`, and that is what the Host receives.
+  const reasoning = await providers.perform({ op: "select", taskId: "task-2", profileId: profile.id, modelId: "gpt-5" }, 1) as {
+    thinkingLevel: string; profiles: { thinkingLevel: string | null }[];
+  };
+  expect(reasoning.thinkingLevel).toBe("high");
+  expect(store.selection("task-2")).toMatchObject({ modelId: "gpt-5", thinkingLevel: "high" });
+  expect(calls.at(-1)?.provider?.thinkingLevel).toBe("high");
+  // The view exposes the default for the active model so the UI can show it.
+  const reasoningProfile = store.save({ ...input, modelId: "gpt-5" });
+  const listed = await providers.perform({ op: "list" }, 1) as { profiles: { id: string; thinkingLevel: string | null }[] };
+  expect(listed.profiles.find((view) => view.id === reasoningProfile.id)?.thinkingLevel).toBe("high");
+});
+
+// [PiDock T03] #138 W6: one honestly-declared "no usable tier" row must not make
+// the whole list unreadable.
+it("accepts a reasoning model that declares no usable tier and reports it as such", async () => {
+  const { wiring: providers } = wiring();
+  const saved = (await providers.perform({ op: "save", profile: {
+    ...wire,
+    models: [{ id: "gpt-5", name: "GPT-5", contextWindow: 200000, maxTokens: 16384, reasoning: true, reasoningLevels: [] }],
+    modelId: "gpt-5",
+  } }, 1)) as { profile: { id: string; models: { reasoningLevels: string[] }[]; thinkingLevel: string | null } };
+  expect(saved.profile.models[0]!.reasoningLevels).toEqual([]);
+  expect(saved.profile.thinkingLevel).toBeNull();
+  // The list still reads, and does not invent `off` for the row.
+  const listed = (await providers.perform({ op: "list" }, 1)) as { profiles: { models: { reasoningLevels: string[] }[] }[] };
+  expect(listed.profiles[0]!.models[0]!.reasoningLevels).toEqual([]);
+  // Selecting it fails by name instead of pretending a level exists.
+  await expect(providers.select("task-1", saved.profile.id, "gpt-5", undefined, 1)).rejects.toThrow(/thinking level/);
+});
+
+// [PiDock T03] #138 W8: only the two platform-encryption failures mean "no
+// secure storage"; a rejected key is a different, named problem.
+it("names a rejected key and an unreadable store separately from unavailable encryption", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pidock-provider-ipc-"));
+  const store = new ProviderProfileStore(dir);
+  const failing = (message: string) => {
+    class Rejecting extends ProviderSecretStore {
+      override set(): number { throw new Error(message); }
+    }
+    return new Rejecting(dir, createTestSafeStorage());
+  };
+  const codes: (string | undefined)[] = [];
+  for (const message of [
+    "provider-secret-invalid",
+    "provider-secret-unreadable",
+    "provider-secret-store-unavailable",
+    "provider-secret-encrypt-failed",
+  ]) {
+    const providers = new ProviderWiring(store, async () => {}, ENV, { secrets: failing(message) });
+    try {
+      await providers.perform({ op: "save", profile: { ...wire, name: `Reject ${message}` }, apiKey: SECRET }, 1);
+      codes.push(undefined);
+    } catch (error) {
+      codes.push((error as { code?: string }).code);
+    }
+  }
+  // Only the two encryption failures are "安全存储不可用"; the others keep
+  // their own cause (a rejected key, a damaged store file).
+  expect(codes).toEqual(["credential-invalid", "secret-store-unreadable", "secret-store-unavailable", "secret-store-unavailable"]);
 });

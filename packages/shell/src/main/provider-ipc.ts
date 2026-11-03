@@ -24,7 +24,7 @@ import { randomUUID } from "node:crypto";
 import type { ProviderProfile, ProviderProfileInput, ProviderCredentialRef } from "./provider-profile-store.js";
 import { validateExplicitTextProvider, type ExplicitTextProvider } from "../host/explicit-text-provider.js";
 import { resolveProviderCredential, type ProviderProfileStore } from "./provider-profile-store.js";
-import { availableReasoningLevels, resolveThinkingLevel } from "./provider-capability.js";
+import { availableReasoningLevels, defaultThinkingLevel, resolveThinkingLevel } from "./provider-capability.js";
 import type { ProviderSecretStore } from "./provider-secret-store.js";
 import {
   NativeModelsFile,
@@ -84,7 +84,6 @@ export interface ProviderModelView {
   /** Declared price, or `null` when unknown — never a fabricated zero. */
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number } | null;
 }
-
 export interface ProviderView {
   id: string;
   name: string;
@@ -94,6 +93,12 @@ export interface ProviderView {
   models: ProviderModelView[];
   /** The model a new selection defaults to. */
   modelId: string;
+  /**
+   * The level a new selection of `modelId` starts on (`high` when declared),
+   * or `null` when the model declares no usable tier. The UI shows this so the
+   * level a turn will actually run at is never a guess.
+   */
+  thinkingLevel: ReasoningTier | null;
   /** Active model's declared window/output (kept for the composer readout). */
   contextWindow: number;
   maxTokens: number;
@@ -194,14 +199,20 @@ function modelInput(value: unknown): ProviderProfileInput["models"][number] {
   const reasoningLevels = value["reasoningLevels"];
   let thinkingLevelMap: Record<string, string | null> | undefined;
   if (reasoningLevels !== undefined) {
-    if (!Array.isArray(reasoningLevels) || reasoningLevels.length === 0) throw new TrustDomainViolation("invalid-payload", "invalid provider reasoning levels");
+    // An empty list is a *declared* fact: the model declares reasoning but no
+    // tier it can actually use. Refusing it here would make one hand-written
+    // row unreadable for the whole list, so it is accepted and surfaced as
+    // "无可用档位" instead (selecting it then fails by name).
+    if (!Array.isArray(reasoningLevels) || reasoningLevels.some((level) => typeof level !== "string")) {
+      throw new TrustDomainViolation("invalid-payload", "invalid provider reasoning levels");
+    }
+    if (!reasoning) throw new TrustDomainViolation("invalid-payload", "invalid provider reasoning levels");
     // The UI sends the declared *subset*; the SDK map is derived here so both
     // sides agree (declared levels map to themselves, the rest to null).
     thinkingLevelMap = {};
     for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
       thinkingLevelMap[level] = (reasoningLevels as unknown[]).includes(level) ? level : null;
     }
-    if (!reasoning) throw new TrustDomainViolation("invalid-payload", "invalid provider reasoning levels");
   }
   return {
     id, name, contextWindow: contextWindow as number, maxTokens: maxTokens as number, reasoning,
@@ -316,6 +327,7 @@ export class ProviderWiring {
         cost: row.cost ?? null,
       })),
       modelId: profile.modelId,
+      thinkingLevel: defaultThinkingLevel(active),
       contextWindow: active.contextWindow,
       maxTokens: active.maxTokens,
       authRef: profile.credentials.kind === "env" ? profile.credentials.ref : profile.id,
@@ -566,13 +578,16 @@ export class ProviderWiring {
       if (!this.options.secrets) throw new ProviderRefusal("secret-store-unavailable");
       try { revision = this.options.secrets.set(id, apiKey); }
       catch (error) {
-        // The platform cannot encrypt, so the save is refused rather than
-        // downgraded to plaintext.
-        if (error instanceof Error && error.message.startsWith("provider-secret")) throw new ProviderRefusal("secret-store-unavailable");
-        throw error;
+        // Every refusal keeps its own cause: only the two platform-encryption
+        // failures mean "no secure storage", a rejected key is a data problem.
+        throw secretRefusal(error);
       }
     }
     let written: { fingerprint: string } | null = null;
+    // The entry as the file holds it *right now*: a metadata write that fails
+    // after the native write has to put this back, or Pi keeps a `pidock-*`
+    // provider PiDock has no profile (and, for a stored key, no ciphertext) for.
+    const previous = native?.entry(id);
     try { written = native?.write(id, entry) ?? null; }
     catch {
       if (apiKey !== undefined) this.options.secrets?.remove(id);
@@ -589,16 +604,25 @@ export class ProviderWiring {
         native: nativeRef,
       });
     } catch (error) {
-      // A store write that never made it to metadata must not leave a stray key
-      // (or a native entry for a profile that does not exist).
+      // The metadata half failed: undo both halves that did land, so neither a
+      // stray key nor a native entry for a profile that does not exist remains.
       if (apiKey !== undefined) this.options.secrets?.remove(id);
+      if (native) {
+        try {
+          if (previous === undefined) native.remove(id);
+          else native.restore(id, previous);
+        } catch {
+          // Rolling back is best effort: the next `list` reports the truth
+          // (`modified`/`removed`) instead of claiming the save worked.
+        }
+      }
       throw error;
     }
     return { profile: this.view(saved), status: this.status(undefined), conflict: null, written: true };
   }
 
   /** Removes the profile, its native entry and its stored credential. */
-  async remove(id: string, taskId: string | undefined, sender: number): Promise<ProviderStatus> {
+  async remove(id: string, taskId: string | undefined, sender: number, reconcile = false): Promise<ProviderStatus> {
     if (taskId !== undefined) {
       const selection = this.store.selection(taskId);
       if (selection?.profileId === id) {
@@ -610,10 +634,28 @@ export class ProviderWiring {
         this.store.deselect(taskId);
       }
     }
-    this.options.native?.remove(id);
+    // `save` refuses to overwrite an entry someone edited (or deleted) outside
+    // PiDock; removing it destroys that external value the same way, so it needs
+    // the same explicit acknowledgement instead of the asymmetry `save` lacks.
+    const native = this.options.native;
+    if (native !== undefined) {
+      const recorded = this.profileOrNull(id)?.native.fingerprint ?? null;
+      if (recorded !== null) {
+        const state = native.state(id, recorded);
+        if (state === "unreadable") throw new ProviderRefusal("models-unreadable");
+        if (!reconcile && (state === "modified" || state === "removed")) throw new ProviderRefusal("native-conflict");
+      }
+      try { native.remove(id); }
+      catch { throw new ProviderRefusal("models-unreadable"); }
+    }
     try { this.options.secrets?.remove(id); } catch { /* A store that cannot read its own file has nothing to delete. */ }
     this.store.remove(id);
     return this.status(taskId);
+  }
+
+  private profileOrNull(id: string): ProviderProfile | null {
+    try { return this.store.profile(id); }
+    catch { return null; }
   }
 
   /** Real model discovery with the stored (or one-shot) credential. */
@@ -671,8 +713,8 @@ export class ProviderWiring {
         return { profile: saved.profile, status: saved.status, conflict: saved.conflict, written: saved.written };
       }
       case "remove": {
-        const args = shape(request, "remove", ["profileId"], ["taskId"]);
-        return this.remove(profileId(args["profileId"]), args["taskId"] === undefined ? undefined : taskId(args["taskId"]), sender);
+        const args = shape(request, "remove", ["profileId"], ["taskId", "reconcile"]);
+        return this.remove(profileId(args["profileId"]), args["taskId"] === undefined ? undefined : taskId(args["taskId"]), sender, args["reconcile"] === true);
       }
       case "select": {
         const args = shape(request, "select", ["taskId", "profileId"], ["modelId", "thinkingLevel"]);
@@ -720,16 +762,47 @@ export class ProviderWiring {
 }
 
 /** Bounded refusals a renderer may name; the raw reason never crosses the IPC. */
-export type ProviderRefusalCode = "credential-required" | "credential-missing" | "secret-store-unavailable" | "models-unreadable";
+export type ProviderRefusalCode =
+  | "credential-required"
+  | "credential-missing"
+  /** The key itself was rejected (length/whitespace), not the keychain. */
+  | "credential-invalid"
+  | "secret-store-unavailable"
+  /** The store file exists but cannot be read/decrypted as a document. */
+  | "secret-store-unreadable"
+  | "models-unreadable"
+  /** The managed `models.json` entry was changed/removed outside PiDock. */
+  | "native-conflict";
 
 export class ProviderRefusal extends Error {
   constructor(readonly code: ProviderRefusalCode) { super(`provider-${code}`); }
+}
+
+/**
+ * Keeps a secret-store refusal's own cause. Only the two platform-encryption
+ * failures mean "no secure storage": a rejected key, an unreadable store file
+ * and a malformed profile id are different problems with different fixes.
+ */
+function secretRefusal(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : "";
+  if (message === "provider-secret-invalid") return new ProviderRefusal("credential-invalid");
+  if (message === "provider-secret-unreadable") return new ProviderRefusal("secret-store-unreadable");
+  if (message === "provider-secret-store-unavailable" || message === "provider-secret-encrypt-failed") {
+    return new ProviderRefusal("secret-store-unavailable");
+  }
+  // The id PiDock generated cannot be malformed; if it ever is, that is a
+  // payload problem, not an encryption one.
+  if (message === "provider-secret-profile-invalid") return new TrustDomainViolation("invalid-payload", "invalid provider profile ID");
+  return error;
 }
 
 /** Fixed renderer-facing sentences; no raw text and no secret can ride along. */
 export const PROVIDER_REFUSAL_TEXT: Record<ProviderRefusalCode, string> = {
   "credential-required": "保存这份 Provider 需要 API Key：请填写密钥，或改用环境变量引用",
   "credential-missing": "尚未保存可用的凭据：请填写 API Key 后重试",
+  "credential-invalid": "API Key 不符合要求：需要 8–4096 个字符，且不含首尾空白或控制字符",
   "secret-store-unavailable": "本机无法加密保存密钥（系统安全存储不可用），已拒绝以明文保存",
+  "secret-store-unreadable": "本机密钥存储无法读取（文件损坏或权限变化），已停止保存，不会退化成明文",
   "models-unreadable": "Pi 的 models.json 无法解析，已停止写入以免破坏现有配置",
+  "native-conflict": "models.json 里的这份条目已被外部修改或删除：确认后会连同外部版本一起移除",
 };

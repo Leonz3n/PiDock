@@ -253,7 +253,10 @@ it("tests connectivity with a real protocol-shaped request and names failures", 
     expect(String(calls[0]!.url).endsWith(protocol === "anthropic-messages" ? "/messages" : protocol === "openai-responses" ? "/responses" : "/chat/completions")).toBe(true);
   }
 
-  for (const [status, code] of [[401, "auth-rejected"], [403, "auth-rejected"], [404, "endpoint-not-found"], [429, "rate-limited"], [500, "provider-error"], [400, "provider-error"]] as const) {
+  // A 3xx is named as the redirect it is: PiDock asks not to follow it (the
+  // target could carry the credential elsewhere), so it is neither a server
+  // error nor a working endpoint.
+  for (const [status, code] of [[401, "auth-rejected"], [403, "auth-rejected"], [404, "endpoint-not-found"], [429, "rate-limited"], [302, "redirect-refused"], [301, "redirect-refused"], [500, "provider-error"], [400, "provider-error"]] as const) {
     const { impl } = fetchStub(() => ({ status, json: { echo: SECRET } }));
     const { providers } = discoveryFixture(impl);
     const outcome = (await providers.probe({ protocol: "openai-completions", baseUrl: wire.baseUrl, modelId: "m", apiKey: SECRET }, {} as never));
@@ -262,4 +265,80 @@ it("tests connectivity with a real protocol-shaped request and names failures", 
     // The response body echoed the key; the outcome must not.
     expect(JSON.stringify(outcome)).not.toContain(SECRET);
   }
+});
+
+// [PiDock T03] #138 C1: the metadata write is the second half of a save. When it
+// fails, the native half must be undone — Pi must never keep a `pidock-*`
+// provider that PiDock has no profile (or no ciphertext) for.
+it("removes a freshly written native entry when the metadata write fails", async () => {
+  const f = fixture();
+  const path = join(f.agentDir, "models.json");
+  const failure = vi.spyOn(f.profiles, "save").mockImplementation(() => { throw new Error("provider registry unreadable"); });
+  await expect(f.providers.perform({ op: "save", profile: wire, apiKey: SECRET }, 1)).rejects.toThrow("provider registry unreadable");
+  failure.mockRestore();
+
+  // No orphan entry in Pi's file, and no orphan ciphertext in the store.
+  const document = JSON.parse(readFileSync(path, "utf8"));
+  expect(Object.keys(document.providers)).toEqual([]);
+  expect(Object.keys(JSON.parse(readFileSync(join(f.userData, "provider-secrets.json"), "utf8")).secrets)).toEqual([]);
+  expect(f.profiles.list().profiles).toHaveLength(0);
+});
+
+it("restores the previous native entry when an edit's metadata write fails", async () => {
+  const f = fixture();
+  const saved = (await f.providers.perform({ op: "save", profile: wire, apiKey: SECRET }, 1)) as { profile: { id: string } };
+  const path = join(f.agentDir, "models.json");
+  const original = JSON.parse(readFileSync(path, "utf8")).providers[`pidock-${saved.profile.id}`];
+
+  const failure = vi.spyOn(f.profiles, "save").mockImplementation(() => { throw new Error("provider registry unreadable"); });
+  await expect(f.providers.perform({
+    op: "save",
+    profile: { ...wire, id: saved.profile.id, name: "Renamed", baseUrl: "https://changed.example.test/v1" },
+  }, 1)).rejects.toThrow("provider registry unreadable");
+  failure.mockRestore();
+
+  // The prior value is back, so the recorded fingerprint still matches and the
+  // entry is not reported as an external edit.
+  expect(JSON.parse(readFileSync(path, "utf8")).providers[`pidock-${saved.profile.id}`]).toEqual(original);
+  const listed = (await f.providers.perform({ op: "list" }, 1)) as { profiles: { native: { state: string } }[] };
+  expect(listed.profiles[0]!.native.state).toBe("synced");
+  expect(f.profiles.list().profiles[0]!.name).toBe("DeepSeek");
+});
+
+// [PiDock T03] #138 W7: removing a managed entry destroys an external value
+// exactly like overwriting it, so it needs the same explicit acknowledgement.
+it("refuses to remove a managed entry that was edited outside PiDock", async () => {
+  const f = fixture();
+  const saved = (await f.providers.perform({ op: "save", profile: wire, apiKey: SECRET }, 1)) as { profile: { id: string } };
+  const id = saved.profile.id;
+  const path = join(f.agentDir, "models.json");
+  const document = JSON.parse(readFileSync(path, "utf8"));
+  document.providers[`pidock-${id}`] = { ...document.providers[`pidock-${id}`], baseUrl: "https://hand-edited.example.test/v1" };
+  writeFileSync(path, JSON.stringify(document));
+
+  await expect(f.providers.perform({ op: "remove", profileId: id }, 1)).rejects.toMatchObject({ code: "native-conflict" });
+  // Nothing was deleted: the external value and the profile both survive.
+  expect(f.profiles.list().profiles).toHaveLength(1);
+  expect(JSON.parse(readFileSync(path, "utf8")).providers[`pidock-${id}`].baseUrl).toBe("https://hand-edited.example.test/v1");
+  expect(f.secrets.has(id)).toBe(true);
+
+  // The explicit acknowledgement goes through.
+  await f.providers.perform({ op: "remove", profileId: id, reconcile: true }, 1);
+  expect(f.profiles.list().profiles).toHaveLength(0);
+  expect(JSON.parse(readFileSync(path, "utf8")).providers[`pidock-${id}`]).toBeUndefined();
+  expect(f.secrets.has(id)).toBe(false);
+});
+
+it("refuses to remove a profile whose managed entry was deleted outside PiDock", async () => {
+  const f = fixture();
+  const saved = (await f.providers.perform({ op: "save", profile: wire, apiKey: SECRET }, 1)) as { profile: { id: string } };
+  const path = join(f.agentDir, "models.json");
+  const document = JSON.parse(readFileSync(path, "utf8"));
+  delete document.providers[`pidock-${saved.profile.id}`];
+  writeFileSync(path, JSON.stringify(document));
+
+  await expect(f.providers.perform({ op: "remove", profileId: saved.profile.id }, 1)).rejects.toMatchObject({ code: "native-conflict" });
+  expect(f.profiles.list().profiles).toHaveLength(1);
+  await f.providers.perform({ op: "remove", profileId: saved.profile.id, reconcile: true }, 1);
+  expect(f.profiles.list().profiles).toHaveLength(0);
 });

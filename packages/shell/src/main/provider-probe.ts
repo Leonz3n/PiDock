@@ -19,6 +19,7 @@ export type ProbeFailureCode =
   | "auth-rejected"
   | "endpoint-not-found"
   | "rate-limited"
+  | "redirect-refused"
   | "provider-error"
   | "network-unreachable"
   | "timeout";
@@ -110,6 +111,12 @@ export async function probeConnection(input: ProbeInput, deps: ProbeDeps = {}): 
     if (status === 401 || status === 403) return failure("auth-rejected", `凭据被端点拒绝（HTTP ${status}）`, input.protocol, latencyMs, status);
     if (status === 404) return failure("endpoint-not-found", "端点不存在（HTTP 404），请检查 Base URL 与协议", input.protocol, latencyMs, status);
     if (status === 429) return failure("rate-limited", "端点限流（HTTP 429），请稍后重试", input.protocol, latencyMs, status);
+    // A redirect is neither a server error nor a working endpoint: PiDock asked
+    // not to follow it (the target could carry the credential elsewhere), so it
+    // is named as what actually happened.
+    if (status >= 300 && status < 400) {
+      return failure("redirect-refused", `端点返回重定向（HTTP ${status}），已拒绝跟随；请改用最终地址`, input.protocol, latencyMs, status);
+    }
     if (status >= 400 && status < 500) return failure("provider-error", `请求被端点拒绝（HTTP ${status}），请检查模型 ID 与协议`, input.protocol, latencyMs, status);
     return failure("provider-error", `端点返回服务端错误（HTTP ${status}）`, input.protocol, latencyMs, status);
   } catch (error) {

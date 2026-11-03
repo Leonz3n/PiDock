@@ -75,6 +75,17 @@ describe("sdk provider op", () => {
   it("accepts a clear and a well-formed install", () => {
     expect(validateHostTaskOp("task/sdkProvider", { provider: null })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "synthetic-key" } })).toEqual({ ok: true });
+    // W9: main sends the level the user chose with the install, so the
+    // envelope must accept exactly that key (and only a real tier).
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "synthetic-key", thinkingLevel: "high" } }))
+      .toEqual({ ok: true });
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "synthetic-key", thinkingLevel: "off" } }))
+      .toEqual({ ok: true });
+  });
+  it("refuses a level the SDK does not define", () => {
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "synthetic-key", thinkingLevel: "ultra" } }))
+      .toEqual({ ok: false, error: "invalid-sdk-provider-thinking-level" });
+    expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "synthetic-key", thinkingLevel: 3 } }).ok).toBe(false);
   });
   it("refuses extra keys, a non-record provider, a bad config or a bad credential", () => {
     expect(validateHostTaskOp("task/sdkProvider", {}).ok).toBe(false);
