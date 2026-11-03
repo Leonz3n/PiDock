@@ -13,8 +13,8 @@
  * every model-bearing operation happens here.
  */
 
-import { parentPort, workerData } from "node:worker_threads";
 import { isAbsolute } from "node:path";
+import { parentPort, workerData } from "node:worker_threads";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { assertSdkContextEnv, type SdkContextTaskBinding } from "./sdk-context-env.js";
 import { createExplicitTextRuntime, validateExplicitTextProvider, type ExplicitTextProvider } from "./explicit-text-provider.js";
@@ -36,10 +36,12 @@ export interface SdkContextInput {
   /** Reasoning level selected for the bound model; absent = `off`. */
   thinkingLevel?: ModelThinkingLevel;
   /**
-   * [Pencil T15] #150: the exact native `mcp.json` this session loads when it
-   * starts. Absent means no MCP surface. Absolute; validated here again.
+   * [Pencil T15] issue 150: the exact native `mcp.json` this session loads when
+   * it starts. Absent means no MCP surface. Absolute; validated here again.
    */
   mcpConfigPath?: string;
+  /** [#151] App-private Skills source document; read at each session creation. */
+  skillSourcesFile?: string;
 }
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -167,7 +169,14 @@ function input(value: unknown): SdkContextInput {
     toolsEnabled: record["toolsEnabled"] === true,
     ...(record["thinkingLevel"] === undefined ? {} : { thinkingLevel: thinkingLevel(record["thinkingLevel"]) }),
     ...(record["mcpConfigPath"] === undefined ? {} : { mcpConfigPath: mcpConfigPath(record["mcpConfigPath"]) }),
+    ...(record["skillSourcesFile"] === undefined ? {} : { skillSourcesFile: skillSourcesFile(record["skillSourcesFile"]) }),
   };
+}
+
+/** Main hands an absolute file path; anything else is a refused payload, not a guess. */
+function skillSourcesFile(value: unknown): string {
+  if (typeof value !== "string" || value.length > 4096 || value.includes("\u0000") || !isAbsolute(value)) throw new Error("sdk-context-input-invalid");
+  return value;
 }
 
 async function main(): Promise<void> {
@@ -195,6 +204,7 @@ async function main(): Promise<void> {
     ...(parsed.thinkingLevel === undefined ? {} : { thinkingLevel: parsed.thinkingLevel }),
     ...(tools ? { callTool: (sessionId, request) => tools.callTool(sessionId, request) } : {}),
     ...(parsed.mcpConfigPath === undefined ? {} : { mcpConfigPath: parsed.mcpConfigPath }),
+    ...(parsed.skillSourcesFile === undefined ? {} : { skillSourcesFile: parsed.skillSourcesFile }),
   });
   const send = (message: SdkContextMessage) => port.postMessage(message);
   let closing = false;

@@ -6,6 +6,7 @@ import {
   createAgentSession,
   createExtensionRuntime,
   DefaultResourceLoader,
+  formatSkillsForPrompt,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -13,6 +14,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { readTaskRecordOnDisk } from "./task-store.js";
+import { readSkillConfig, sessionSkills, type SkillConfigRead } from "./skill-sources.js";
 import {
   buildSdkAgentToolDefinitions,
   sdkAgentSystemPrompt,
@@ -80,11 +82,30 @@ const emptyResources: ResourceLoader = {
  * broker enforces. Resource discovery stays empty: the Agent gets the four
  * declared task tools and nothing else.
  */
-function taskResources(taskDir: string): ResourceLoader {
+function taskResources(taskDir: string, skillPrompt = ""): ResourceLoader {
   return {
     ...emptyResources,
-    getSystemPrompt: () => sdkAgentSystemPrompt({ taskDir, worktrees: taskWorktreePaths(taskDir) }),
+    getSystemPrompt: () => sdkAgentSystemPrompt({ taskDir, worktrees: taskWorktreePaths(taskDir) }) + skillPrompt,
   };
+}
+
+/**
+ * [#151] What a NEW session advertises from the PiDock-managed Skills source
+ * list. The real disk is read at session creation only (`skill-sources.ts` uses
+ * the SDK loader), so a toggle or a removed directory reaches the NEXT session
+ * and never rewrites the prompt of one that is already running. An absent,
+ * invalid or unreadable document contributes nothing: the turn still runs with
+ * the task prompt, and the named scan problem stays in the pane.
+ */
+export function sessionSkillPrompt(file: string | undefined): string {
+  if (!file) return "";
+  const read: SkillConfigRead = readSkillConfig(file);
+  if (read.state !== "ok") return "";
+  const { skills } = sessionSkills(read.config);
+  // `indirect`: this Host's tool is `fs.read`, so the SDK formatter must not
+  // advertise a tool that does not exist. The listing still names each skill's
+  // absolute location, which is what the model resolves relative paths against.
+  return formatSkillsForPrompt(skills, "indirect");
 }
 
 /** `repos` of the task record, each as `<taskDir>/<repoDir>` (never the original checkout). */
@@ -150,11 +171,18 @@ export class PiSdkTextKernel {
        */
       callTool?: SdkAgentToolCaller;
       /**
-       * [Pencil T15] #150: the exact native `mcp.json` a session loads when it
-       * starts. Absent means this context offers no MCP surface at all (the
+       * [Pencil T15] issue 150: the exact native `mcp.json` a session loads when
+       * it starts. Absent means this context offers no MCP surface at all (the
        * fail-closed default for a Host that was not given one).
        */
       mcpConfigPath?: string;
+      /**
+       * [#151] The app-private Skills source document
+       * (`skill-sources.json` under `userData`). Read once per session creation:
+       * enabled, valid skills are advertised in that session's prompt with their
+       * real locations. Absent = a task Host main did not wire.
+       */
+      skillSourcesFile?: string;
     },
   ) {
     if (!isAbsolute(taskDir) || !taskId) throw new Error("task-unknown");
@@ -336,7 +364,8 @@ export class PiSdkTextKernel {
     const mcpPath = callTool === undefined ? undefined : this.selection.mcpConfigPath;
     const mcpBound = mcpPath !== undefined;
     const baseTools: string[] = callTool ? [...SDK_AGENT_TOOL_NAMES] : [];
-    let resourceLoader: ResourceLoader = callTool ? taskResources(this.taskDir) : emptyResources;
+    const skillPrompt = sessionSkillPrompt(this.selection.skillSourcesFile);
+    let resourceLoader: ResourceLoader = callTool ? taskResources(this.taskDir, skillPrompt) : emptyResources;
     let mcpBinding: McpBinding | undefined;
     if (callTool && mcpPath !== undefined) {
       // The file is read HERE, once per session start. That is the session
@@ -351,7 +380,7 @@ export class PiSdkTextKernel {
         noPromptTemplates: true,
         noThemes: true,
         noContextFiles: true,
-        systemPrompt: sdkAgentSystemPrompt({ taskDir: this.taskDir, worktrees: taskWorktreePaths(this.taskDir) }),
+        systemPrompt: sdkAgentSystemPrompt({ taskDir: this.taskDir, worktrees: taskWorktreePaths(this.taskDir) }) + skillPrompt,
         extensionFactories: [mcpBinding.factory],
       });
       await loader.reload();

@@ -14,6 +14,8 @@ export interface CreationIntentView {
   state: "pending" | "complete";
   workspaceMode: WorkspaceModeView;
   kind?: "normal" | "scheduled";
+  /** [Pencil T17] ticket 152 the definition a dedicated scheduled task carries. */
+  schedule?: CreationScheduleInput;
   repos: { id: string; name: string; remote: string; remoteBranch: string; commit: string; repoDir: string; path?: string }[];
   directories: { id: string; name: string; linkName: string; path: string }[];
 }
@@ -37,11 +39,31 @@ export interface CreationInput {
   kind?: "normal" | "scheduled";
   schedule?: CreationScheduleInput;
 }
+function parseSchedule(value: unknown): CreationScheduleInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("定时任务创建意图的规则定义异常");
+  const row = value as Record<string, unknown>;
+  for (const key of ["name", "ruleText", "timezone", "prompt", "providerId", "model"])
+    if (typeof row[key] !== "string") throw new Error("定时任务创建意图的规则定义异常");
+  if (row.permission !== "read" && row.permission !== "default" && row.permission !== "auto") {
+    throw new Error("定时任务创建意图的规则定义异常");
+  }
+  if (row.enabled !== undefined && typeof row.enabled !== "boolean") throw new Error("定时任务创建意图的规则定义异常");
+  return {
+    name: row.name as string, ruleText: row.ruleText as string, timezone: row.timezone as string,
+    prompt: row.prompt as string, providerId: row.providerId as string, model: row.model as string,
+    permission: row.permission, ...(row.enabled === undefined ? {} : { enabled: row.enabled }),
+  };
+}
 function parse(value: unknown): CreationIntentView {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("本机任务创建意图返回异常");
   const row = value as Record<string, unknown>;
-  for (const key of ["id", "taskId", "name", "projectId", "taskDir", "root", "branch"])
+  // `branch` is always a string, but only a worktree creation names a branch;
+  // `existing-git`/`plain-dirs` (and a scheduled task on plain directories)
+  // truthfully report "". Requiring it non-empty rejected every such intent
+  // with the generic wording, so a real scheduled preview never produced one.
+  for (const key of ["id", "taskId", "name", "projectId", "taskDir", "root"])
     if (typeof row[key] !== "string" || !row[key]) throw new Error("本机任务创建意图返回异常");
+  if (typeof row.branch !== "string") throw new Error("本机任务创建意图返回异常");
   if ((row.state !== "pending" && row.state !== "complete") || !Array.isArray(row.repos) || !Array.isArray(row.directories) ||
       !row.repos.every((repo) => repo && typeof repo === "object" && typeof repo.commit === "string" && typeof repo.repoDir === "string" && typeof repo.name === "string" &&
         (repo.path === undefined || typeof repo.path === "string")) ||
@@ -55,9 +77,15 @@ function parse(value: unknown): CreationIntentView {
     ? ((row.repos as unknown[]).length > 0 ? "worktree" : "plain-dirs")
     : row.workspaceMode;
   if (mode !== "worktree" && mode !== "existing-git" && mode !== "plain-dirs") throw new Error("本机任务创建意图返回异常");
+  if (mode === "worktree" && !row.branch) throw new Error("本机任务创建意图缺少任务分支");
   const kind = row.kind === undefined ? "normal" : row.kind;
   if (kind !== "normal" && kind !== "scheduled") throw new Error("本机任务创建意图返回异常");
-  return { ...(value as CreationIntentView), workspaceMode: mode, kind };
+  // [Pencil T17] ticket 152: a scheduled intent is only usable with the definition
+  // it will be created from; a normal intent carrying one is a contradiction.
+  const schedule = row.schedule === undefined ? undefined : parseSchedule(row.schedule);
+  if (kind === "scheduled" && schedule === undefined) throw new Error("定时任务创建意图缺少规则定义");
+  if (kind !== "scheduled" && schedule !== undefined) throw new Error("普通任务创建意图不能携带定时规则");
+  return { ...(value as CreationIntentView), workspaceMode: mode, kind, ...(schedule ? { schedule } : {}) };
 }
 async function request(bridge: PidockBridge, input: Parameters<NonNullable<PidockBridge["createTask"]>>[0]): Promise<unknown> {
   if (typeof bridge.createTask !== "function") throw new Error("桌面壳真实任务创建接口不可用，请重启应用");

@@ -87,11 +87,17 @@ export interface SdkContextOptions {
    */
   toolHost?: SdkToolHost;
   /**
-   * [Pencil T15] #150: the exact native `mcp.json` the session loads. Defaults
-   * to the Host's `PIDOCK_MCP_CONFIG` (set only by main's task-host spawn), so
-   * a context without one has no MCP surface.
+   * [Pencil T15] issue 150: the exact native `mcp.json` the session loads.
+   * Defaults to the Host's `PIDOCK_MCP_CONFIG` (set only by main's task-host
+   * spawn), so a context without one has no MCP surface.
    */
   mcpConfigPath?: string;
+  /**
+   * [#151] The app-private Skills source document (`skill-sources.json`). The
+   * worker's kernel reads it when it creates a session, so a running session is
+   * never mutated: a toggle reaches the next session only.
+   */
+  skillSourcesFile?: string;
   /** Injected for tests; defaults to the compiled worker next to this file. */
   spawn?: (env: Record<string, string>, workerData: unknown) => SdkContextWorkerLike;
   /** Bound on the worker's bootstrap reply; a silent worker must not hang a turn. */
@@ -163,6 +169,7 @@ export class SdkContextClient implements SdkTextKernelPort {
         // decided by that broker, so advertising them without it would be a
         // tool whose only answer is a refusal.
         ...(this.options.toolHost === undefined || mcpConfigPath === undefined ? {} : { mcpConfigPath }),
+        ...(this.options.skillSourcesFile === undefined ? {} : { skillSourcesFile: this.options.skillSourcesFile }),
       };
       const worker = this.options.spawn?.(env, workerData) ?? new Worker(new URL("./sdk-context-worker.js", import.meta.url), { env, workerData });
       this.worker = worker;

@@ -994,6 +994,10 @@ export class TaskWorkspaceHost {
         // this Host, never inside the isolated model context.
         toolHost: this.sdkTools,
         ...(provider.workspaceId === undefined ? {} : { workspaceId: provider.workspaceId }),
+        // [#151] Main names the app-private Skills source document on this
+        // Host's fork. The isolated context reads it when it creates a session,
+        // so a source toggle reaches the next session only.
+        ...(process.env["PIDOCK_SKILL_SOURCES_FILE"] ? { skillSourcesFile: process.env["PIDOCK_SKILL_SOURCES_FILE"] } : {}),
       });
       try { await context.open("main"); }
       catch (error) { await this.disposeSdkContext(context); throw error; }

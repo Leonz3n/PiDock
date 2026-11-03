@@ -445,6 +445,9 @@ describe("buildHostEnv", () => {
     expect(env).toEqual({
       PATH: "/bin", TMPDIR: "/tmp", TMP: "/tmp", TEMP: "/tmp", LANG: "en_US.UTF-8", LC_ALL: "C", LC_CTYPE: "UTF-8", HOME: "/synthetic-home",
       PIDOCK_WORKSPACE_ID: "workspace", PIDOCK_PROTECTED_PROFILE: "/trusted-profile",
+      // [#151] the Skills document is derived from the protected profile, never
+      // from the environment a caller passes in.
+      PIDOCK_SKILL_SOURCES_FILE: "/trusted-profile/skill-sources.json",
     });
   });
 

@@ -21,6 +21,7 @@ import { checkReferencePayload } from "../main/composer-references.js";
 import { REMOTE_ENTRY_MODES } from "../main/remote-rules.js";
 import { MAX_EDITOR_ARGS, MAX_EDITOR_ARG_CHARS } from "../main/external-editor.js";
 import { variableNameRefusal } from "../main/workspace-variables.js";
+import { SKILL_CONFIG_FILE } from "./skill-sources.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -394,6 +395,10 @@ export function buildHostEnv(
       throw new Error("invalid-payload: protected profile must be absolute");
     }
     env["PIDOCK_PROTECTED_PROFILE"] = protectedProfile;
+    // [#151] The app-private Skills source document is derived from the same
+    // protected profile, never from a payload: a renderer can name a directory
+    // to add, but not the config file the Host reads.
+    env["PIDOCK_SKILL_SOURCES_FILE"] = `${protectedProfile.replace(/[\\/]+$/, "")}/${SKILL_CONFIG_FILE}`;
   }
   if (task !== undefined) {
     if (typeof task.taskId !== "string" || task.taskId.length === 0 || task.taskId.includes("\0")) {
