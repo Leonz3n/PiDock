@@ -603,7 +603,7 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
     let live = true;
     void (async () => {
       try {
-        const status = parseProviderStatus(await providerCall(taskId, { op: "list" }));
+        const status = parseProviderStatus(await providerCall({ taskId, op: "list" }));
         if (live) setProvider(status);
       } catch { if (live) setProvider(null); }
     })();
@@ -631,10 +631,11 @@ function TaskConversation({ taskId, name, branch, repoCount, roots, association,
     return () => { executionReadAttempt.current += 1; };
   }, [taskId, attemptPhase]);
   const selectedProfile = provider?.state === "configured" ? provider.profiles.find((entry) => entry.id === provider.profileId) : undefined;
+  const selectedRow = selectedProfile?.models.find((model) => model.id === (provider?.modelId ?? selectedProfile.modelId));
   const modelLabel = selectedProfile
     // The profile's OWN name and model identity: a blank one is named here, so a
     // selected profile never renders as a bare ` · `.
-    ? `${hostText(selectedProfile.name, "Host 未上报配置名称")} · ${hostText(selectedProfile.modelId, "Host 未上报模型标识")}`
+    ? `${hostText(selectedProfile.name, "Host 未上报配置名称")} · ${hostText(selectedRow?.name ?? selectedProfile.modelId, "Host 未上报模型标识")}`
     : provider ? "未配置模型" : "正在读取模型";
   // [UI 对齐 S8c] #47: 推理 and 上下文 are read from the Host's own session state
   // (`task/sessionContext`), which the demo path has used since [PiDock 11] #9 and

@@ -26,6 +26,9 @@ function task(id: string) {
 const config = {
   profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128,
   authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+  protocol: "openai-completions" as const,
+  credentialSource: "env" as const,
+  models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }],
 };
 
 /** Scripted worker: records what it was spawned with and answers by op. */

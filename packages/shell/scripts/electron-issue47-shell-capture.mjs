@@ -103,10 +103,10 @@ async function run() {
     }, (id) => index.resolve(id), browsers.registry, index);
     const profiles = new ProviderProfileStore(profile);
     const providers = new ProviderWiring(profiles, async (id, provider, senderWebContentsId) => {
-      const payload = provider === null ? { provider: null } : { provider: { config: profiles.config(provider.profileId), credential: provider.credential } };
+      const payload = provider === null ? { provider: null } : { provider: { config: profiles.config(provider.profileId, provider.modelId), credential: provider.credential } };
       await registry.routeTaskOp({ workspaceId: "issue47", taskId: id, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } });
     });
-    const saved = profiles.save({ name: "Loopback", baseUrl: `http://127.0.0.1:${port}/v1`, modelId: "issue47-model", contextWindow: 200000, maxTokens: 8192, authRef: AUTH_REF });
+    const saved = profiles.save({ name: "Loopback", protocol: "openai-completions", baseUrl: `http://127.0.0.1:${port}/v1`, modelId: "issue47-model", credentials: { kind: "env", ref: AUTH_REF }, models: [{ id: "issue47-model", name: "issue47-model", contextWindow: 200000, maxTokens: 8192, reasoning: false }] });
     profiles.select(taskId, saved.id);
     // A real source repository bound to the Project, so 项目总览 shows a real
     // 项目仓库 row (the task worktree above is a task-scoped copy, not a binding).

@@ -23,6 +23,13 @@ import { MAX_EDITOR_ARGS, MAX_EDITOR_ARG_CHARS } from "../main/external-editor.j
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
+/** The SDK's own thinking levels (Pi 1.5.0); anything else never reaches the context. */
+export const MODEL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+export function isModelThinkingLevel(value: unknown): value is (typeof MODEL_THINKING_LEVELS)[number] {
+  return typeof value === "string" && (MODEL_THINKING_LEVELS as readonly string[]).includes(value);
+}
+
 export type HostTaskRouteResult = "routable" | "task-workspace-mismatch" | "invalid-params";
 
 /**
@@ -448,8 +455,17 @@ export function validateHostTaskOp(
     if (keys.length !== 1 || keys[0] !== "provider") return { ok: false, error: "invalid-sdk-payload: extra key" };
     const provider = payload["provider"];
     if (provider === null) return { ok: true };
-    if (!isRecord(provider) || Object.keys(provider).sort().join(",") !== "config,credential" || !isRecord(provider["config"])) {
+    // `thinkingLevel` is the level the user chose (main resolved it against the
+    // model's declared capability). Main sends it, so the envelope must accept
+    // it — otherwise every real install fails as an invalid payload.
+    if (!isRecord(provider)) return { ok: false, error: "invalid-sdk-provider" };
+    const providerShape = Object.keys(provider).sort().join(",");
+    if (providerShape !== "config,credential" && providerShape !== "config,credential,thinkingLevel") {
       return { ok: false, error: "invalid-sdk-provider" };
+    }
+    if (!isRecord(provider["config"])) return { ok: false, error: "invalid-sdk-provider" };
+    if (provider["thinkingLevel"] !== undefined && !isModelThinkingLevel(provider["thinkingLevel"])) {
+      return { ok: false, error: "invalid-sdk-provider-thinking-level" };
     }
     const credential = provider["credential"];
     // Same floor as the isolated context itself, so a value that cannot work is

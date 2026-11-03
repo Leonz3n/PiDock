@@ -45,7 +45,7 @@ export const REASONING_LABELS: Record<string, string> = {
 export const PROTOCOL_MODEL_FIXTURES: Record<string, string[]> = {
   "anthropic-messages": ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"],
   "openai-responses": ["gpt-5", "gpt-5-mini", "o5"],
-  "openai-chat-completions": ["qwen3-coder", "llama3.3-70b"],
+  "openai-completions": ["qwen3-coder", "llama3.3-70b"],
 };
 
 /**
@@ -56,7 +56,7 @@ export const PROTOCOL_MODEL_FIXTURES: Record<string, string[]> = {
 export const PROTOCOL_LABELS: Record<string, string> = {
   "anthropic-messages": "Anthropic Messages",
   "openai-responses": "OpenAI Responses",
-  "openai-chat-completions": "OpenAI Chat Completions",
+  "openai-completions": "OpenAI Chat Completions",
 };
 
 export function protocolLabel(protocol: string): string {

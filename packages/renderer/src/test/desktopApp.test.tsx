@@ -341,7 +341,7 @@ describe("Desktop production data", () => {
     expect(screen.getAllByRole("button", { name: /真实任务/ }).length).toBeGreaterThan(0);
   });
 
-  it("opens usage without a task and switches cleanly to Provider and schedules", async () => {
+  it("opens usage without a task and switches cleanly to 能力管理 and schedules", async () => {
     const taskOp = vi.fn(async () => ({ ok: true, payload: { schedules: [], runs: [] } }));
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots } })), projectOp: vi.fn(async (request) => request.op === "list"
       ? { ok: true, payload: { initialized: true, projects: [project] } }
@@ -349,12 +349,12 @@ describe("Desktop production data", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Token 用量" }));
     expect(await screen.findByTestId("usage-needs-task")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "模型与 Provider" }));
-    expect(await screen.findByTestId("desktop-providers-page")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "能力管理" }));
+    expect(await screen.findByTestId("providers-panel")).toBeInTheDocument();
     expect(screen.queryByTestId("desktop-usage-page")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "定时任务" }));
     expect(await screen.findByTestId("desktop-schedules-page")).toBeInTheDocument();
-    expect(screen.queryByTestId("desktop-providers-page")).toBeNull();
+    expect(screen.queryByTestId("providers-panel")).toBeNull();
     expect(taskOp).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "需要处理" }));
     expect(await screen.findByTestId("desktop-attention-page")).toBeInTheDocument();

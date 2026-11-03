@@ -56,7 +56,13 @@ export interface PidockBridge {
    * a profile, and profile metadata only: the credential value is resolved in
    * main from the profile's environment reference and never crosses this bridge.
    */
-  providerOp?: (request: { op: "list" | "save" | "remove" | "select" | "clear" | "ensure"; taskId: string; profileId?: string; profile?: unknown }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [PiDock T03] #138 `shell/providerOp`. The renderer names an operation and
+   * the profile/model it concerns; `apiKey` is only present on the one `save`
+   * or `discover`/`probe` call where the user just typed a key. No reply can
+   * carry a key back — main has no field for it.
+   */
+  providerOp?: (request: Record<string, unknown>) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
    * [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The page names a task and one
    * of that task's own file roots — nothing else: main reads the editor program

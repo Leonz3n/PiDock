@@ -13,11 +13,16 @@ import type { SdkTextResult } from "../host/sdk-text-kernel.js";
 
 const INPUT = {
   name: "Synthetic Provider",
+  protocol: "openai-completions" as const,
   baseUrl: "https://models.example.test/v1",
   modelId: "text-model",
-  contextWindow: 128000,
-  maxTokens: 8192,
-  authRef: "PIDOCK_PROVIDER_CONTINUITY_TEST",
+  credentials: { kind: "env" as const, ref: "PIDOCK_PROVIDER_CONTINUITY_TEST" },
+  models: [{ id: "text-model", name: "text-model", contextWindow: 128000, maxTokens: 8192, reasoning: false }],
+};
+/** The renderer's save payload is the store input minus the credential alias. */
+const payload = (patch: Record<string, unknown> = {}) => {
+  const { credentials, ...rest } = INPUT;
+  return { ...rest, credential: credentials, ...patch };
 };
 const SYNTHETIC_CREDENTIAL = "synthetic-continuity-test-only";
 const fixtures: { root: string; hosts: TaskWorkspaceHost[] }[] = [];
@@ -33,7 +38,7 @@ function fixture() {
   const root = mkdtempSync(join(tmpdir(), "pidock-provider-continuity-"));
   const profileDir = join(root, "profile");
   const store = new ProviderProfileStore(profileDir);
-  const env: Record<string, string | undefined> = { [INPUT.authRef]: SYNTHETIC_CREDENTIAL };
+  const env: Record<string, string | undefined> = { PIDOCK_PROVIDER_CONTINUITY_TEST: SYNTHETIC_CREDENTIAL };
   const hosts = new Map<string, TaskWorkspaceHost>();
   const transports = new Map<string, SdkTurnTransport>();
   const prompts: { taskId: string; credential: string }[] = [];
@@ -79,7 +84,7 @@ function fixture() {
   const providers = new ProviderWiring(store, async (taskId, provider) => {
     transports.get(taskId)?.assertTerminalCommitted();
     await taskHost(taskId).configureSdkProvider(provider === null ? null : {
-      config: store.config(provider.profileId), credential: provider.credential,
+      config: store.config(provider.profileId, provider.modelId), credential: provider.credential,
     });
     transports.delete(taskId);
   }, env);
@@ -131,11 +136,11 @@ function fixture() {
 it("refuses the next model request when the sole configured credential reference disappears", async () => {
   const { store, env, providers, prompts, send } = fixture();
   const profile = store.save(INPUT);
-  await providers.select("task-a", profile.id, 7);
+  await providers.select("task-a", profile.id, undefined, undefined, 7);
   expect(await send("task-a", "first")).toMatchObject({ state: "done" });
   expect(prompts).toHaveLength(1);
 
-  delete env[INPUT.authRef];
+  delete env["PIDOCK_PROVIDER_CONTINUITY_TEST"];
   const requestCount = prompts.length;
   let refused = false;
   try { await send("task-a", "after-reference-removal"); }
@@ -147,9 +152,9 @@ it("refuses the next model request when the sole configured credential reference
 it("rejects an unusable designated credential before reusing a cached context", async () => {
   const { store, env, providers, prompts, send } = fixture();
   const profile = store.save(INPUT);
-  await providers.select("task-a", profile.id, 7);
+  await providers.select("task-a", profile.id, undefined, undefined, 7);
   expect(await send("task-a", "before-unusable")).toMatchObject({ state: "done" });
-  env[INPUT.authRef] = "short";
+  env["PIDOCK_PROVIDER_CONTINUITY_TEST"] = "short";
   const before = prompts.length;
   let refused = false;
   try { await send("task-a", "after-unusable"); }
@@ -161,13 +166,11 @@ it("rejects an unusable designated credential before reusing a cached context", 
 it("a defining profile edit from one task prevents another task using the old context", async () => {
   const { store, providers, prompts, send } = fixture();
   const profile = store.save(INPUT);
-  await providers.select("task-a", profile.id, 7);
-  await providers.select("task-b", profile.id, 7);
+  await providers.select("task-a", profile.id, undefined, undefined, 7);
+  await providers.select("task-b", profile.id, undefined, undefined, 7);
   expect(await send("task-b", "before-edit")).toMatchObject({ state: "done" });
 
-  await providers.perform({ op: "save", taskId: "task-a", profile: {
-    ...INPUT, id: profile.id, baseUrl: "https://changed.example.test/v1",
-  } }, 7);
+  await providers.perform({ op: "save", profile: payload({ id: profile.id, baseUrl: "https://changed.example.test/v1" }) }, 7);
   expect(store.selection("task-b")).toBeNull();
   const requestCount = prompts.length;
   let refused = false;
@@ -180,8 +183,8 @@ it("a defining profile edit from one task prevents another task using the old co
 it("removing a shared profile prevents another task using its old context", async () => {
   const { store, providers, prompts, send } = fixture();
   const profile = store.save(INPUT);
-  await providers.select("task-a", profile.id, 7);
-  await providers.select("task-b", profile.id, 7);
+  await providers.select("task-a", profile.id, undefined, undefined, 7);
+  await providers.select("task-b", profile.id, undefined, undefined, 7);
   expect(await send("task-b", "before-remove")).toMatchObject({ state: "done" });
 
   await providers.perform({ op: "remove", taskId: "task-a", profileId: profile.id }, 7);
@@ -198,27 +201,27 @@ it("removing a shared profile prevents another task using its old context", asyn
 it("requires an explicit selection to restore sending after a lost credential reappears", async () => {
   const { store, env, providers, send } = fixture();
   const profile = store.save(INPUT);
-  await providers.select("task-a", profile.id, 7);
-  delete env[INPUT.authRef];
+  await providers.select("task-a", profile.id, undefined, undefined, 7);
+  delete env["PIDOCK_PROVIDER_CONTINUITY_TEST"];
   expect(await providers.ensure("task-a", 7)).toBe("credential-missing");
   expect(store.selection("task-a")?.profileId).toBe(profile.id);
-  env[INPUT.authRef] = SYNTHETIC_CREDENTIAL;
+  env["PIDOCK_PROVIDER_CONTINUITY_TEST"] = SYNTHETIC_CREDENTIAL;
   expect(await providers.ensure("task-a", 7)).toBe("credential-missing");
   await expect(send("task-a", "not-an-explicit-restore")).rejects.toThrow("provider-not-configured");
-  expect(await providers.select("task-a", profile.id, 7)).toMatchObject({ state: "configured" });
+  expect(await providers.select("task-a", profile.id, undefined, undefined, 7)).toMatchObject({ state: "configured" });
   expect(await send("task-a", "explicitly-restored")).toMatchObject({ state: "done" });
 });
 
 it("keeps the credential-loss fence when an explicit selection is refused during an active turn", async () => {
   const { store, env, providers, prompts, begin, send, holdNextPrompt, settle } = fixture();
   const profile = store.save(INPUT);
-  await providers.select("task-a", profile.id, 7);
+  await providers.select("task-a", profile.id, undefined, undefined, 7);
   holdNextPrompt();
   expect(await begin("task-a", "before-reference-loss")).toMatchObject({ state: "accepted" });
-  delete env[INPUT.authRef];
+  delete env["PIDOCK_PROVIDER_CONTINUITY_TEST"];
   expect(await providers.ensure("task-a", 7)).toBe("credential-missing");
-  env[INPUT.authRef] = "synthetic-replacement-test-only";
-  const refusedSelection = await providers.select("task-a", profile.id, 7);
+  env["PIDOCK_PROVIDER_CONTINUITY_TEST"] = "synthetic-replacement-test-only";
+  const refusedSelection = await providers.select("task-a", profile.id, undefined, undefined, 7);
   const selectionRetained = store.selection("task-a")?.profileId === profile.id;
   await settle("task-a");
   const nextStartState = await providers.ensure("task-a", 7);
@@ -233,7 +236,7 @@ it("keeps the credential-loss fence when an explicit selection is refused during
     startAllowed, newModelRequests: prompts.length - before })
     .toEqual({ refusedSelectionState: "credential-missing", selectionRetained: true,
       nextStartState: "credential-missing", startAllowed: false, newModelRequests: 0 });
-  expect(await providers.select("task-a", profile.id, 7)).toMatchObject({ state: "configured" });
+  expect(await providers.select("task-a", profile.id, undefined, undefined, 7)).toMatchObject({ state: "configured" });
   expect(await send("task-a", "after-successful-idle-selection")).toMatchObject({ state: "done" });
   expect(prompts).toHaveLength(before + 1);
 });
@@ -241,13 +244,11 @@ it("keeps the credential-loss fence when an explicit selection is refused during
 it("keeps an invalidated active context until terminal and then refuses its next prompt", async () => {
   const { store, providers, prompts, begin, send, holdNextPrompt, settle } = fixture();
   const profile = store.save(INPUT);
-  await providers.select("task-a", profile.id, 7);
-  await providers.select("task-b", profile.id, 7);
+  await providers.select("task-a", profile.id, undefined, undefined, 7);
+  await providers.select("task-b", profile.id, undefined, undefined, 7);
   holdNextPrompt();
   expect(await begin("task-b", "before-active-edit")).toMatchObject({ state: "accepted" });
-  await providers.perform({ op: "save", taskId: "task-a", profile: {
-    ...INPUT, id: profile.id, baseUrl: "https://changed.example.test/v1",
-  } }, 7);
+  await providers.perform({ op: "save", profile: payload({ id: profile.id, baseUrl: "https://changed.example.test/v1" }) }, 7);
   expect(await providers.ensure("task-b", 7)).toBe("pending");
   expect(providers.status("task-b").state).toBe("pending");
   const requestsBefore = prompts.length;
@@ -265,11 +266,9 @@ it.each(["edit", "remove", "credential-removal"] as const)("refuses a first star
   const release = holdNextOpen();
   const installing = providers.ensure("task-a", 7);
   await Promise.resolve();
-  if (change === "credential-removal") delete env[INPUT.authRef];
+  if (change === "credential-removal") delete env["PIDOCK_PROVIDER_CONTINUITY_TEST"];
   else if (change === "remove") await providers.perform({ op: "remove", taskId: "task-b", profileId: profile.id }, 7);
-  else await providers.perform({ op: "save", taskId: "task-b", profile: {
-    ...INPUT, id: profile.id, baseUrl: "https://changed.example.test/v1",
-  } }, 7);
+  else await providers.perform({ op: "save", profile: payload({ id: profile.id, baseUrl: "https://changed.example.test/v1" }) }, 7);
   release();
   const state = await installing;
   if (state === "configured") {
@@ -285,12 +284,10 @@ it.each(["edit", "remove"] as const)("does not recreate a selection after %s dur
   const { store, providers, holdNextOpen } = fixture();
   const profile = store.save(INPUT);
   const release = holdNextOpen();
-  const selecting = providers.select("task-a", profile.id, 7);
+  const selecting = providers.select("task-a", profile.id, undefined, undefined, 7);
   await Promise.resolve();
   if (change === "remove") await providers.perform({ op: "remove", taskId: "task-b", profileId: profile.id }, 7);
-  else await providers.perform({ op: "save", taskId: "task-b", profile: {
-    ...INPUT, id: profile.id, baseUrl: "https://changed.example.test/v1",
-  } }, 7);
+  else await providers.perform({ op: "save", profile: payload({ id: profile.id, baseUrl: "https://changed.example.test/v1" }) }, 7);
   release();
   const status = await selecting;
   expect({ configured: status.state === "configured", selection: store.selection("task-a") })
@@ -300,7 +297,7 @@ it.each(["edit", "remove"] as const)("does not recreate a selection after %s dur
 it("retains the selection when clearing is refused by an active turn and clears after terminal", async () => {
   const { store, providers, begin, holdNextPrompt, settle } = fixture();
   const profile = store.save(INPUT);
-  await providers.select("task-a", profile.id, 7);
+  await providers.select("task-a", profile.id, undefined, undefined, 7);
   holdNextPrompt();
   const turn = await begin("task-a", "active-clear");
   expect(turn.state).toBe("accepted");

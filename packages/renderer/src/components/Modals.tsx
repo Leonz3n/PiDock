@@ -1634,7 +1634,7 @@ function ModelPickerModal({ taskId, sessionId, onClose }: { taskId: string; sess
           size="sm"
           onClick={() => {
             onClose();
-            navigate({ view: "providers" });
+            navigate({ view: "capabilities" });
           }}
         >
           管理 Provider
@@ -1711,7 +1711,7 @@ function ThinkingPickerModal({ taskId, sessionId, onClose }: { taskId: string; s
           variant="ghost"
           onClick={() => {
             onClose();
-            navigate({ view: "providers" });
+            navigate({ view: "capabilities" });
           }}
         >
           模型设置

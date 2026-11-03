@@ -1,4 +1,5 @@
-import { app } from "electron";
+import { homedir } from "node:os";
+import { app, safeStorage } from "electron";
 import { resolveShellCommand } from "./command.js";
 import {
   DEFAULT_WORKSPACE_ID,
@@ -28,6 +29,8 @@ import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { ProviderProfileStore } from "./provider-profile-store.js";
+import { ProviderSecretStore } from "./provider-secret-store.js";
+import { NativeModelsFile, resolveAgentDir } from "./native-models-config.js";
 import { ProviderWiring } from "./provider-ipc.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import { createNodeAppendGit, ProjectTaskAppend } from "./task-append.js";
@@ -203,14 +206,25 @@ async function run(): Promise<void> {
   // the credential value is read from the profile's PIDOCK_PROVIDER_* reference
   // at install time and is handed only to the task's isolated SDK context.
   const providerProfiles = new ProviderProfileStore(app.getPath("userData"));
+  // [PiDock T03] #138: the credential value lives only in the OS-encrypted
+  // store, and Pi's native `models.json` is the Provider management object.
+  // `PIDOCK_AGENT_DIR` overrides the agent directory for tests/alternate homes.
+  const providerSecrets = new ProviderSecretStore(app.getPath("userData"), safeStorage);
+  const nativeModels = new NativeModelsFile(resolveAgentDir(process.env, homedir()));
   const providers = new ProviderWiring(providerProfiles, async (taskId, provider, senderWebContentsId) => {
     const payload = provider === null
       ? { provider: null }
-      : { provider: { config: providerProfiles.config(provider.profileId), credential: provider.credential } };
+      : {
+          provider: {
+            config: providerProfiles.config(provider.profileId, provider.modelId),
+            credential: provider.credential,
+            thinkingLevel: provider.thinkingLevel,
+          },
+        };
     const request = { workspaceId, taskId, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } } as const;
     if (tasks) { await tasks.routeTaskOp(request); return; }
     await client.task(request);
-  });
+  }, process.env, { secrets: providerSecrets, native: nativeModels });
   registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers, catalog, undefined, append);
   // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
   // the driver asks each *running* Host to evaluate its own due triggers. It

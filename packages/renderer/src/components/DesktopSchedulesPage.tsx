@@ -83,7 +83,7 @@ export function DesktopSchedulesPage({ tasks, onOpenTask }: { tasks: readonly Ta
     setProfilesError("");
     void (async () => {
       try {
-        const status = parseProviderStatus(await providerCall(editingTaskId, { op: "list" }));
+        const status = parseProviderStatus(await providerCall({ taskId: editingTaskId, op: "list" }));
         if (live) setProfiles(status.profiles.map(({ id, name, modelId }) => ({ id, name, modelId })));
       } catch (error) {
         if (live) setProfilesError(error instanceof Error ? error.message : "Provider 列表读取失败");
