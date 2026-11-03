@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
-import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   createExtensionRuntime,
@@ -30,6 +30,20 @@ export type SdkTextEvent = SdkTextEventData & {
   turnId: string;
   sequence: number;
 };
+
+/**
+ * [#139] One session's own transcript readout. Every number here comes from the
+ * session's JSONL or is `null` (unknown); nothing is estimated or defaulted.
+ */
+export interface SdkSessionDigest {
+  sessionId: string;
+  turns: number;
+  contextUsed: number | null;
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null;
+  model: { provider: string; modelId: string } | null;
+  /** The last committed entry is a user message: the turn it belongs to never settled. */
+  interrupted: boolean;
+}
 
 export interface SdkTextResult {
   state: "done" | "cancelled" | "failed";
@@ -72,6 +86,8 @@ function taskWorktreePaths(taskDir: string): string[] {
   return (record?.repos ?? []).map((repoDir) => `${taskDir.replace(/[\\/]+$/, "")}/${repoDir}`);
 }
 
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
 function safeId(id: string): void {
   if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("invalid-session-id");
 }
@@ -85,6 +101,12 @@ export class PiSdkTextKernel {
   private closing = false;
   private readonly root: string;
   private readonly agentDir: string;
+  /**
+   * [Pencil T04] #139: per-session model/reasoning bindings applied by
+   * `bindSession`. A binding is that session's identity: it is persisted into
+   * the session's own `binding.json` and survives a kernel restart.
+   */
+  private readonly bindings = new Map<string, { modelId: string; thinkingLevel?: ModelThinkingLevel }>();
 
   constructor(
     readonly taskId: string,
@@ -99,6 +121,13 @@ export class PiSdkTextKernel {
        * clamps anything the model does not support.
        */
       thinkingLevel?: ModelThinkingLevel;
+      /**
+       * [Pencil T04] #139: resolve another model of the *same* registered
+       * profile by id, so one session can be bound to a different model of the
+       * profile the context was installed for without a second credential or
+       * endpoint identity. Absent (in-process tests) keeps the single model.
+       */
+      modelById?: (modelId: string) => Model<Api> | undefined;
       /**
        * The Host-side tool execution seam ([PiDock 02m] #5). Supplied only by
        * the isolated context worker (which forwards the call to the Host) or by
@@ -129,6 +158,80 @@ export class PiSdkTextKernel {
     finally { this.opening.delete(sessionId); }
   }
 
+  /** The model a binding names; a binding never silently falls back to another model. */
+  private modelFor(modelId: string): Model<Api> {
+    const selection = this.selection!;
+    if (selection.model.id === modelId) return selection.model;
+    const resolved = selection.modelById?.(modelId);
+    if (!resolved) throw new Error("sdk-model-unknown");
+    return resolved;
+  }
+
+  /** A per-session binding override first, then the session's own persisted binding. */
+  private bindingFor(sessionId: string, persisted: { modelId?: unknown; thinkingLevel?: unknown } | null): { modelId: string; thinkingLevel?: ModelThinkingLevel } | null {
+    const override = this.bindings.get(sessionId);
+    if (override) return override;
+    if (persisted && typeof persisted.modelId === "string" && persisted.modelId.length > 0) {
+      const level = persisted.thinkingLevel;
+      return {
+        modelId: persisted.modelId,
+        ...(typeof level === "string" && (THINKING_LEVELS as readonly string[]).includes(level) ? { thinkingLevel: level as ModelThinkingLevel } : {}),
+      };
+    }
+    return null;
+  }
+
+  /**
+   * [#139] Change one session's model/reasoning, keeping its history.
+   *
+   * The JSONL is the session's context: a live `AgentSession` is disposed (after
+   * it went idle) and the next `open`/`prompt` re-opens the SAME transcript with
+   * the new model, so every earlier message stays and the following turns use the
+   * model the user chose. The binding is written into `binding.json` atomically,
+   * so a restart continues on the same model. Anything the SDK does not support
+   * is reported as the SDK's own clamped level, never the requested one.
+   */
+  async bindSession(sessionId: string, binding: { modelId: string; thinkingLevel?: ModelThinkingLevel }): Promise<{ modelId: string; thinkingLevel: ModelThinkingLevel }> {
+    safeId(sessionId);
+    this.verifyTask();
+    if (!this.selection) throw new Error("provider-not-configured");
+    if (this.closing) throw new Error("sdk-closing");
+    if (this.starting || this.active.has(sessionId)) throw new Error("sdk-session-busy");
+    const model = this.modelFor(binding.modelId);
+    const live = this.sessions.get(sessionId);
+    if (live) {
+      await live.waitForIdle();
+      live.dispose();
+      this.sessions.delete(sessionId);
+    }
+    const requested = binding.thinkingLevel ?? this.selection.thinkingLevel ?? "off";
+    this.bindings.set(sessionId, { modelId: model.id, thinkingLevel: requested });
+    this.persistBinding(sessionId, { modelId: model.id, thinkingLevel: requested });
+    return { modelId: model.id, thinkingLevel: clampThinkingLevel(model, requested) };
+  }
+
+  /** Rewrite the model fields of an existing `binding.json` without touching its identity. */
+  private persistBinding(sessionId: string, binding: { modelId: string; thinkingLevel?: ModelThinkingLevel }): void {
+    const dir = join(this.root, sessionId);
+    const mapping = join(dir, "binding.json");
+    if (!existsSync(mapping)) return;
+    if (!lstatSync(mapping).isFile()) throw new Error("sdk-binding-invalid");
+    const current: unknown = JSON.parse(readFileSync(mapping, "utf8"));
+    if (typeof current !== "object" || current === null || Array.isArray(current)) throw new Error("sdk-binding-invalid");
+    const data = current as Record<string, unknown>;
+    if (data["taskId"] !== this.taskId || data["sessionId"] !== sessionId) throw new Error("sdk-binding-invalid");
+    const next = {
+      ...data,
+      modelId: binding.modelId,
+      ...(binding.thinkingLevel === undefined ? {} : { thinkingLevel: binding.thinkingLevel }),
+    };
+    const temporary = `${mapping}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify(next), { flag: "wx", mode: 0o600 });
+      renameSync(temporary, mapping);
+    } finally { try { rmSync(temporary, { force: true }); } catch { /* best effort */ } }
+  }
+
   private async createSession(sessionId: string): Promise<AgentSession> {
     safeId(sessionId);
     this.verifyTask();
@@ -145,6 +248,7 @@ export class PiSdkTextKernel {
     if (realpathSync(dir) !== join(realpathSync(this.taskDir), ".pidock-sdk-sessions", sessionId) ||
         realpathSync(this.agentDir) !== join(realpathSync(this.taskDir), ".pidock-sdk-agent")) throw new Error("sdk-binding-invalid");
     let manager: SessionManager;
+    let persisted: { modelId?: unknown; thinkingLevel?: unknown } | null = null;
     if (existsSync(mapping)) {
       if (!lstatSync(mapping).isFile()) throw new Error("sdk-binding-invalid");
       const binding: unknown = JSON.parse(readFileSync(mapping, "utf8"));
@@ -153,6 +257,12 @@ export class PiSdkTextKernel {
       if (data["taskId"] !== this.taskId || data["sessionId"] !== sessionId ||
           data["bindingIdentity"] !== this.selection.bindingIdentity ||
           typeof data["file"] !== "string" || !/^[\w-]+\.jsonl$/.test(data["file"])) throw new Error("sdk-binding-invalid");
+      // [#139] The session's own model/reasoning binding lives in this file, so
+      // a restart continues on the model this session was switched to. Metadata
+      // fields are optional: a #138 binding carries none and keeps the strict
+      // "stored model must equal the selected model" rule below.
+      persisted = { modelId: data["modelId"], thinkingLevel: data["thinkingLevel"] };
+      if (data["modelId"] !== undefined && typeof data["modelId"] !== "string") throw new Error("sdk-binding-invalid");
       const file = join(dir, data["file"]);
       if (!existsSync(file) || !lstatSync(file).isFile()) throw new Error("sdk-session-missing");
       const header: unknown = JSON.parse(readFileSync(file, "utf8").split("\n", 1)[0]!);
@@ -178,12 +288,22 @@ export class PiSdkTextKernel {
       manager = SessionManager.open(file, dir, this.taskDir);
       if (manager.getSessionFile() !== file || manager.getHeader()?.id !== manager.getSessionId() ||
           manager.getHeader()?.cwd !== this.taskDir) throw new Error("sdk-binding-invalid");
+      const bound = this.bindings.get(sessionId);
       writeFileSync(mapping, JSON.stringify({ taskId: this.taskId, sessionId, sdkId: manager.getSessionId(), file: basename(file),
-        ...(this.selection.bindingIdentity ? { bindingIdentity: this.selection.bindingIdentity } : {}) }), { flag: "wx", mode: 0o600 });
+        ...(this.selection.bindingIdentity ? { bindingIdentity: this.selection.bindingIdentity } : {}),
+        modelId: bound?.modelId ?? this.selection.model.id,
+        thinkingLevel: bound?.thinkingLevel ?? this.selection.thinkingLevel ?? "off" }), { flag: "wx", mode: 0o600 });
     }
+    const binding = this.bindingFor(sessionId, persisted);
+    const model = binding ? this.modelFor(binding.modelId) : this.selection.model;
     const storedModel = manager.buildSessionContext().model;
-    if (storedModel && (storedModel.provider !== this.selection.model.provider || storedModel.modelId !== this.selection.model.id)) {
-      throw new Error("sdk-configuration-mismatch");
+    if (storedModel && (storedModel.provider !== model.provider || storedModel.modelId !== model.id)) {
+      // [#139] A session bound to its own model keeps its whole history and
+      // continues on the model the user chose; the change is recorded in the
+      // transcript itself. Without a binding (#138) the old strict rule stays:
+      // a task-wide model change never silently reinterprets an existing session.
+      if (!binding) throw new Error("sdk-configuration-mismatch");
+      manager.appendModelChange(model.provider, model.id);
     }
     // The Agent's tool set is exactly the declared task tools ([PiDock 02m] #5),
     // and only when this kernel was given a Host-side caller. The allowlist is
@@ -196,7 +316,7 @@ export class PiSdkTextKernel {
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd: this.taskDir,
       agentDir: this.agentDir,
-      model: this.selection.model,
+      model,
       modelRuntime: this.selection.modelRuntime,
       sessionManager: manager,
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
@@ -204,12 +324,12 @@ export class PiSdkTextKernel {
       noTools: "all",
       tools: expectedTools,
       ...(callTool ? { customTools: buildSdkAgentToolDefinitions(sessionId, callTool) } : {}),
-      thinkingLevel: this.selection.thinkingLevel ?? "off",
+      thinkingLevel: binding?.thinkingLevel ?? this.selection.thinkingLevel ?? "off",
     });
     const offered = [...session.getActiveToolNames()].sort();
     const registered = session.getAllTools().map((tool) => tool.name).sort();
-    if (modelFallbackMessage || session.model?.provider !== this.selection.model.provider ||
-        session.model?.id !== this.selection.model.id ||
+    if (modelFallbackMessage || session.model?.provider !== model.provider ||
+        session.model?.id !== model.id ||
         JSON.stringify(offered) !== JSON.stringify([...expectedTools].sort()) ||
         JSON.stringify(registered) !== JSON.stringify([...expectedTools].sort())) {
       session.dispose();
@@ -219,13 +339,16 @@ export class PiSdkTextKernel {
     return session;
   }
 
-  /** Read only the explicitly bound SDK JSONL; no model or global auth is required. */
-  projection(sessionId: string): { source: "sdk-jsonl"; sessionId: string; messages: { role: "user" | "assistant"; text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null }[]; interrupted: boolean } {
+  /**
+   * The explicitly bound JSONL of one session, opened for reading only: no model
+   * and no global auth is required. `null` = this session has no SDK binding yet.
+   */
+  private boundManager(sessionId: string): SessionManager | null {
     safeId(sessionId);
     this.verifyTask();
     const dir = join(this.root, sessionId);
     const mapping = join(dir, "binding.json");
-    if (!existsSync(mapping)) return { source: "sdk-jsonl", sessionId, messages: [], interrupted: false };
+    if (!existsSync(mapping)) return null;
     if (!lstatSync(dir).isDirectory() || realpathSync(dir) !== join(realpathSync(this.taskDir), ".pidock-sdk-sessions", sessionId) || !lstatSync(mapping).isFile()) throw new Error("sdk-binding-invalid");
     const binding: unknown = JSON.parse(readFileSync(mapping, "utf8"));
     if (!binding || typeof binding !== "object" || Array.isArray(binding)) throw new Error("sdk-binding-invalid");
@@ -235,6 +358,51 @@ export class PiSdkTextKernel {
     if (!lstatSync(file).isFile() || lstatSync(file).size > 2_000_000) throw new Error("sdk-projection-too-large");
     const manager = SessionManager.open(file, dir, this.taskDir);
     if (manager.getHeader()?.cwd !== this.taskDir || manager.getSessionId() !== data["sdkId"]) throw new Error("sdk-binding-invalid");
+    return manager;
+  }
+
+  /**
+   * [#139] What this session's OWN transcript says, for the header readout:
+   *
+   * - `contextUsed` is the prompt size of the most recent request
+   *   (`input + cacheRead + cacheWrite` of the last assistant report), which is
+   *   the context that request actually carried. Nothing reported → `null`
+   *   (unknown), never `0`.
+   * - `usage` sums every assistant report in this session's branch: each JSONL
+   *   entry counts exactly once, so re-reading after a restart or a replay adds
+   *   nothing.
+   * - `model` is the model the transcript last ran on (its own binding identity).
+   */
+  digest(sessionId: string): SdkSessionDigest {
+    const manager = this.boundManager(sessionId);
+    if (!manager) return { sessionId, turns: 0, contextUsed: null, usage: null, model: null, interrupted: false };
+    const branch = manager.getBranch();
+    const assistants = branch.filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+    let usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null = null;
+    let contextUsed: number | null = null;
+    for (const entry of assistants) {
+      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+      const reported = entry.message.usage;
+      usage ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      usage.input += reported.input;
+      usage.output += reported.output;
+      usage.cacheRead += reported.cacheRead;
+      usage.cacheWrite += reported.cacheWrite;
+      contextUsed = reported.input + reported.cacheRead + reported.cacheWrite;
+    }
+    const last = assistants.at(-1);
+    const model = last?.type === "message" && last.message.role === "assistant"
+      ? { provider: last.message.provider, modelId: last.message.model }
+      : null;
+    const messages = branch.filter((entry) => entry.type === "message");
+    const interrupted = messages.at(-1)?.type === "message" && messages.at(-1)!.message.role === "user";
+    return { sessionId, turns: assistants.length, contextUsed, usage, model, interrupted };
+  }
+
+  /** Read only the explicitly bound SDK JSONL; no model or global auth is required. */
+  projection(sessionId: string): { source: "sdk-jsonl"; sessionId: string; messages: { role: "user" | "assistant"; text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null }[]; interrupted: boolean } {
+    const manager = this.boundManager(sessionId);
+    if (!manager) return { source: "sdk-jsonl", sessionId, messages: [], interrupted: false };
     const entries = manager.getBranch().filter((entry) => entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant")).slice(-80);
     const messages = entries.map((entry) => {
       if (entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "assistant")) throw new Error("sdk-projection-invalid");
@@ -246,9 +414,13 @@ export class PiSdkTextKernel {
     return { source: "sdk-jsonl", sessionId, messages, interrupted: messages.at(-1)?.role === "user" };
   }
 
-  async open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[] }> {
+  async open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[]; modelId: string; thinkingLevel: string }> {
     const session = await this.sessionFor(sessionId);
-    return { sdkId: session.sessionId, file: session.sessionFile!, tools: session.getActiveToolNames() };
+    // [#139] The opened session reports the model and the CLAMPED reasoning level
+    // the SDK actually runs with, so a caller never has to assume its request was
+    // honoured verbatim.
+    return { sdkId: session.sessionId, file: session.sessionFile!, tools: session.getActiveToolNames(),
+      modelId: session.model?.id ?? "", thinkingLevel: session.thinkingLevel };
   }
 
   async prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void, issuedTurnId?: string): Promise<SdkTextResult> {

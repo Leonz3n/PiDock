@@ -140,12 +140,33 @@ import {
   type StoredSchedule,
 } from "../main/schedule-rules.js";
 import { TaskSchedules, type SaveScheduleInput, type SaveScheduleResult, type SchedulePreview } from "./schedules.js";
+import {
+  activateSessionInIndex,
+  archiveSessionInIndex,
+  bindSessionInIndex,
+  createSessionInIndex,
+  deleteSessionInIndex,
+  deleteSdkSessionArtifacts,
+  migrateSessionIndex,
+  readSessionIndex,
+  renameSessionInIndex,
+  restoreSessionInIndex,
+  sessionOf,
+  validateSessionIndex,
+  writeSessionIndex,
+  type CreateSessionInput,
+  type SessionBinding,
+  type SessionIndex,
+  type SessionPermission,
+  type SessionThinkingLevel,
+  type TaskSessionRecord,
+} from "./session-index.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { SdkTextKernelRouter } from "./sdk-kernel-router.js";
 import { SdkContextClient } from "./sdk-context-client.js";
 import { SdkAgentToolBroker, derivedPrimaryCheckouts, type SdkAgentServiceHost, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
 import type { ServiceTemplateEditPort } from "../rpc/service-template-request.js";
-import type { ExplicitTextProvider } from "./explicit-text-provider.js";
+import { availableReasoningLevels, type ExplicitTextProvider } from "./explicit-text-provider.js";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
   PI_USAGE_GROUP_LABELS,
@@ -194,6 +215,19 @@ export interface TaskStore {
   /** [PiDock 19] #21: remote entry, devices, pairing history and audit trail. */
   readRemoteDevices(taskDir: string): RemoteDeviceDiskRecord;
   writeRemoteDevices(taskDir: string, record: RemoteDeviceDiskRecord): void;
+  /**
+   * [Pencil T04] #139: the task's own session identity (`activeSessionId`,
+   * names, archive flags, per-session permission and model binding). A task
+   * with no sidecar migrates the historical `main` session on read.
+   */
+  readSessionIndex(taskDir: string, now: string): SessionIndex;
+  writeSessionIndex(taskDir: string, index: SessionIndex): SessionIndex;
+  /**
+   * [Pencil T04] #139: remove the SDK-owned per-session artifacts (binding
+   * directory + JSONL, turn journal) so a deleted session id cannot come back.
+   * The legacy snapshot is removed by `deleteSession`.
+   */
+  deleteSdkSession(taskDir: string, sessionId: string): void;
 }
 
 /**
@@ -379,6 +413,9 @@ function withRemovedIds(scope: PiUsageCleanupScope, removedIds: readonly string[
 }
 
 export const diskTaskStore: TaskStore = {
+  readSessionIndex: (taskDir, now) => readSessionIndex(taskDir, now),
+  writeSessionIndex: (taskDir, index) => writeSessionIndex(taskDir, index),
+  deleteSdkSession: (taskDir, sessionId) => deleteSdkSessionArtifacts(taskDir, sessionId),
   readTask: (taskDir) => readTaskRecordOnDisk(taskDir),
   writeTask: (taskDir, record) => writeTaskRecordOnDisk(taskDir, record),
   readSession: (taskDir, sessionId) => readSessionSnapshotOnDisk(taskDir, sessionId),
@@ -399,6 +436,7 @@ export const diskTaskStore: TaskStore = {
 
 export function memoryTaskStore(): TaskStore & {
   tasks: Map<string, TaskDiskRecord>;
+  indexes: Map<string, SessionIndex>;
   sessions: Map<string, PiSessionSnapshot>;
   usage: Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>;
   lifecycle: Map<string, LifecycleRecord>;
@@ -413,6 +451,7 @@ export function memoryTaskStore(): TaskStore & {
   const executions = new Map<string, ExecutionLedgerRecord>();
   const schedules = new Map<string, ScheduleDiskRecord>();
   const remoteDevices = new Map<string, RemoteDeviceDiskRecord>();
+  const indexes = new Map<string, SessionIndex>();
   return {
     tasks,
     sessions,
@@ -421,6 +460,20 @@ export function memoryTaskStore(): TaskStore & {
     executions,
     schedules,
     remoteDevices,
+    indexes,
+    readSessionIndex: (taskDir, now) => {
+      const stored = indexes.get(taskDir);
+      if (stored === undefined) return migrateSessionIndex(taskDir, now);
+      // Round-tripped through the validator so the mirror cannot hold an index
+      // the disk store would refuse.
+      return validateSessionIndex(JSON.parse(JSON.stringify(stored)));
+    },
+    writeSessionIndex: (taskDir, index) => {
+      const validated = validateSessionIndex(JSON.parse(JSON.stringify(index)));
+      indexes.set(taskDir, validated);
+      return validated;
+    },
+    deleteSdkSession: () => {},
     readTask: (taskDir) => tasks.get(taskDir) ?? null,
     writeTask: (taskDir, record) => {
       tasks.set(taskDir, record);
@@ -768,6 +821,12 @@ export class TaskWorkspaceHost {
   private sdkContext: SdkContextClient | null = null;
   private sdkRouter: SdkTextKernelRouter | null = null;
   private sdkProviderGeneration = 0;
+  /**
+   * [#139] The installed Provider selection as the Host remembers it: the
+   * profile/model declarations a session binding is validated against, and the
+   * generation it was installed under. `null` while no Provider is configured.
+   */
+  private sdkConfig: { config: ExplicitTextProvider; thinkingLevel?: ModelThinkingLevel } | null = null;
   private sdkShutdown: Promise<void> | undefined;
   private sdkConfiguring: Promise<{ generation: number }> | undefined;
   private sdkDisposalFailed = false;
@@ -875,6 +934,7 @@ export class TaskWorkspaceHost {
     if (previous) await this.disposeSdkContext(previous);
     if (this.sdkShutdown || this.executionClosing) throw Error(this.sdkShutdown ? "sdk-host-closing" : "task-host-closing");
     this.sdkProviderGeneration += 1;
+    this.sdkConfig = provider === null ? null : { config: provider.config, ...(provider.thinkingLevel === undefined ? {} : { thinkingLevel: provider.thinkingLevel }) };
     if (provider) {
       const context = this.sdkContextFactory({
         task: { taskId: this.taskId, taskDir: this.taskDir },
@@ -909,6 +969,33 @@ export class TaskWorkspaceHost {
   }
 
   /** True when this task currently has an isolated model context. */
+  /**
+   * [#139] The Provider configuration a session binding is expressed against:
+   * the profile id, its declared model rows (window, reasoning levels) and the
+   * installation generation. A caller that wants to change a session's model
+   * validates against THIS, never against a renderer-supplied catalog.
+   */
+  sdkProviderConfig(): { config: ExplicitTextProvider; thinkingLevel?: ModelThinkingLevel; generation: number } | null {
+    if (!this.sdkConfig || !this.sdkContext) return null;
+    return { ...this.sdkConfig, generation: this.sdkProviderGeneration };
+  }
+
+  /** [#139] The declared reasoning levels of one model of the installed profile. */
+  reasoningLevels(modelId: string): SessionThinkingLevel[] {
+    const row = this.sdkConfig?.config.models.find((model) => model.id === modelId);
+    return row ? availableReasoningLevels(row) : [];
+  }
+
+  /** The level a session binds when the caller names none: `off` when declared, else the first declared level. */
+  private reasoningLevelOf(config: ExplicitTextProvider, modelId: string, level?: ModelThinkingLevel): SessionThinkingLevel | null {
+    const row = config.models.find((model) => model.id === modelId);
+    if (!row) return null;
+    const levels = availableReasoningLevels(row);
+    if (level !== undefined && (levels as readonly string[]).includes(level)) return level as SessionThinkingLevel;
+    if (levels.includes("off")) return "off";
+    return levels[0] ?? null;
+  }
+
   get sdkProviderConfigured(): boolean {
     return this.sdkContext !== null;
   }
@@ -2529,6 +2616,97 @@ export class TaskWorkspaceHost {
 
   sessionIds(): string[] {
     return this.store.listSessions(this.taskDir);
+  }
+
+  // ---- [Pencil T04] #139: task-wide session identity and lifecycle ----
+
+  /**
+   * The task's session index: which sessions exist, what they are called, which
+   * one is active, each one's permission and model binding. A task without a
+   * sidecar migrates its historical `main` session on read.
+   */
+  sessionIndex(): SessionIndex {
+    return this.store.readSessionIndex(this.taskDir, this.now());
+  }
+
+  private commitSessionIndex(next: SessionIndex): SessionIndex {
+    return this.store.writeSessionIndex(this.taskDir, next);
+  }
+
+  /** The binding a session created now starts with: the configured Provider, or none. */
+  private currentBinding(): SessionBinding | null {
+    const installed = this.sdkConfig;
+    if (!installed) return null;
+    return {
+      profileId: installed.config.profileId,
+      modelId: installed.config.modelId,
+      thinkingLevel: this.reasoningLevelOf(installed.config, installed.config.modelId, installed.thinkingLevel),
+      generation: this.sdkProviderGeneration,
+    };
+  }
+
+  /**
+   * Create one session with its own id, a fresh SDK context and the task's
+   * current model binding. It becomes the active session (S08's 新建会话 entry
+   * opens the new one); nothing is copied from another session.
+   */
+  createTaskSession(input: { name?: string; permission?: SessionPermission } = {}): { session: TaskSessionRecord; index: SessionIndex } {
+    const created = createSessionInIndex(this.sessionIndex(), {
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.permission === undefined ? {} : { permission: input.permission }),
+      binding: this.currentBinding(),
+      now: this.now(),
+    } satisfies CreateSessionInput);
+    const index = this.commitSessionIndex(created.index);
+    return { session: sessionOf(index, created.session.id), index };
+  }
+
+  renameTaskSession(sessionId: string, name: string): SessionIndex {
+    return this.commitSessionIndex(renameSessionInIndex(this.sessionIndex(), sessionId, name, this.now()));
+  }
+
+  /** Archive keeps the transcript; the pointer moves to the next real session. */
+  archiveTaskSession(sessionId: string): SessionIndex {
+    return this.commitSessionIndex(archiveSessionInIndex(this.sessionIndex(), sessionId, this.now()));
+  }
+
+  restoreTaskSession(sessionId: string): SessionIndex {
+    return this.commitSessionIndex(restoreSessionInIndex(this.sessionIndex(), sessionId, this.now()));
+  }
+
+  activateTaskSession(sessionId: string): SessionIndex {
+    return this.commitSessionIndex(activateSessionInIndex(this.sessionIndex(), sessionId, this.now()));
+  }
+
+  /**
+   * Delete one session: its index record, its legacy snapshot and the SDK-owned
+   * binding/transcript/journal. Deleting the active session selects the next
+   * real one; it never substitutes a fresh empty session. A live channel is
+   * removed from memory first so nothing keeps writing into a deleted id.
+   */
+  deleteTaskSession(sessionId: string): SessionIndex {
+    const next = deleteSessionInIndex(this.sessionIndex(), sessionId);
+    const index = this.commitSessionIndex(next);
+    this.channels.delete(sessionId);
+    this.store.deleteSession(this.taskDir, sessionId);
+    this.store.deleteSdkSession(this.taskDir, sessionId);
+    return index;
+  }
+
+  /** Set (or clear) one session's model/reasoning binding; the identity of that session. */
+  bindTaskSession(sessionId: string, binding: SessionBinding | null): SessionIndex {
+    return this.commitSessionIndex(bindSessionInIndex(this.sessionIndex(), sessionId, binding, this.now()));
+  }
+
+  /**
+   * [#139] A session a model turn may use: it must exist in the task's index and
+   * must not be archived. Nothing is created here, so a turn can never land in a
+   * session the user did not choose.
+   */
+  sessionForTurn(sessionId: string): TaskSessionRecord {
+    const session = sessionOf(this.sessionIndex(), sessionId);
+    if (session.archived) throw new Error("session-archived");
+    return session;
   }
 
   /**

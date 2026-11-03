@@ -8,19 +8,18 @@ const roots = [{ label: "默认任务根", state: "ready" }];
 const association = (id: string) => ({ taskId: id, projectId: null, state: "unassigned" });
 const snapshot = (messages: unknown[] = [], pending = false) => ({ source: "sdk-jsonl", sessionId: "main", messages, pending, interrupted: false });
 const turn = (taskId: string, requestId: string, state = "accepted") => ({ taskId, sessionId: "main", requestId, turnId: requestId, state, needsResync: false });
-const hostContext = (overrides: Record<string, unknown> = {}) => ({
-  providerId: "provider-anthropic",
-  providerName: "Anthropic 官方",
-  model: "claude-sonnet-4-5",
-  modelName: "Claude Sonnet",
-  availability: { status: "available" },
-  window: 200,
-  used: 24.8,
-  source: "estimated",
-  tokens: 4321,
-  percent: 12.4,
-  thinking: "medium",
-  thinkingCatalog: "declared",
+/** [#139] The Host's own session index row for the migrated single session. */
+const sessionMain = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z",
+  archived: false, permission: "default", binding: null, ...overrides,
+});
+/** [#139] One session's readout as the Host derives it from that session's SDK JSONL. */
+const sessionReadout = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  session: sessionMain(), active: true,
+  model: { id: "claude-sonnet-4-5", name: "Claude Sonnet", contextWindow: 200000, maxTokens: 8000, reasoning: true },
+  reasoningLevels: ["low", "medium", "high"],
+  context: { used: null, window: 200000, source: "unknown" },
+  usage: null, turns: 0, transcriptModel: null, pending: false, interrupted: false,
   ...overrides,
 });
 
@@ -63,9 +62,25 @@ function setup(taskId = "task-a") {
     vi.fn(async (taskId_: string, op: string, payload: Record<string, unknown> = {}) => {
       const drafted = await draftTaskOp(taskId_, op, payload);
       if (drafted !== undefined) return drafted;
-      return handler ? handler(taskId_, op, payload) : { ok: false as const, error: `unexpected ${op}` };
+      const answered = handler ? handler(taskId_, op, payload) : undefined;
+      if (answered !== undefined) return answered;
+      return sessionTaskOp(op, payload) ?? { ok: false as const, error: `unexpected ${op}` };
     });
   let installedTaskOp = taskOpWithDraft() as never;
+  /** [#139] This fixture's Host session state; a test overrides per case. */
+  let readout = sessionReadout();
+  let sessions: Array<Record<string, unknown>> = [sessionMain()];
+  let activeSessionId: string | null = "main";
+  const sessionTaskOp = (op: string, payload: Record<string, unknown>) => {
+    const envelope = (inner: Record<string, unknown>) => ({ ok: true as const, payload: { workspaceId: "w", taskId, op, payload: inner } });
+    if (op === "task/sessionList") return envelope({ activeSessionId, sessions, provider: null });
+    if (op === "task/sessionReadout") {
+      const wanted = String(payload["sessionId"] ?? "");
+      if (!sessions.some((session) => session["id"] === wanted)) return { ok: false as const, error: "session-unknown" };
+      return envelope(readout);
+    }
+    return undefined;
+  };
   const bridge: PidockBridge = {
     listTasks: vi.fn(async () => unreadable ? { ok: false, error: "root unreadable" } : { ok: true, payload: { tasks: [{ taskId, name: "Task", branch: "main", repoCount: 0, updatedAt: "now" }], roots } }),
     projectOp: vi.fn(async (request) => ({ ok: true, payload: request.op === "list" ? { initialized: true, projects: [] } : { roots, tasks: [{ ...association(taskId), state: associationState }] } })),
@@ -95,7 +110,7 @@ function setup(taskId = "task-a") {
     get: () => installedTaskOp,
     set: (handler: (taskId: string, op: string, payload: Record<string, unknown>) => unknown) => { installedTaskOp = taskOpWithDraft(handler) as never; },
   });
-  return { bridge, calls, drafts, setDraftRefuse: (value: string) => { draftRefuse = value; }, setDraftSaveRefuse: (value: string) => { draftSaveRefuse = value; }, setDraftRecord: (value: unknown) => { draftRecord = value; }, setTaskOp: (handler: (taskId: string, op: string, payload: Record<string, unknown>) => unknown) => { bridge.taskOp = taskOpWithDraft(handler) as never; }, emit: (value: unknown) => listener?.(value), setStatus: (value: unknown) => { status = value; }, setMessages: (value: unknown[]) => { messages = value; }, setFail: (value: string) => { fail = value; }, invalidate: () => { associationState = "unavailable"; }, unreadable: () => { unreadable = true; }, subscribed: () => Boolean(listener) };
+  return { bridge, calls, drafts, setDraftRefuse: (value: string) => { draftRefuse = value; }, setDraftSaveRefuse: (value: string) => { draftSaveRefuse = value; }, setDraftRecord: (value: unknown) => { draftRecord = value; }, setTaskOp: (handler: (taskId: string, op: string, payload: Record<string, unknown>) => unknown) => { bridge.taskOp = taskOpWithDraft(handler) as never; }, setReadout: (value: typeof readout) => { readout = value; }, setSessions: (value: Array<Record<string, unknown>>, active: string | null = null) => { sessions = value; activeSessionId = active ?? (value[0]?.["id"] as string | undefined) ?? null; }, readout: () => readout, emit: (value: unknown) => listener?.(value), setStatus: (value: unknown) => { status = value; }, setMessages: (value: unknown[]) => { messages = value; }, setFail: (value: string) => { fail = value; }, invalidate: () => { associationState = "unavailable"; }, unreadable: () => { unreadable = true; }, subscribed: () => Boolean(listener) };
 }
 function mount(fixture: ReturnType<typeof setup>, taskId = "task-a", onOpenProviders = vi.fn()) {
   window.pidock = fixture.bridge;
@@ -194,7 +209,7 @@ describe("Desktop SDK conversation", () => {
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
     await send("accepted original"); await screen.findByRole("button", { name: "停止" });
     await waitFor(() => expect(f.drafts.get("task-a")).toEqual({ text: "" }));
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).not.toBeNull();
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).not.toBeNull();
     view.unmount(); mount(f); await screen.findByRole("button", { name: "停止" });
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("");
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(1);
@@ -217,7 +232,7 @@ describe("Desktop SDK conversation", () => {
     f.setStatus(turn("task-a", String(first.requestId), "done"));
     act(() => f.emit({ kind: "sdk-turn-status", turn: turn("task-a", String(first.requestId), "done") }));
     await screen.findByText(/已从 SDK 历史核验/);
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).toBeNull();
     cleanup(); mount(f); await screen.findByText(/尚未开始/);
     expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("next draft");
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(2);
@@ -282,7 +297,7 @@ describe("Desktop SDK conversation", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("仍可编辑和发送");
     expect(f.drafts.get("task-a")).toEqual(saved);
     expect(f.calls.filter((call) => call.action === "start")[0]).toMatchObject({ text: "new unsaved text" });
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).not.toBeNull();
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).not.toBeNull();
   });
 
   it("does not restore or save drafts before fresh identity verification, or for an unavailable task", async () => {
@@ -376,39 +391,31 @@ describe("Desktop SDK conversation", () => {
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
   });
 
-  it("reports, in the window line's hover only, what this route's two reads show without making it the Host's statement", async () => {
+  it("shows this session's own SDK cumulative usage in the hover instead of a task ledger comparison", async () => {
     const f = setup();
     f.setMessages([{ role: "assistant", text: "reply", usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 } }]);
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: hostContext({ tokens: 0 }) } }
-      : { ok: true, payload: {} }) as never;
+    // [#139] The cumulative number is this SESSION's own SDK reading — the Host
+    // sums this session's JSONL once, so a replayed message cannot be counted
+    // twice. `turns` is the number of assistant replies it summed.
+    f.setReadout(sessionReadout({ usage: { input: 100, output: 20, cacheRead: 900, cacheWrite: 30 }, turns: 3 }));
     mount(f);
     const usage = await screen.findByTestId("composer-usage");
-    // Two reads disagree: the Host's session total is 0 while this SDK window has
-    // reported 120. The hover reports the comparison of those two numbers and
-    // names it as this page's conclusion, scoped to this route: the Host returned
-    // two numbers, not a cause, so the clause may not read as its statement.
-    await waitFor(() => expect(usage.getAttribute("title")).toContain("Host 会话账本本次读数 0 tokens，而本窗口已报告 120 tokens；对照这两项读数，本路由的 SDK 回合用量未计入 Host 会话账本（此为本页两项读数的对照结论，并非 Host 返回的说明）。"));
+    await waitFor(() => expect(usage.getAttribute("title")).toContain("本会话 SDK 累计：输入 100 / 输出 20 / 缓存读 900 / 写 30（3 条回复）"));
     expect(usage.getAttribute("title")).toContain("最近最多 80 条 SDK 消息；不是会话累计，可能不含更早用量。");
-    expect(usage.getAttribute("title")).not.toContain("Host 报告");
-    // The label itself is unchanged: it counts the bounded window, never a session total.
+    // The visible label stays the bounded window's count, never the session total.
     expect(usage).toHaveTextContent("近期已报告输入+输出 120 tokens");
     expect(usage).not.toHaveTextContent(/本会话/);
   });
 
-  it("shows the Host's own session total in the hover when it has one, without the gap sentence", async () => {
+  it("names an unreported SDK usage as unknown in the hover rather than printing zeros", async () => {
     const f = setup();
     f.setMessages([{ role: "assistant", text: "reply", usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 } }]);
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: hostContext({ tokens: 4321 }) } }
-      : { ok: true, payload: {} }) as never;
+    f.setReadout(sessionReadout({ usage: null, turns: 0 }));
     mount(f);
     const usage = await screen.findByTestId("composer-usage");
-    await waitFor(() => expect(usage.getAttribute("title")).toContain("Host 会话账本读数 4321 tokens。"));
-    expect(usage.getAttribute("title")).not.toContain("未计入 Host 会话账本");
-    expect(usage.getAttribute("title")).not.toContain("对照这两项读数");
-    expect(usage).toHaveTextContent("近期已报告输入+输出 120 tokens");
-    expect(usage).not.toHaveTextContent(/本会话/);
+    await waitFor(() => expect(usage.getAttribute("title")).toContain("本会话 SDK 累计：SDK 未报告"));
+    expect(usage.getAttribute("title")).not.toContain("输入 0 /");
+    await waitFor(() => expect(usage).toHaveTextContent("近期已报告输入+输出 120 tokens"));
   });
 
   it("labels composer usage as recent reported input and output, not session cumulative usage", async () => {
@@ -443,7 +450,7 @@ describe("Desktop SDK conversation", () => {
     ]);
     mount(f);
     const usage = await screen.findByText("近期已报告输入+输出 0 tokens");
-    expect(usage).toHaveAttribute("title", "最近最多 80 条 SDK 消息；不是会话累计，可能不含更早用量。79 条助手消息未报告用量。");
+    expect(usage.getAttribute("title")).toContain("最近最多 80 条 SDK 消息；不是会话累计，可能不含更早用量。79 条助手消息未报告用量。");
     expect(screen.queryByText(/已截断|较早用量未计入/)).not.toBeInTheDocument();
   });
 
@@ -493,7 +500,7 @@ describe("Desktop SDK conversation", () => {
     fireEvent.keyDown(input, { key: "Enter", isComposing: false });
     await act(async () => {});
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).toBeNull();
     expect(input).toHaveValue("composition draft");
     fireEvent.compositionEnd(input);
     fireEvent.keyDown(input, { key: "Enter", isComposing: false });
@@ -515,7 +522,7 @@ describe("Desktop SDK conversation", () => {
     fireEvent.keyDown(input, { key: "Enter", keyCode: 229, isComposing: false });
     await act(async () => {});
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).toBeNull();
     expect(input).toHaveValue("completed draft");
     fireEvent.keyDown(input, { key: "Enter", keyCode: 13, isComposing: false });
     await screen.findByRole("button", { name: "停止" });
@@ -533,7 +540,7 @@ describe("Desktop SDK conversation", () => {
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
     await act(async () => {});
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).toBeNull();
     expect(input).toHaveValue(text);
     fireEvent.keyDown(input, { key: "Enter" });
     await screen.findByRole("button", { name: "停止" });
@@ -555,7 +562,7 @@ describe("Desktop SDK conversation", () => {
     }
     await act(async () => {});
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).toBeNull();
     expect(input).toHaveValue("repeated draft");
     fireEvent.keyDown(input, { key: "Enter" });
     await screen.findByRole("button", { name: "停止" });
@@ -598,214 +605,139 @@ describe("Desktop SDK conversation", () => {
     expect(attachment).toBeEnabled();
     expect(input).toHaveValue("saved text draft");
     expect(f.drafts.get("task-a")).toEqual(draft);
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull();
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).toBeNull();
     expect(f.calls.some((call) => call.action === "start")).toBe(false);
     // The picker exists and is multi-select; choosing a file is page state only,
     // which `desktopAttachments.test.tsx` drives end to end.
     expect(document.querySelector('input[type="file"]')).toHaveAttribute("multiple");
   });
 
-  it("keeps Provider navigation and SDK send/cancel available without offering a reasoning tier it cannot read", async () => {
-    const f = setup(); window.pidock = f.bridge;
+  it("keeps Provider navigation and SDK send/cancel available while naming a failed session read", async () => {
+    const f = setup();
+    // A Host that refuses the readout at all: the control says THAT, never 未接线.
+    f.setTaskOp((_taskId, op) => (op === "task/sessionReadout" ? { ok: false, error: "host-closing" } : undefined));
+    window.pidock = f.bridge;
     const onOpenProviders = vi.fn();
     render(<DesktopConversation taskId="task-a" name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={onOpenProviders} onArchived={vi.fn()} />);
     await screen.findByText(/尚未开始/);
-    // `setup`'s bridge has no `taskOp`, so the Host read cannot answer at all.
-    // The control says THAT (「推理 · 读取失败」), never 「未接线」: the capability
-    // exists (`task/sessionContext`), the read is what failed.
-    const reasoning = await screen.findByTestId("composer-thinking");
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 读取失败"));
-    expect(reasoning).not.toBeDisabled();
+    const reasoning = await screen.findByTestId("composer-reasoning");
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理档位读取失败"));
     expect(screen.getByTestId("composer-context")).toHaveTextContent("上下文 读取失败");
     expect(screen.queryByText("推理（未接线）")).toBeNull();
-    expect(screen.queryByLabelText("推理设置说明")).toBeNull();
-    expect(reasoning.getAttribute("title")).toContain("Host 会话推理档位读取失败");
-    fireEvent.click(reasoning);
-    expect(screen.getByRole("dialog", { name: "推理档位" })).toHaveTextContent("重新读取 Host 读数");
+    expect(reasoning.getAttribute("title")).toContain("推理档位读取失败：host-closing");
     expect(onOpenProviders).not.toHaveBeenCalled();
     expect(f.calls.some((call) => call.action === "start")).toBe(false);
-    fireEvent.click(screen.getByTestId("composer-model"));
-    expect(onOpenProviders).toHaveBeenCalledOnce();
     await send("still connected");
     await screen.findByRole("button", { name: "停止" });
     fireEvent.click(screen.getByRole("button", { name: "停止" }));
     expect(await screen.findByText(/已取消/)).toBeInTheDocument();
   });
 
-  it("names a selected profile whose own name and model the Host left blank instead of a bare separator", async () => {
-    // `parseProviderStatus` (`data/providerProfile.ts:37`) checks only
-    // `typeof === "string" && length <= 2048` for `name`/`modelId`, so a SELECTED
-    // profile can carry two blanks; the composer label used to be exactly ` · `.
-    const profileStatus = (name: string, modelId: string) => ({
-      state: "configured",
-      profileId: "p-11111111-2222-3333-4444-555555555555",
-      generation: 1,
-      profiles: [{ id: "p-11111111-2222-3333-4444-555555555555", name, baseUrl: "https://models.example.test/v1", modelId, contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1, credentialAvailable: true }],
-    });
-    const blank = setup();
-    blank.bridge.providerOp = vi.fn(async () => ({ ok: true, payload: profileStatus("", "") }));
-    const first = mount(blank);
-    // The exact text, so a dangling ` · ` cannot hide behind a substring match.
-    await waitFor(() => expect(screen.getByTestId("composer-model").textContent).toBe("Host 未上报配置名称 · Host 未上报模型标识"));
-    first.unmount();
-    const real = setup();
-    real.bridge.providerOp = vi.fn(async () => ({ ok: true, payload: profileStatus("Local gateway", "gpt-5-mini") }));
-    mount(real);
-    await waitFor(() => expect(screen.getByTestId("composer-model").textContent).toBe("Local gateway · gpt-5-mini"));
-    expect(screen.queryByText(/Host 未上报/)).toBeNull();
+  it("names the session's bound model in the pill instead of joining a provider name to it", async () => {
+    // [#139] The pill shows THIS session's bound model; the Provider's own name is
+    // no longer glued onto it, so a blank Host identity cannot leave ` · ` behind.
+    const f = setup();
+    f.bridge.providerOp = vi.fn(async () => ({ ok: true, payload: { state: "configured", profileId: "p-1", generation: 1, profiles: [{ id: "p-1", name: "", baseUrl: "https://models.example.test/v1", modelId: "", contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1, credentialAvailable: true }] } }));
+    const installed = mount(f);
+    await waitFor(() => expect(screen.getByTestId("composer-model-name").textContent).toBe("Claude Sonnet"));
+    installed.unmount();
+    // A session with its own binding wins over the installed default.
+    const bound = setup();
+    bound.setReadout(sessionReadout({ session: sessionMain({ binding: { profileId: "p-1", modelId: "gpt-5-mini", thinkingLevel: "high", generation: 1 } }), model: { id: "gpt-5-mini", name: "GPT-5 mini", contextWindow: 128000, maxTokens: 8192, reasoning: true }, reasoningLevels: ["low", "high"] }));
+    mount(bound);
+    await waitFor(() => expect(screen.getByTestId("composer-model-name").textContent).toBe("GPT-5 mini"));
   });
 
-  it("shows the reasoning tier the Host reports and names the read as 未读取 until it answers", async () => {
+  it("names the read as 未读取 until this session's readout answers", async () => {
     const f = setup();
     let release: ((value: { ok: true; payload: unknown }) => void) | undefined;
-    const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
+    f.setTaskOp((_taskId, op) => (op === "task/sessionReadout"
       ? new Promise<{ ok: true; payload: unknown }>((resolve) => { release = resolve; })
-      : { ok: true, payload: {} });
-    f.bridge.taskOp = taskOp as never;
+      : undefined));
     mount(f);
-    // While the read is outstanding the control names that state: no tier is shown
-    // (not even the one the Host would default to) and 未接线 never appears.
-    const reasoning = await screen.findByTestId("composer-thinking");
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 未读取"));
-    expect(reasoning).toBeDisabled();
+    // While the read is outstanding the control names that state: no level is
+    // shown (not even the one the model would default to).
+    const reasoning = await screen.findByTestId("composer-reasoning");
+    await waitFor(() => expect(reasoning).toHaveTextContent("推理档位未读取"));
     expect(screen.getByTestId("composer-context")).toHaveTextContent("上下文 未读取");
-    await act(async () => release!({ ok: true, payload: { context: hostContext({ thinking: "xhigh" }) } }));
-    // `xhigh` is a tier no default in this engagement produces (the seeded demo
-    // model `本地 Qwen` declares `default: "medium"`, `data/memoryHost.ts:929`, and
-    // the prototype falls back to `medium` too, `prototypes/pidock-ui/app.js:123`),
-    // so only the Host read can account for this label.
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 极高（xhigh）"));
-    expect(reasoning).not.toBeDisabled();
-    expect(taskOp).toHaveBeenCalledWith("task-a", "task/sessionContext", { sessionId: "main" });
+    await act(async () => release!({ ok: true, payload: { workspaceId: "w", taskId: "task-a", op: "task/sessionReadout", payload: sessionReadout({ session: sessionMain({ binding: { profileId: "p-1", modelId: "claude-sonnet-4-5", thinkingLevel: "xhigh", generation: 1 } }), reasoningLevels: ["medium", "xhigh"] }) } }));
+    // `xhigh` is a level only the Host's own answer can account for.
+    await waitFor(() => expect(reasoning).toHaveTextContent("很高"));
+    expect(within(reasoning).getByRole("button", { name: "很高" })).toHaveAttribute("aria-pressed", "true");
+    // Only the levels this model declares are offered.
+    expect(within(reasoning).getAllByRole("button").map((button) => button.textContent)).toEqual(["中", "很高"]);
   });
 
-  it("sends the selected tier through the existing Host op and applies the Host's post-write readout", async () => {
+  it("sends the chosen level through the session reasoning op and applies the Host's post-write readout", async () => {
     const f = setup();
     const sent: Array<Record<string, unknown>> = [];
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string, payload?: Record<string, unknown>) => {
-      if (op === "task/sessionContext") return { ok: true, payload: { context: hostContext({ thinking: "low", thinkingCatalog: "declared" }) } };
-      if (op === "task/setSessionThinking") {
-        sent.push(payload ?? {});
-        return { ok: true, payload: { context: hostContext({ thinking: String(payload?.["level"]), thinkingCatalog: "declared" }) } };
+    f.setTaskOp((_taskId, op, payload) => {
+      if (op === "task/sessionReasoning") {
+        sent.push(payload);
+        return { ok: true, payload: { workspaceId: "w", taskId: "task-a", op, payload: sessionReadout({ session: sessionMain({ binding: { profileId: "p-1", modelId: "claude-sonnet-4-5", thinkingLevel: "high", generation: 1 } }) }) } };
       }
-      return { ok: true, payload: {} };
-    }) as never;
+      return undefined;
+    });
     mount(f);
-    const reasoning = await screen.findByTestId("composer-thinking");
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 低（low）"));
-    fireEvent.click(reasoning);
-    fireEvent.click(within(screen.getByRole("dialog", { name: "推理档位" })).getByRole("button", { name: /最高/ }));
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 最高（max）"));
-    expect(sent).toEqual([{ sessionId: "main", level: "max" }]);
-    expect(screen.queryByRole("dialog", { name: "推理档位" })).toBeNull();
+    const reasoning = await screen.findByTestId("composer-reasoning");
+    await waitFor(() => expect(within(reasoning).getByRole("button", { name: "中" })).toBeInTheDocument());
+    fireEvent.click(within(reasoning).getByRole("button", { name: "高" }));
+    await waitFor(() => expect(within(reasoning).getByRole("button", { name: "高" })).toHaveAttribute("aria-pressed", "true"));
+    expect(sent).toEqual([{ sessionId: "main", level: "high" }]);
   });
 
-  it("shows the Host's own refusal wording for a tier it declines, without faking success", async () => {
+  it("shows the Host's own refusal wording for a level it declines, without faking success", async () => {
     const f = setup();
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: hostContext({ thinking: "medium", thinkingCatalog: "declared" }) } }
-      : op === "task/setSessionThinking" ? { ok: false, error: "thinking-level-not-declared: 模型未声明该推理档位：max" }
-        : { ok: true, payload: {} }) as never;
+    f.setTaskOp((_taskId, op) => (op === "task/sessionReasoning" ? { ok: false, error: "thinking-level-not-declared: 模型未声明该推理档位：max" } : undefined));
     mount(f);
-    const reasoning = await screen.findByTestId("composer-thinking");
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 中（medium）"));
-    fireEvent.click(reasoning);
-    fireEvent.click(within(screen.getByRole("dialog", { name: "推理档位" })).getByRole("button", { name: /最高/ }));
+    const reasoning = await screen.findByTestId("composer-reasoning");
+    await waitFor(() => expect(within(reasoning).getByRole("button", { name: "高" })).toBeInTheDocument());
+    fireEvent.click(within(reasoning).getByRole("button", { name: "高" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("thinking-level-not-declared: 模型未声明该推理档位：max");
-    expect(reasoning).toHaveTextContent("推理 · 中（medium）");
-    expect(screen.getByRole("dialog", { name: "推理档位" })).toBeInTheDocument();
+    expect(within(reasoning).getByRole("button", { name: "高" })).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("reads the Host occupancy as used/window/percent", async () => {
+  it("reads this session's context occupancy from its own SDK usage", async () => {
     const f = setup();
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: hostContext() } }
-      : { ok: true, payload: {} }) as never;
+    f.setReadout(sessionReadout({ context: { used: 24800, window: 200000, source: "sdk-usage" }, usage: { input: 24800, output: 400, cacheRead: 0, cacheWrite: 0 }, turns: 1 }));
     mount(f);
     const context = await screen.findByTestId("composer-context");
-    await waitFor(() => expect(context).toHaveTextContent("上下文 24.8k / 200k · 12.4% · 估算"));
-    expect(context.getAttribute("title")).toBe("Anthropic 官方 · Claude Sonnet · 已用 24.8k Tokens（来源 estimated）· 窗口 200k Tokens · 占用比例 12.4%；数字即 Host 会话读数，未做推断");
+    await waitFor(() => expect(context).toHaveTextContent("上下文 24.8k / 200k"));
+    expect(context.getAttribute("title")).toContain("24800 tokens");
+    expect(context.getAttribute("title")).toContain("来源 sdk-usage");
+    expect(context.getAttribute("title")).toContain("绑定模型窗口 200000 tokens");
   });
 
-  it("names a blank Host provider identity in the context hover instead of a bare separator", async () => {
-    // `data/sessionContext.ts:68-75` type-checks `providerId`/`providerName`/
-    // `model`/`modelName` and keeps `""` for all four, so the hover line used to
-    // read ` ·  · 已用 24.8k Tokens…` — the same identity the visible composer
-    // label names.
+  it("never renders an unknown occupancy as zero and never invents a percentage", async () => {
     const f = setup();
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: hostContext({ providerId: "", providerName: "", model: "", modelName: "" }) } }
-      : { ok: true, payload: {} }) as never;
+    f.setReadout(sessionReadout({ context: { used: null, window: null, source: "unknown" } }));
     mount(f);
     const context = await screen.findByTestId("composer-context");
-    await waitFor(() => expect(context).toHaveTextContent("上下文 24.8k / 200k · 12.4% · 估算"));
-    expect(context.getAttribute("title")).toContain("Host 未上报配置名称 · Host 未上报模型标识 · 已用 24.8k Tokens（来源 estimated）");
-    expect(context.getAttribute("title")).not.toContain(" ·  · ");
+    await waitFor(() => expect(context).toHaveTextContent("上下文 未报告 / 窗口未知"));
+    expect(context).not.toHaveTextContent("0.0k");
+    expect(context).not.toHaveTextContent("%");
+    expect(context.getAttribute("title")).toContain("SDK 未报告时保持未知，不按 0 显示");
   });
 
-  it("shows the Host's own occupancy percent when a ratio recomputed here would differ", async () => {
+  it("offers no fabricated `off` level to a model that declares no reasoning", async () => {
     const f = setup();
-    // The Host's payload is the authoritative source, so this fixture is the one
-    // case the fix must survive: a Host whose `percent` is no longer `used/window`
-    // (`shell/src/main/pi-session.ts:727` defines it today). used 24.8 / window 200
-    // recomputes to 12.4%, so only reading the Host's `percent` can produce 31.5%.
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: hostContext({ used: 24.8, window: 200, percent: 31.5 }) } }
-      : { ok: true, payload: {} }) as never;
+    f.setReadout(sessionReadout({ model: { id: "plain", name: "Plain", contextWindow: 128000, maxTokens: 4096, reasoning: false }, reasoningLevels: [] }));
     mount(f);
-    const context = await screen.findByTestId("composer-context");
-    await waitFor(() => expect(context).toHaveTextContent("上下文 24.8k / 200k · 31.5% · 估算"));
-    // The locally recomputed ratio never reaches the DOM, and the hover prints
-    // the same authoritative number as the visible line.
-    expect(context).not.toHaveTextContent("12.4%");
-    expect(context.getAttribute("title")).toContain("占用比例 31.5%");
+    const reasoning = await screen.findByTestId("composer-reasoning");
+    await waitFor(() => expect(reasoning).toHaveTextContent("无推理档位"));
+    expect(within(reasoning).queryAllByRole("button")).toEqual([]);
+    expect(reasoning).not.toHaveTextContent("关闭");
   });
 
-  it("names an unknown window instead of rendering a 0% nobody measured", async () => {
+  it("shows 跟随模型 instead of naming a level when the session has no preference", async () => {
     const f = setup();
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: hostContext({ window: 0, used: 0, source: "unknown", percent: null, tokens: 0 }) } }
-      : { ok: true, payload: {} }) as never;
     mount(f);
-    const context = await screen.findByTestId("composer-context");
-    await waitFor(() => expect(context).toHaveTextContent("上下文 0.0k / 窗口未知 · 占比未知 · 待更新"));
-    expect(context).not.toHaveTextContent("0%");
-    expect(context.getAttribute("title")).toContain("窗口 未知 · 占用比例 未知");
+    const reasoning = await screen.findByTestId("composer-reasoning");
+    await waitFor(() => expect(reasoning.getAttribute("title")).toBe("推理 · 跟随模型"));
+    // An empty binding level means "no session preference", not a level to guess.
+    expect(within(reasoning).getAllByRole("button").every((button) => button.getAttribute("aria-pressed") === "false")).toBe(true);
   });
 
-  it("names a model the Host reports as unable to reason instead of offering tiers", async () => {
-    const f = setup();
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: hostContext({ thinking: "", thinkingCatalog: "unsupported" }) } }
-      : { ok: true, payload: {} }) as never;
-    mount(f);
-    const reasoning = await screen.findByTestId("composer-thinking");
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 不支持"));
-    fireEvent.click(reasoning);
-    expect(screen.getByRole("dialog", { name: "推理档位" })).toHaveTextContent("Host 报告该模型不支持推理档位，本会话无可选档位。");
-    expect(within(screen.getByRole("dialog", { name: "推理档位" })).queryAllByRole("button")).toEqual([]);
-  });
-
-  it("follows the model catalog instead of naming a tier when the Host has no session preference", async () => {
-    const f = setup();
-    f.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: hostContext({ thinking: "", thinkingCatalog: "catalog-unknown" }) } }
-      : { ok: true, payload: {} }) as never;
-    mount(f);
-    const reasoning = await screen.findByTestId("composer-thinking");
-    // An empty level is the Host saying "no session preference", not a tier to guess.
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 跟随模型"));
-    expect(reasoning).not.toHaveTextContent(/高|中|低/);
-    fireEvent.click(reasoning);
-    expect(screen.getByRole("dialog", { name: "推理档位" })).toHaveTextContent("Host 尚未声明该模型的可用档位，选中档位按模型目录执行");
-  });
-
-  // The header used to claim 「Agent 工具未接线 / 只读 · 无工具」, which the Host's
-  // own wiring contradicts: every model context is built with `toolHost`
-  // (`task-host.ts` `installSdkProvider`) and offered exactly the declared task
-  // tools (`sdk-text-kernel.ts` `expectedTools`), and every call is decided and
-  // performed by the Host broker. What really is unwired on this page is the
-  // permission switch — that, and only that, is what the copy still says.
   it("states the Host tool and write-gate facts instead of claiming there are no tools", async () => {
     const f = setup(); mount(f);
     await screen.findByText(/尚未开始/);
@@ -861,11 +793,11 @@ describe("Desktop SDK conversation", () => {
     // running services and terminals do not.
     expect(screen.getByRole("dialog", { name: "归档当前任务" }))
       .toHaveTextContent("归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止");
-    // The composer's own 推理/上下文 read (`task/sessionContext`) and the #24
+    // The composer's own session-list/session-readout reads and the #24
     // execution-status read (`task/executionState`, read only) are not the dialog:
     // confirming is what may write, so no other op — and no write op at all — has
     // left the page here. The exact call set is pinned so a new op cannot slip in.
-    expect(taskOp.mock.calls.map(([, op]) => op).sort()).toEqual(["task/executionState", "task/sessionContext"]);
+    expect(taskOp.mock.calls.map(([, op]) => op).sort()).toEqual(["task/executionState", "task/sessionList", "task/sessionReadout"]);
     fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
     await waitFor(() => expect(onArchived).toHaveBeenCalledOnce());
     expect(taskOp).toHaveBeenCalledWith("task-a", "task/archive", {});
@@ -885,9 +817,11 @@ describe("Desktop SDK conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
     expect(screen.getByRole("button", { name: "确认归档" })).toBeDisabled();
     expect(screen.getByText(/会话尚未连接、正在执行或请求状态未核验/)).toBeInTheDocument();
-    // The two status reads (推理/上下文 and #24 执行状态) still issue nothing else:
+    // The status reads (会话列表/会话读数/执行状态) still issue nothing else:
     // the turn runs on the SDK channel, and no archive/cleanup op left the page.
-    expect(ops.filter((op) => op !== "task/sessionContext" && op !== "task/executionState")).toEqual([]);
+    // [#139] The session list and this session's readout are reads too; no write op
+    // (archive/cleanup/session mutation) left the page.
+    expect(ops.filter((op) => !["task/sessionList", "task/sessionReadout", "task/executionState"].includes(op))).toEqual([]);
   });
 
   it("freezes after a refused Host archive write and offers a status check", async () => {
@@ -1013,7 +947,7 @@ describe("Desktop SDK conversation", () => {
     expect(a.calls.filter((call) => call.action === "start")[1]).toMatchObject({ requestId: first.requestId, text: "must remain exact" });
     a.setStatus(turn("task-a", String(first.requestId), "done"));
     act(() => a.emit({ kind: "sdk-turn-status", turn: turn("task-a", String(first.requestId), "done") }));
-    await waitFor(() => expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toBeNull());
+    await waitFor(() => expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).toBeNull());
   });
 
   it("ignores a delayed old reconciliation after a newer request starts", async () => {
@@ -1043,7 +977,7 @@ describe("Desktop SDK conversation", () => {
     const nextId = String(f.calls.filter((call) => call.action === "start")[1]?.requestId);
     expect(nextId).not.toBe(firstId);
     await act(async () => { unblock!({ ok: true, payload: { turn: turn("task-a", firstId, "done") } }); });
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")).toContain(nextId);
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")).toContain(nextId);
     fireEvent.click(screen.getByRole("button", { name: "停止" }));
     await waitFor(() => expect(f.calls.filter((call) => call.action === "cancel")).toHaveLength(1));
     expect(f.calls.filter((call) => call.action === "cancel")[0]).toMatchObject({ turnId: turn("task-a", nextId).turnId });
@@ -1056,7 +990,7 @@ describe("Desktop SDK conversation", () => {
     const text = "\\".repeat(10000);
     await send(text); await screen.findByText(/请求结果未知/);
     const first = f.calls.find((call) => call.action === "start")!;
-    expect(localStorage.getItem("pidock-sdk-main-pending-v1:task-a")!.length).toBeGreaterThan(18000);
+    expect(localStorage.getItem("pidock-sdk-pending-v1:task-a:main")!.length).toBeGreaterThan(18000);
     view.unmount(); f.setFail(""); mount(f);
     await screen.findByText(/请求状态未知/);
     fireEvent.click(screen.getByRole("button", { name: "按原 ID 重试" }));
@@ -1065,7 +999,7 @@ describe("Desktop SDK conversation", () => {
   });
 
   it("blocks corrupt receipts and failed storage writes before start", async () => {
-    localStorage.setItem("pidock-sdk-main-pending-v1:task-a", "{invalid");
+    localStorage.setItem("pidock-sdk-pending-v1:task-a:main", "{invalid");
     const f = setup(); const view = mount(f);
     expect(await screen.findByRole("alert")).toHaveTextContent("本机待确认请求记录不可读取");
     expect(await screen.findByText(/尚未开始/)).toBeInTheDocument();
@@ -1074,7 +1008,7 @@ describe("Desktop SDK conversation", () => {
     view.unmount(); localStorage.clear();
     const setItem = Storage.prototype.setItem;
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
-      if (key.startsWith("pidock-sdk-main-pending-v1:")) throw new Error("storage unavailable");
+      if (key.startsWith("pidock-sdk-pending-v1:")) throw new Error("storage unavailable");
       setItem.call(this, key, value);
     });
     mount(f); await screen.findByText(/尚未开始/);

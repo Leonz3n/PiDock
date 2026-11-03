@@ -39,6 +39,9 @@ function setup() {
       if (op === "task/serviceStatus") return { ok: true, payload: { service: { serviceId: SERVICE_ID, state: "running", ownerSessionId: null, busy: false, closing: false, retainedRights: null, executionAvailable: false } } };
       if (op === "task/serviceLog") return { ok: true, payload: { log: [{ at: "2026-10-08T00:00:01.000Z", line: "listening at :4100" }] } };
       if (op === "task/serviceRunRecords") return { ok: true, payload: { records: [], registered: [] } };
+      // [#139] The Host's session index and this session's readout are reads too.
+      if (op === "task/sessionList") return { ok: true, payload: { activeSessionId: "main", sessions: [{ id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: null }], provider: null } };
+      if (op === "task/sessionReadout") return { ok: true, payload: { session: { id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: null }, active: true, model: null, reasoningLevels: [], context: { used: null, window: null, source: "unknown" }, usage: null, turns: 0, transcriptModel: null, pending: false, interrupted: false } };
       return { ok: false, error: `unexpected ${op}` };
     }),
     providerOp: vi.fn(async () => ({ ok: true, payload: { state: "not-configured", profileId: null, generation: null, profiles: [] } })),
@@ -72,14 +75,15 @@ describe("[UI 对齐] S8d tool panels are on-demand and close-only", () => {
   it("opens a real panel only after the user clicks, and closing it stops no service and keeps the session", async () => {
     const fixture = setup();
     mount(fixture);
-    await screen.findByText(/仅 main 会话/);
+    await screen.findByRole("tab", { name: "主会话" });
     await waitFor(() => expect(fixture.subscribed()).toBe(true));
     expect(screen.queryByTestId("desktop-tool-dock")).not.toBeInTheDocument();
-    // Mounting the conversation issues exactly three Host READS — the composer's own
-    // 推理/上下文 readout (`task/sessionContext`), the #24 execution-status read
+    // Mounting the conversation issues exactly four Host READS — [#139] the task's
+    // session list (`task/sessionList`) and this session's readout
+    // (`task/sessionReadout`), the #24 execution-status read
     // (`task/executionState`) and [#117 第 7 项] the Host draft read
     // (`task/readDraft`) — and no panel op: opening a tool panel is still on demand.
-    expect(fixture.taskOpCalls.map((call) => call.op).sort()).toEqual(["task/executionState", "task/readDraft", "task/sessionContext"]);
+    await waitFor(() => expect(fixture.taskOpCalls.map((call) => call.op).sort()).toEqual(["task/executionState", "task/readDraft", "task/sessionList", "task/sessionReadout"]));
 
     fireEvent.click(screen.getByRole("button", { name: "运行" }));
     expect(await screen.findByTestId("desktop-tool-dock")).toHaveAttribute("data-tool", "runtime");
@@ -89,7 +93,7 @@ describe("[UI 对齐] S8d tool panels are on-demand and close-only", () => {
     fireEvent.click(screen.getByRole("button", { name: "关闭面板" }));
     expect(screen.queryByTestId("desktop-tool-dock")).not.toBeInTheDocument();
     // The conversation is intact: history, session tab and composer are still there.
-    expect(screen.getByText(/仅 main 会话/)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "主会话" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "消息" })).toBeInTheDocument();
     expect(fixture.subscribed()).toBe(true);
     expect(fixture.sdkActions.filter((action) => action === "unsubscribe" || action === "cancel")).toEqual([]);
@@ -110,7 +114,7 @@ describe("[UI 对齐] S8d tool panels are on-demand and close-only", () => {
   it("keeps two opened tools as selectable tabs", async () => {
     const fixture = setup();
     mount(fixture);
-    await screen.findByText(/仅 main 会话/);
+    await screen.findByRole("tab", { name: "主会话" });
     fireEvent.click(screen.getByRole("button", { name: "运行" }));
     await screen.findByText("invoice-local");
     fireEvent.click(screen.getByRole("button", { name: "日志" }));
@@ -127,7 +131,7 @@ describe("[UI 对齐] S8d tool panels are on-demand and close-only", () => {
   it("closes one tool tab without issuing task or service-catalog operations", async () => {
     const fixture = setup();
     mount(fixture);
-    await screen.findByText(/仅 main 会话/);
+    await screen.findByRole("tab", { name: "主会话" });
     fireEvent.click(screen.getByRole("button", { name: "运行" }));
     await screen.findByText("invoice-local");
     fireEvent.click(screen.getByRole("button", { name: "日志" }));
@@ -160,7 +164,7 @@ describe("[UI 对齐] S8d tool panels are on-demand and close-only", () => {
   it("keeps the open tool tabs while the dock is collapsed and reopened", async () => {
     const fixture = setup();
     mount(fixture);
-    await screen.findByText(/仅 main 会话/);
+    await screen.findByRole("tab", { name: "主会话" });
     fireEvent.click(screen.getByRole("button", { name: "运行" }));
     await screen.findByText("invoice-local");
     fireEvent.click(screen.getByRole("button", { name: "日志" }));
@@ -182,7 +186,7 @@ describe("[UI 对齐] S8d tool panels are on-demand and close-only", () => {
   it("toggles a panel shut with the same tool button without breaking the session", async () => {
     const fixture = setup();
     mount(fixture);
-    await screen.findByText(/仅 main 会话/);
+    await screen.findByRole("tab", { name: "主会话" });
     await waitFor(() => expect(fixture.subscribed()).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: "协议" }));
     expect(await screen.findByTestId("desktop-tool-dock")).toHaveAttribute("data-tool", "protocol");

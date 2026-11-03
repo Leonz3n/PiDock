@@ -17,13 +17,16 @@
  */
 
 import type { TaskExecutionLedger } from "./execution-ledger.js";
-import type { SdkTextEvent, SdkTextResult } from "./sdk-text-kernel.js";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { SdkSessionDigest, SdkTextEvent, SdkTextResult } from "./sdk-text-kernel.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { SdkContextClient, SdkTextKernelPort } from "./sdk-context-client.js";
 
 /** The surface `SdkTurnTransport` needs; satisfied by the kernel and by this router. */
 export interface SdkTurnKernelPort extends SdkTextKernelPort {
   projection(sessionId: string): ReturnType<PiSdkTextKernel["projection"]>;
+  /** [#139] The session's own transcript readout (context occupancy + usage). */
+  digest(sessionId: string): SdkSessionDigest;
 }
 
 export class SdkTextKernelRouter implements SdkTurnKernelPort {
@@ -54,6 +57,23 @@ export class SdkTextKernelRouter implements SdkTurnKernelPort {
 
   projection(sessionId: string) {
     return this.reader.projection(sessionId);
+  }
+
+  digest(sessionId: string): SdkSessionDigest {
+    return this.reader.digest(sessionId);
+  }
+
+  /**
+   * [#139] Change one session's model/reasoning inside the isolated context
+   * (the only place that owns a model runtime). Without a configured context
+   * there is nothing to bind and the caller gets a named refusal.
+   */
+  async bind(sessionId: string, binding: { modelId: string; thinkingLevel?: ModelThinkingLevel }): Promise<{ modelId: string; thinkingLevel: string }> {
+    const target = this.context;
+    if (!target?.bind) throw new Error("provider-not-configured");
+    const bound = await target.bind(sessionId, binding);
+    this.onModelSession?.(sessionId);
+    return bound;
   }
 
   private target(): SdkTextKernelPort {
