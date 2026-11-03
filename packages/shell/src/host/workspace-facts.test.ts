@@ -128,6 +128,33 @@ describe("per-source reopen verification", () => {
     expect(ready[0]?.verification).toMatchObject({ state: "ready" });
   });
 
+  it("re-proves the worktree branch and pinned baseline on reopen, naming each mismatch", () => {
+    // A #142 creation records the ACTUAL task branch (`targetBranch`) beside the
+    // pinned baseline, so reopening can prove BOTH, not just the path identity.
+    const bound = record({
+      workspaceMode: "worktree", sharedRepos: undefined, repos: ["repo-12345678"],
+      repoSources: [{ repoDir: "repo-12345678", remote: "origin", remoteBranch: "main", baseCommit: "b".repeat(40),
+        targetBranch: "task/task-aaaaaaaa", targetRealPath: TASK_DIR + "/repo-12345678",
+        commonDir: "/src/repo/.git", remoteDigest: remoteDigest("https://example.com/repo.git"),
+        targetDevice: "10", targetInode: "20" }],
+    });
+    const commonDir = "/src/repo/.git";
+    const facts = (branch: string, lineageOk: boolean) => new TaskWorkspaceFiles("task-aaaaaaaa", TASK_DIR, store(bound),
+      readers({ identity: (path) => ({ kind: "dir", realPath: path, device: "10", inode: "20" }),
+        runGit: (args) => {
+          if (args[0] === "rev-parse" && args.includes("--git-common-dir")) return { ok: true, stdout: commonDir };
+          if (args[0] === "rev-parse") return { ok: true, stdout: branch };
+          if (args[0] === "symbolic-ref") return { ok: true, stdout: "task/task-aaaaaaaa" };
+          if (args[0] === "merge-base") return lineageOk ? { ok: true, stdout: "" } : { ok: false, error: "not an ancestor" };
+          if (args[0] === "remote") return { ok: true, stdout: "https://example.com/repo.git" };
+          return { ok: true, stdout: branch };
+        } })).facts();
+    expect(facts("main", true)[0]?.verification).toMatchObject({ state: "branch-mismatch" });
+    expect(facts("main", true)[0]?.verification?.reason).toContain("任务绑定分支为 task/task-aaaaaaaa");
+    expect(facts("task/task-aaaaaaaa", false)[0]?.verification).toMatchObject({ state: "base-mismatch" });
+    expect(facts("task/task-aaaaaaaa", true)[0]?.verification).toMatchObject({ state: "ready" });
+  });
+
   it("derives a legacy record's mode and never invents one from the UI", () => {
     const legacyWorktree = record({ workspaceMode: undefined, sharedRepos: undefined, repos: ["repo-12345678"],
       repoSources: [{ repoDir: "repo-12345678", remote: "origin", remoteBranch: "main", baseCommit: "b".repeat(40) }] });

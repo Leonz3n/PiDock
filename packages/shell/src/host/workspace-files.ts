@@ -355,12 +355,18 @@ export class TaskWorkspaceFiles {
       const identity = this.readers.identity(root.path);
       if (identity.kind !== "dir") return { verification: verifyWorkspaceSource(recorded, identity) };
       const readGit = source?.commonDir !== undefined || source?.remoteDigest !== undefined;
-      return {
-        verification: verifyWorkspaceSource(recorded, {
-          ...identity,
-          ...(readGit ? this.observeGitIdentity(root.path, source?.remote) : {}),
-        }),
-      };
+      const verification = verifyWorkspaceSource(recorded, {
+        ...identity,
+        ...(readGit ? this.observeGitIdentity(root.path, source?.remote) : {}),
+      });
+      // [Pencil T08] #143: the bound path existing is not enough. A worktree
+      // record written by a creation (`targetBranch` present) also binds the
+      // task branch and the pinned baseline, so a checkout moved onto another
+      // branch, or one whose lineage no longer contains the pinned commit, is a
+      // named repair state — the task is never silently re-created from it.
+      if (verification.state !== "ready" || source?.targetBranch === undefined) return { verification };
+      const bound = this.verifyWorktreeBinding(root);
+      return { verification: bound ?? verification };
     }
     if (root.kind === "existing-git") {
       const source = record.sharedRepos?.find((entry) => entry.rootId === root.id);
@@ -385,6 +391,30 @@ export class TaskWorkspaceFiles {
         ? { device: link.sourceDevice, inode: link.sourceInode } : {}),
     };
     return { verification: verifyWorkspaceSource(recorded, this.readers.identity(link.sourcePath)) };
+  }
+
+  /**
+   * [Pencil T08] #143: re-prove the worktree's branch and pinned baseline. Uses
+   * the observation already taken for the facts row (and a real `merge-base`
+   * probe for the lineage), and names which binding changed.
+   */
+  private verifyWorktreeBinding(root: WorkspaceRoot): WorkspaceVerification | null {
+    const observedBranch = root.workingBranch;
+    if (root.expectedBranch !== undefined && observedBranch?.state === "observed" && observedBranch.value !== root.expectedBranch) {
+      return { state: "branch-mismatch",
+        reason: `分支不符：工作副本当前在 ${observedBranch.value}，任务绑定分支为 ${root.expectedBranch}；重开需要明确修复，不会自动重建` };
+    }
+    if (root.expectedBranch !== undefined && observedBranch?.state === "unknown") {
+      return { state: "repair-required", reason: `待修复：无法读取工作副本的当前分支（${observedBranch.reason}）` };
+    }
+    if (root.baseCommit !== undefined && root.baseCommit.length > 0) {
+      const ancestor = this.readers.runGit(["merge-base", "--is-ancestor", root.baseCommit, "HEAD"], root.path);
+      if (!ancestor.ok) {
+        return { state: "base-mismatch",
+          reason: `基线不符：固定基线提交 ${root.baseCommit} 已不在工作副本历史中；重开需要明确修复，不会自动重建` };
+      }
+    }
+    return null;
   }
 
   /** Current Git common dir + remote digest of one real checkout, or named nulls. */

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Icon } from "./Icon";
-import { abandonCreation, commitCreation, currentCreation, prepareCreation, CREATION_RETENTION_NOTICE, WORKSPACE_MODE_LABELS, type CreationInput, type CreationIntentView, type WorkspaceModeView } from "../data/desktopCreation";
+import { abandonCreation, commitCreation, creationStatus, currentCreation, prepareCreation, retryCreation, CREATION_RETENTION_NOTICE, WORKSPACE_MODE_LABELS, type AbandonCleanupView, type CreationInput, type CreationIntentView, type CreationStatusView, type RepoPhaseView, type WorkspaceModeView } from "../data/desktopCreation";
 import { BRANCH_TEMPLATE_TOKEN, sourceName, sourcePath, type DesktopProject } from "../data/desktopProjects";
 import type { PidockBridge } from "../data/shellBridge";
 import { hostText } from "../data/workspaceFiles";
@@ -9,6 +9,7 @@ const button = "inline-flex min-h-8 items-center justify-center gap-1.5 border b
 const field = "w-full min-w-0 border border-line bg-paper px-2 py-1.5 text-sm text-ink";
 const label = "flex min-w-0 flex-col gap-1 text-[11px] font-medium text-muted";
 const kbd = "rounded-[3px] border border-line bg-bg px-1.5 py-0.5 font-mono text-[10px] text-muted";
+const PHASE_LABELS: Record<RepoPhaseView, string> = { created: "已创建", pending: "待准备", failed: "失败" };
 const MODE_HINTS: Record<WorkspaceModeView, string> = {
   worktree: "为每个选中仓库创建独立 Worktree 与任务分支；原仓库保持不动，不覆盖未提交修改。",
   "existing-git": "直接使用已登记原检出：不创建 Worktree、不创建任务分支、不拉取/合并/重置；未提交修改保持原样，写入影响原文件。",
@@ -37,6 +38,10 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
   const [sharedWriteConfirmed, setSharedWriteConfirmed] = useState(false);
   const [override, setOverride] = useState(false);
   const [busy, setBusy] = useState(false);
+  // [Pencil T08] #143: the real per-repository state, read from Host after an
+  // interrupted/partial creation. Never derived from the preview the page holds.
+  const [recovery, setRecovery] = useState<CreationStatusView | null>(null);
+  const [adoptOrphans, setAdoptOrphans] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
@@ -120,17 +125,56 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
       const taskId = await commitCreation(bridge, intent.id);
       await onCreated(intent.projectId, taskId);
       setIntent(null); setOpen(false); resetSelections(); setMode("worktree");
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "创建未完成，原任务身份已保留，请重试"); }
+    } catch (failure) {
+      // Read the real per-repository state first, then show the commit refusal:
+      // the refusal is the primary sentence and must not be replaced by a
+      // secondary read error.
+      await loadRecovery(true);
+      setError(failure instanceof Error ? failure.message : "创建未完成，原任务身份已保留，请重试");
+    }
     finally { setBusy(false); }
   };
-  const abandon = async () => {
-    if (!intent || !window.confirm(`放弃本次创建并生成新任务身份？${CREATION_RETENTION_NOTICE}；已关联到项目的任务需要先在「项目管理」里解绑，才能放弃。`)) return;
+  /**
+   * Read the per-repository recovery state Host really persisted. A failed read
+   * leaves the panel without a fabricated row set (the error names it).
+   */
+  const loadRecovery = async (quiet = false): Promise<CreationStatusView | null> => {
+    try {
+      const status = await creationStatus(bridge);
+      setRecovery(status);
+      setAdoptOrphans(false);
+      return status;
+    } catch (failure) {
+      setRecovery(null);
+      if (!quiet) setError(failure instanceof Error ? failure.message : "任务准备状态不可读取");
+      return null;
+    }
+  };
+  const retryFailed = async () => {
+    if (!intent) return;
+    setBusy(true); setError(null);
+    try {
+      const result = await retryCreation(bridge, intent.id, adoptOrphans);
+      setNotice(`已重试 ${result.retried.length} 个失败仓库：${result.retried.join("、") || "无"}`);
+      const taskId = await commitCreation(bridge, intent.id);
+      await onCreated(intent.projectId, taskId);
+      setIntent(null); setRecovery(null); setOpen(false); resetSelections(); setMode("worktree");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "重试未完成，原准备状态已保留");
+      await loadRecovery();
+    } finally { setBusy(false); }
+  };
+  const abandon = async (cleanup: AbandonCleanupView = "keep") => {
+    const scope = cleanup === "owned"
+      ? "放弃本次创建并清理已确认归属的受管工作树与任务分支（不会删除你的原仓库或普通目录）"
+      : `放弃本次创建并生成新任务身份？${CREATION_RETENTION_NOTICE}`;
+    if (!intent || !window.confirm(`${scope}；已关联到项目的任务需要先在「项目管理」里解绑，才能放弃。`)) return;
     setBusy(true); setError(null); setNotice(null);
     try {
       // #88: main answers with what it did **not** delete; the user needs that
       // sentence before creating a replacement, so it is not dropped.
-      setNotice(await abandonCreation(bridge, intent.id));
-      setIntent(null); setOpen(false); resetSelections(); setMode("worktree");
+      setNotice(await abandonCreation(bridge, intent.id, cleanup));
+      setIntent(null); setRecovery(null); setOpen(false); resetSelections(); setMode("worktree");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "放弃创建失败，请恢复原任务"); }
     finally { setBusy(false); }
   };
@@ -223,9 +267,34 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
                 </p>)}
             {intent.directories.map((dir) => <p className="break-all text-xs" key={dir.id}>{hostText(dir.name, "Host 未上报目录名称")} · {hostText(dir.path, "Host 未上报目录路径")} → {intent.taskDir}/{hostText(dir.linkName, "Host 未上报链接名")}（共享可写）</p>)}
             <p className="text-xs text-muted">创建中断后会保留固定任务身份与提交；重试不会更新基线。未完成的工作区可能出现在未归属任务中。</p>
+            {recovery && recovery.repos.length > 0 && <section aria-label="仓库准备状态" className="rounded-[5px] border border-line bg-bg px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-medium text-ink">仓库准备状态（来自本机持久记录）</p>
+                <span className="text-[11px] text-muted">已创建 {recovery.createdRepos}/{recovery.repos.length}</span>
+              </div>
+              <ul className="mt-1 flex list-none flex-col gap-1 p-0">
+                {recovery.repos.map((row) => <li key={row.repoDir} className="break-all text-xs">
+                  <span className="font-mono">{row.repoDir}</span> · {PHASE_LABELS[row.phase]} · 任务分支 {hostText(row.branch, "未记录")} · 基线 {hostText(row.baseCommit, "未记录")}
+                  {row.failure && <span className="text-[#ad4545]"> · {row.failure.code}：{row.failure.detail}</span>}
+                  {row.previousFailure && <span className="text-muted"> · 上一次 {row.previousFailure.code}</span>}
+                  {row.orphan?.adoptable && <span className="text-[#9a6032]"> · 任务分支已存在但无工作树（可显式接管）</span>}
+                  {row.orphan && !row.orphan.adoptable && <span className="text-[#ad4545]"> · 任务分支已存在但不在固定提交上，只能放弃并清理</span>}
+                </li>)}
+              </ul>
+              <p className="mt-1 text-[11px] text-muted">{recovery.message}</p>
+              {recovery.canAdoptOrphans && <label className="mt-1 flex items-center gap-1.5 text-[11px] text-muted">
+                <input type="checkbox" checked={adoptOrphans} onChange={(event) => setAdoptOrphans(event.target.checked)} />
+                接管已存在的任务分支（仅限同一固定提交、且未被其它工作树占用）
+              </label>}
+            </section>}
             <div className="flex flex-wrap justify-end gap-2">
               <button className={button} type="button" disabled={busy} onClick={close}>取消</button>
-              <button className={button} type="button" disabled={busy} onClick={() => void abandon()}>放弃并重新创建</button>
+              <button className={button} type="button" disabled={busy} onClick={() => void loadRecovery()}>检查准备状态</button>
+              <button className={button} type="button" disabled={busy} onClick={() => void abandon("keep")}>放弃并重新创建</button>
+              <button className={button} type="button" disabled={busy} onClick={() => void abandon("owned")}>放弃并清理受管资源</button>
+              {recovery?.canRetry && <button className={button} type="button" disabled={busy} onClick={() => void retryFailed()}>
+                {recovery.repos.some((row) => row.phase === "failed") ? "只重试失败仓库" : "继续准备未完成的仓库"}
+              </button>}
               <button className={button} type="button" aria-label="确认创建 / 恢复" disabled={busy} onClick={() => void commit()}>{busy ? "正在创建" : "确认创建 / 恢复"} <span className={kbd}>⌘↵</span></button>
             </div>
           </div> : <form className="flex flex-col gap-3" onSubmit={(event) => void prepare(event)}>

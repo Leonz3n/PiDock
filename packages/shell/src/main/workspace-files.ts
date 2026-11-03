@@ -48,12 +48,18 @@ export type WorkspaceRootKind = "worktree" | "shared-dir" | "existing-git";
 export type WorkspaceMode = "worktree" | "existing-git" | "plain-dirs";
 
 /**
- * Per-source reopen verification ([Pencil T02] #137). `missing` / `mismatch`
- * name a source that moved, disappeared or was replaced; `repair-required`
- * names a record that cannot be verified at all (its identity is not stored).
+ * Per-source reopen verification ([Pencil T02] #137).
+ * - `missing` / `mismatch` name a source that moved, disappeared or was replaced;
+ * - `repair-required` names a record that cannot be verified at all (its
+ *   identity is not stored);
+ * - `branch-mismatch` / `base-mismatch` ([Pencil T08] #143) name a worktree
+ *   whose PATH still exists but whose branch or pinned baseline no longer
+ *   matches the task binding: the checkout was moved onto another branch or its
+ *   lineage was replaced, so reopening requires an explicit repair instead of a
+ *   silent re-creation.
  * Never a silent rewrite: the record is the record, this is a reading of it.
  */
-export type WorkspaceVerificationState = "ready" | "missing" | "mismatch" | "repair-required";
+export type WorkspaceVerificationState = "ready" | "missing" | "mismatch" | "repair-required" | "branch-mismatch" | "base-mismatch";
 
 export interface WorkspaceVerification {
   state: WorkspaceVerificationState;
