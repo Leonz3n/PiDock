@@ -4,6 +4,7 @@ import {
   isDedicatedScheduleTask,
   nextRunAtOf,
   scheduleDefinitionIssues,
+  scheduleRunLinkLabel,
   scheduleRunView,
   taskKindMarker,
 } from "./schedule-task.js";
@@ -166,6 +167,27 @@ describe("S04 run record view (#152)", () => {
     expect(view.statusLabel).toBe("已跳过");
     expect(view.resumable).toBe(false);
     expect(view.detail).toBe("上一次执行仍未结束");
+  });
+
+  it("[#146] keeps the run record and shows an explicit deleted state when its session is gone", () => {
+    // The user deleted the conversation a scheduled run created. T18 boundary:
+    // the run history stays, and its link says so instead of looking resumable.
+    const deleted = scheduleRunView(run({ actualModel: "model-b" }), false);
+    expect(deleted.sessionId).toBe("session-9");
+    expect(deleted.resumable).toBe(false);
+    expect(deleted.linkState).toBe("deleted");
+    expect(deleted.status).toBe("completed");
+    expect(deleted.detail).toContain("关联会话已删除");
+    expect(scheduleRunLinkLabel(deleted)).toBe("关联会话已删除（记录保留）");
+    // A still-existing session keeps the #152 behavior.
+    const alive = scheduleRunView(run(), true);
+    expect(alive.linkState).toBe("resumable");
+    expect(scheduleRunLinkLabel(alive)).toBe("关联会话可继续");
+    // An unchecked read (older caller) never claims a session was deleted.
+    expect(scheduleRunView(run()).linkState).toBe("resumable");
+    // A run that created no session has nothing to link.
+    expect(scheduleRunView(run({ result: "skipped", sessionId: undefined })).linkState).toBe("none");
+    expect(scheduleRunLinkLabel({ linkState: "none" })).toBeNull();
   });
 
   it("reports an unknown persisted result as unknown, not as success", () => {

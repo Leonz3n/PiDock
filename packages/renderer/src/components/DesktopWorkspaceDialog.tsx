@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKe
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Icon } from "./Icon";
-import { BRANCH_TEMPLATE_TOKEN, type ProjectInput, type SourceVerification } from "../data/desktopProjects";
+import { BRANCH_TEMPLATE_TOKEN, variableInputError, type ProjectInput, type SourceVerification } from "../data/desktopProjects";
 
 /**
  * S10 `d0dQe` — 新建 / 编辑可复用工作空间.
@@ -38,6 +38,7 @@ function environmentErrors(rows: ProjectInput["environment"]): Record<number, st
   const errors: Record<number, string> = {};
   const seen = new Set<string>();
   rows.forEach((row, index) => {
+    // [Pencil T09] #144: the same reserved/credential refusals main enforces.
     if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(row.key)) {
       errors[index] = `环境变量 ${index + 1}：名称只能包含字母、数字或下划线，且不能以数字开头`;
       return;
@@ -47,7 +48,8 @@ function environmentErrors(rows: ProjectInput["environment"]): Record<number, st
       return;
     }
     seen.add(row.key);
-    if (/[\r\n]/.test(row.value)) errors[index] = `环境变量 ${index + 1}：值不能包含换行`;
+    const refusal = variableInputError(row.key, row.value);
+    if (refusal !== null) errors[index] = `环境变量 ${index + 1}：${refusal}`;
   });
   return errors;
 }

@@ -554,8 +554,13 @@ function templateReviewText(review: ServiceTemplateReview): string {
   ].join("\n");
 }
 
-/** The child environment: the Host's own, minus every credential-shaped name. */
-function commandEnvironment(): Record<string, string> {
+/**
+ * The child environment: the Host's own, minus every credential-shaped name.
+ * Exported so a test can prove the real `exec.run` boundary carries the task
+ * variables main put on this Host's process environment (#144), rather than
+ * rebuilding a second copy of the rule.
+ */
+export function commandEnvironment(): Record<string, string> {
   const env: Record<string, string> = { TERM: "dumb" };
   for (const [name, value] of Object.entries(process.env)) {
     if (value === undefined || isCredentialEnvName(name)) continue;
@@ -578,7 +583,8 @@ function commandEnvironment(): Record<string, string> {
  */
 const EXEC_UNSUPPORTED_PLATFORM = "tool-refused:exec-unsupported-platform";
 
-function defaultRunCommand(input: { command: string; cwd: string; timeoutMs: number }): Promise<SdkAgentCommandResult> {
+/** Exported for the #144 real-command test: this is the function `exec.run` uses. */
+export function defaultRunCommand(input: { command: string; cwd: string; timeoutMs: number }): Promise<SdkAgentCommandResult> {
   return new Promise((settle) => {
     const child = spawn("/bin/sh", ["-c", input.command], {
       cwd: input.cwd,

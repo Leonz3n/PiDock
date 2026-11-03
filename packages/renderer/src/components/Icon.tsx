@@ -48,6 +48,10 @@ export const ICON_PATHS = {
   // Prototype `paths.code`: the capability row's Extension glyph
   // (`capabilityRow()` picks book/server/archive/code by kind).
   code: "M8 6l-6 6 6 6 M16 6l6 6-6 6 M14 3l-4 18",
+  // [Pencil T14] #149 the two bottom-left destinations of design S06: `grid`
+  // (blocks) is 能力管理 and `sliders` (settings-2) is 设置. Same 24px stroke
+  // vocabulary as the rest of the set so the compact rail stays one weight.
+  sliders: "M4 6h9 M17 6h3 M4 12h3 M11 12h9 M4 18h11 M19 18h1 M13 4v4 M7 10v4 M15 16v4",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

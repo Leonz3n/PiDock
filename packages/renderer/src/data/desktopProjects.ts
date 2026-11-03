@@ -209,3 +209,95 @@ export async function projectDeleteBlockers(bridge: PidockBridge, projectId: str
   });
   return { projectId, tasks };
 }
+
+/**
+ * [Pencil T09] #144 workspace variables and task overrides. The renderer only
+ * names one key and one value per edit (exact-key IPC); main owns validation,
+ * persistence and the managed-process injection. `scope` is what the row's
+ * value actually came from, so the UI can never present an inherited value as a
+ * local override or vice versa.
+ */
+export interface VariableRowView { key: string; value: string }
+export interface EffectiveVariableView extends VariableRowView { scope: "workspace" | "task"; inheritedValue: string | null }
+export interface TaskVariablesView {
+  taskId: string; projectId: string;
+  workspace: VariableRowView[]; overrides: VariableRowView[];
+  effective: EffectiveVariableView[];
+  /** Legacy rows main refuses to inject (reserved/credential shapes), by key. */
+  refused: Array<{ key: string; code: string }>;
+}
+
+const VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+const VARIABLE_RESERVED = new Set(["PATH", "HOME", "USERPROFILE", "PWD", "SHELL", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "NODE_OPTIONS", "NODE_PATH", "TERM", "ELECTRON_RUN_AS_NODE"]);
+const VARIABLE_CREDENTIAL = /(?:^|_)(?:API_?KEY|ACCESS_KEY(?:_ID)?|TOKEN|SECRET(?:_ACCESS_KEY|_KEY)?|PASSWORD|PASSWD|CREDENTIALS?)(?:$|_)/i;
+
+/** The same refusals main enforces, so the form names them before any IPC. */
+export function variableInputError(key: string, value: string): string | null {
+  if (!VARIABLE_NAME.test(key)) return "变量名必须以字母或下划线开头，仅含字母、数字、下划线";
+  const upper = key.toUpperCase();
+  if (upper.startsWith("PIDOCK_") || VARIABLE_RESERVED.has(upper)) return `「${key}」是保留名称（PATH/HOME/PIDOCK_* 等），不能作为工作空间变量`;
+  if (VARIABLE_CREDENTIAL.test(key)) return `「${key}」是凭据形态名称；凭据请保存在 Provider 凭据中，不放入共享变量`;
+  if (value.length > 4096 || /[\r\n]/.test(value)) return "变量值必须是不超过 4096 字符的单行文本";
+  return null;
+}
+
+function variableRow(value: unknown, fields: string[]): VariableRowView {
+  if (!object(value) || !exact(value, fields) || typeof value.key !== "string" || typeof value.value !== "string") {
+    throw new Error("变量返回异常");
+  }
+  return { key: value.key, value: value.value };
+}
+
+function parseWorkspaceVariables(payload: unknown): VariableRowView[] {
+  if (!object(payload) || !exact(payload, ["workspace"]) || !Array.isArray(payload.workspace)) throw new Error("工作空间变量返回异常");
+  return payload.workspace.map((row) => variableRow(row, ["key", "value"]));
+}
+
+export async function readWorkspaceVariables(bridge: PidockBridge, projectId: string): Promise<VariableRowView[]> {
+  return parseWorkspaceVariables(await projectOperation(bridge, { op: "variables", projectId }));
+}
+
+export async function saveWorkspaceVariable(bridge: PidockBridge, projectId: string, key: string, value: string): Promise<VariableRowView[]> {
+  return parseWorkspaceVariables(await projectOperation(bridge, { op: "setVariable", projectId, key, value }));
+}
+
+export async function deleteWorkspaceVariable(bridge: PidockBridge, projectId: string, key: string): Promise<VariableRowView[]> {
+  const payload = await projectOperation(bridge, { op: "removeVariable", projectId, key });
+  if (!object(payload) || typeof payload.removed !== "boolean" || !Array.isArray(payload.workspace)) throw new Error("工作空间变量返回异常");
+  return parseWorkspaceVariables({ workspace: payload.workspace });
+}
+
+export function parseTaskVariables(payload: unknown): TaskVariablesView {
+  if (!object(payload) || !exact(payload, ["taskId", "projectId", "workspace", "overrides", "effective", "refused", "environment", ...("removed" in payload ? ["removed"] : [])]) ||
+      typeof payload.taskId !== "string" || typeof payload.projectId !== "string" ||
+      !Array.isArray(payload.workspace) || !Array.isArray(payload.overrides) || !Array.isArray(payload.effective) || !Array.isArray(payload.refused) ||
+      !object(payload.environment)) {
+    throw new Error("任务变量返回异常");
+  }
+  const workspace = payload.workspace.map((row) => variableRow(row, ["key", "value"]));
+  const overrides = payload.overrides.map((row) => variableRow(row, ["key", "value"]));
+  const effective = payload.effective.map((row) => {
+    if (!object(row) || !exact(row, ["key", "value", "scope", "inheritedValue"]) ||
+        typeof row.key !== "string" || typeof row.value !== "string" ||
+        (row.scope !== "workspace" && row.scope !== "task") ||
+        (row.inheritedValue !== null && typeof row.inheritedValue !== "string")) throw new Error("任务变量返回异常");
+    return { key: row.key, value: row.value, scope: row.scope, inheritedValue: row.inheritedValue } as EffectiveVariableView;
+  });
+  const refused = payload.refused.map((row) => {
+    if (!object(row) || !exact(row, ["key", "code"]) || typeof row.key !== "string" || typeof row.code !== "string") throw new Error("任务变量返回异常");
+    return { key: row.key, code: row.code };
+  });
+  return { taskId: payload.taskId, projectId: payload.projectId, workspace, overrides, effective, refused };
+}
+
+export async function readTaskVariables(bridge: PidockBridge, taskId: string): Promise<TaskVariablesView> {
+  return parseTaskVariables(await projectOperation(bridge, { op: "taskVariables", taskId }));
+}
+
+export async function saveTaskVariable(bridge: PidockBridge, taskId: string, key: string, value: string): Promise<TaskVariablesView> {
+  return parseTaskVariables(await projectOperation(bridge, { op: "setTaskVariable", taskId, key, value }));
+}
+
+export async function deleteTaskVariable(bridge: PidockBridge, taskId: string, key: string): Promise<TaskVariablesView> {
+  return parseTaskVariables(await projectOperation(bridge, { op: "removeTaskVariable", taskId, key }));
+}

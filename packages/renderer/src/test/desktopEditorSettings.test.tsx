@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsPage } from "../components/DesktopSettingsPage";
 
@@ -29,6 +29,8 @@ describe("#15 box 28 external editor setting in 本机设置", () => {
         : { ok: false, error: "unexpected" });
     const { taskOp } = bridge(editorSettingsOp);
     render(<DesktopSettingsPage />);
+    // [Pencil T14] #149: the external editor lives in the 通用 pane now.
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置" })).getByRole("button", { name: "通用" }));
 
     expect(await screen.findByText("/usr/local/bin/code")).toBeInTheDocument();
     expect(screen.getByText(SETTINGS_PATH)).toBeInTheDocument();
@@ -48,6 +50,7 @@ describe("#15 box 28 external editor setting in 本机设置", () => {
     });
     const { taskOp } = bridge(editorSettingsOp);
     render(<DesktopSettingsPage />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置" })).getByRole("button", { name: "通用" }));
     await waitFor(() => expect(editorSettingsOp).toHaveBeenCalledTimes(1));
 
     fireEvent.change(screen.getByLabelText("外部编辑器程序"), { target: { value: "/opt/editor" } });
@@ -68,6 +71,7 @@ describe("#15 box 28 external editor setting in 本机设置", () => {
         : { ok: true, payload: { program: "/opt/editor", args: [], settingsPath: SETTINGS_PATH } });
     bridge(editorSettingsOp);
     render(<DesktopSettingsPage />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置" })).getByRole("button", { name: "通用" }));
     await waitFor(() => expect(editorSettingsOp).toHaveBeenCalledTimes(1));
 
     fireEvent.change(screen.getByLabelText("外部编辑器程序"), { target: { value: "/opt/editor" } });
@@ -84,6 +88,7 @@ describe("#15 box 28 external editor setting in 本机设置", () => {
         : { ok: false, error: `editor-program-not-executable: 外部编辑器程序不是可执行文件（/tmp/Fake.app），未保存任何设置` });
     bridge(editorSettingsOp);
     render(<DesktopSettingsPage />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置" })).getByRole("button", { name: "通用" }));
     await waitFor(() => expect(editorSettingsOp).toHaveBeenCalledTimes(1));
 
     fireEvent.change(screen.getByLabelText("外部编辑器程序"), { target: { value: "/tmp/Fake.app" } });
@@ -101,6 +106,7 @@ describe("#15 box 28 external editor setting in 本机设置", () => {
     // reading alongside the refusal.
     bridge(vi.fn(async () => ({ ok: false, error: `editor-settings-invalid: ${SETTINGS_PATH} 不是合法 JSON，未启动任何程序` })));
     render(<DesktopSettingsPage />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置" })).getByRole("button", { name: "通用" }));
 
     expect(await screen.findByText(/editor-settings-invalid/)).toBeInTheDocument();
     expect(screen.getByText("读取失败")).toBeInTheDocument();
@@ -114,6 +120,7 @@ describe("#15 box 28 external editor setting in 本机设置", () => {
         : { ok: true, payload: { program: null, args: [], settingsPath: SETTINGS_PATH } });
     bridge(editorSettingsOp);
     render(<DesktopSettingsPage />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置" })).getByRole("button", { name: "通用" }));
     await waitFor(() => expect(editorSettingsOp).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: "清除外部编辑器设置" }));
@@ -125,6 +132,7 @@ describe("#15 box 28 external editor setting in 本机设置", () => {
   it("treats a status that is not the documented shape as an error, never as an empty setting", async () => {
     bridge(vi.fn(async () => ({ ok: true, payload: { program: "/opt/editor" } })));
     render(<DesktopSettingsPage />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置" })).getByRole("button", { name: "通用" }));
     expect(await screen.findByText("Host 外部编辑器设置响应无法解析")).toBeInTheDocument();
     expect(screen.queryByText("/opt/editor")).not.toBeInTheDocument();
   });
@@ -132,6 +140,7 @@ describe("#15 box 28 external editor setting in 本机设置", () => {
   it("says it cannot read or write the setting outside the desktop shell instead of pretending", async () => {
     window.pidock = { taskOp: async () => ({ ok: true, payload: {} }) } as unknown as typeof window.pidock;
     render(<DesktopSettingsPage />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "设置" })).getByRole("button", { name: "通用" }));
     expect(await screen.findByText("当前不在桌面壳内，无法读写外部编辑器设置")).toBeInTheDocument();
   });
 });

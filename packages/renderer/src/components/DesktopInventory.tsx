@@ -23,6 +23,7 @@ import { loadDesktopProjects, parseDesktopProject, projectDeleteBlockers, projec
   type DesktopProjects, type ProjectInput, type ProjectRegistryHealth, type ProjectSource, type SourceVerification,
   type TaskAssociation } from "../data/desktopProjects";
 import { hostText } from "../data/workspaceFiles";
+import { useAppearanceStore, watchSystemAppearance } from "../stores/appearance";
 
 export { desktopMode };
 
@@ -189,6 +190,13 @@ export function DesktopInventory() {
     finally { rootRetryRef.current = false; setRootRetryPending(false); setBusy(false); }
   };
   useEffect(() => { void load(); }, [load]);
+  // [Pencil T14] #149: 外观 applies from the first paint, on every desktop page —
+  // not only while 设置 is open. `hydrate` reads PiDock's own preference from
+  // main and `watchSystemAppearance` re-resolves 跟随系统 when the OS flips.
+  useEffect(() => {
+    void useAppearanceStore.getState().hydrate();
+    return watchSystemAppearance();
+  }, []);
   useEffect(() => {
     if (view.kind === "ready" && selection.kind === "project" &&
         !view.data?.projects.some((project) => project.id === selection.id)) {
@@ -439,7 +447,9 @@ export function DesktopInventory() {
     // Any other page leaves the usage view. 能力管理 keeps the task it was
     // opened from: 选用 is recorded on that task and Esc returns to it.
     setUsageTaskId(null);
-    if (next.view !== "capabilities") setActiveTask(null);
+    // [Pencil T14] #149 设置 keeps the task it was opened from too: returning
+    // restores that task's session, draft and focus unchanged.
+    if (next.view !== "capabilities" && next.view !== "settings") setActiveTask(null);
     setLocalPage(next.view === "capabilities" || next.view === "settings" ? next.view : null);
     if (next.view === "project") { pinned.current = true; setSelection({ kind: "project", id: next.projectId }); }
     if (next.view === "unassigned") { pinned.current = true; setSelection({ kind: "unassigned" }); }
@@ -530,7 +540,12 @@ export function DesktopInventory() {
     taskName={activeTask?.name ?? null}
     onBack={() => navigate(activeTask ? { view: "task", taskId: activeTask.id } : { view: "unassigned" })}
   />);
-  if (localPage === "settings") return shell(<DesktopSettingsPage />);
+  // [Pencil T14] #149 设置 is its own full-window destination (S11): the task it
+  // was opened from stays selected, and both the back entry and Esc return to it.
+  if (localPage === "settings") return shell(<DesktopSettingsPage
+    taskName={activeTask?.name ?? null}
+    onBack={() => navigate(activeTask ? { view: "task", taskId: activeTask.id } : { view: "unassigned" })}
+  />);
   // [Pencil T02] #137 / S08: a task opens on its workspace facts (one row per
   // source, mode badge, per-source verification) with the existing conversation
   // entry directly below — no invented sessions, no fixture roots.
