@@ -243,7 +243,7 @@ export function DesktopProjectOverview({
               </div>
               {project.environment === null
                 ? <div className="rounded-[5px] bg-bg px-3 py-2"><p className="text-[10px] text-muted">Host 未上报环境变量</p></div>
-                : <DesktopWorkspaceVariables projectId={project.id} fallback={project.environment} />}
+                : <DesktopWorkspaceVariables projectId={project.id} initialRows={project.environment} />}
             </div>
             <div className="flex min-w-0 flex-col gap-1.5">
               <div className="flex items-center justify-between gap-2">

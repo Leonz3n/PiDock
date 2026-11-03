@@ -765,7 +765,9 @@ export class PerTaskHostRegistry {
     }
     // Publish ownership before invoking even a reentrant spawn. A late child
     // remains owned after sealing or deadline expiry; no business op is replayed.
-    const promise = Promise.resolve().then(() => this.spawn(this.workspaceId, { taskId, taskDir }, this.environmentFor?.(taskId))).then((spawned) => {
+    const promise = Promise.resolve().then(() => this.environmentFor
+      ? this.spawn(this.workspaceId, { taskId, taskDir }, this.environmentFor(taskId))
+      : this.spawn(this.workspaceId, { taskId, taskDir })).then((spawned) => {
       const entry = { taskId, taskDir, client: spawned.client, child: spawned.child };
       this.byTaskDir.set(key, entry);
       let resolveExit!: () => void;

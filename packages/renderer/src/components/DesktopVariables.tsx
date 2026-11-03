@@ -24,6 +24,8 @@ import { shellBridge, type PidockBridge } from "../data/shellBridge";
  * with; the next start sees the edit. Values here are shared and non-secret —
  * credential-shaped names are refused by main and by this form.
  */
+/** Stable fallback: a fresh `{}` per render would restart every load effect. */
+const NO_BRIDGE: PidockBridge = {};
 const BUTTON = "inline-flex min-h-6 items-center gap-1 rounded-[3px] border border-line bg-paper px-1.5 text-[10px] text-ink hover:bg-bg disabled:opacity-50";
 const INPUT = "min-w-0 rounded-[3px] border border-line bg-paper px-1.5 py-1 font-mono text-[10px] text-ink outline-none focus:border-accent";
 
@@ -63,7 +65,8 @@ function Rows({ rows, overrides, busy, onOverride, onRestore }: {
   </ul>;
 }
 
-export function DesktopTaskVariables({ taskId, bridge = shellBridge() ?? {} }: { taskId: string; bridge?: PidockBridge }) {
+export function DesktopTaskVariables({ taskId, bridge }: { taskId: string; bridge?: PidockBridge }) {
+  const api = bridge ?? shellBridge() ?? NO_BRIDGE;
   const [view, setView] = useState<TaskVariablesView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -73,9 +76,9 @@ export function DesktopTaskVariables({ taskId, bridge = shellBridge() ?? {} }: {
 
   const load = useCallback(async () => {
     setError(null);
-    try { setView(await readTaskVariables(bridge, taskId)); }
+    try { setView(await readTaskVariables(api, taskId)); }
     catch (failure) { setView(null); setError(failure instanceof Error ? failure.message : "任务变量读取失败"); }
-  }, [bridge, taskId]);
+  }, [api, taskId]);
   useEffect(() => { void load(); }, [load]);
 
   const write = async (action: () => Promise<TaskVariablesView>) => {
@@ -88,12 +91,12 @@ export function DesktopTaskVariables({ taskId, bridge = shellBridge() ?? {} }: {
     const refusal = variableInputError(key.trim(), value);
     if (refusal !== null) { setFormError(refusal); return; }
     void write(async () => {
-      const next = await saveTaskVariable(bridge, taskId, key.trim(), value);
+      const next = await saveTaskVariable(api, taskId, key.trim(), value);
       setKey(""); setValue("");
       return next;
     });
   };
-  const restore = (target: string) => void write(() => deleteTaskVariable(bridge, taskId, target));
+  const restore = (target: string) => void write(() => deleteTaskVariable(api, taskId, target));
   const edit = (target: string) => {
     const current = view?.effective.find((row) => row.key === target);
     setKey(target);
@@ -130,13 +133,18 @@ export function DesktopTaskVariables({ taskId, bridge = shellBridge() ?? {} }: {
 }
 
 /** S07 workspace-level editor: exact-key add/edit/delete with the same refusals. */
-export function DesktopWorkspaceVariables({ projectId, bridge = shellBridge() ?? {}, fallback }: {
+export function DesktopWorkspaceVariables({ projectId, bridge, initialRows }: {
   projectId: string;
   bridge?: PidockBridge;
-  /** Read-only rows main already reported; used only when the edit interface is absent. */
-  fallback?: VariableRowView[] | null;
+  /**
+   * Rows main already reported with the workspace (`project.environment`). When
+   * present the panel renders them without a second read; each exact-key write
+   * returns the updated workspace rows. `undefined` triggers a read (standalone).
+   */
+  initialRows?: VariableRowView[] | null;
 }) {
-  const [rows, setRows] = useState<VariableRowView[] | null>(null);
+  const api = bridge ?? shellBridge() ?? NO_BRIDGE;
+  const [rows, setRows] = useState<VariableRowView[] | null>(initialRows === undefined ? null : initialRows);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [key, setKey] = useState("");
@@ -144,10 +152,10 @@ export function DesktopWorkspaceVariables({ projectId, bridge = shellBridge() ??
 
   const load = useCallback(async () => {
     setError(null);
-    try { setRows(await readWorkspaceVariables(bridge, projectId)); }
+    try { setRows(await readWorkspaceVariables(api, projectId)); }
     catch (failure) { setRows(null); setError(failure instanceof Error ? failure.message : "工作空间变量读取失败"); }
-  }, [bridge, projectId]);
-  useEffect(() => { void load(); }, [load]);
+  }, [api, projectId]);
+  useEffect(() => { if (initialRows === undefined) void load(); }, [load, initialRows]);
 
   const write = async (action: () => Promise<VariableRowView[]>) => {
     setBusy(true);
@@ -159,19 +167,14 @@ export function DesktopWorkspaceVariables({ projectId, bridge = shellBridge() ??
     const refusal = variableInputError(key.trim(), value);
     if (refusal !== null) { setError(refusal); return; }
     void write(async () => {
-      const next = await saveWorkspaceVariable(bridge, projectId, key.trim(), value);
+      const next = await saveWorkspaceVariable(api, projectId, key.trim(), value);
       setKey(""); setValue("");
       return next;
     });
   };
 
   return <div className="rounded-[5px] bg-bg px-3 py-2" data-testid="desktop-workspace-variables">
-    {error !== null && (fallback === undefined
-      ? <p role="alert" className="text-[10px] text-[#ad4545]">{error}</p>
-      : <p role="status" className="text-[10px] text-muted">Host 未提供变量编辑接口；以下为主进程已上报的共享值（只读）。</p>)}
-    {error !== null && fallback !== undefined && fallback !== null && <ul aria-label="工作空间环境变量" className="mt-1 flex flex-col gap-1 font-mono text-[10px] text-ink">
-      {fallback.length === 0 ? <li>尚未配置工作空间变量。</li> : fallback.map((row) => <li key={row.key} className="break-all">• {row.key} = {row.value}</li>)}
-    </ul>}
+    {error !== null && <p role="alert" className="text-[10px] text-[#ad4545]">{error}</p>}
     {rows === null && error === null && <p role="status" className="text-[10px] text-muted">正在读取工作空间变量…</p>}
     {rows !== null && (rows.length === 0
       ? <p className="text-[10px] text-muted">尚未配置工作空间变量；下属任务默认继承此处值。</p>
@@ -180,7 +183,7 @@ export function DesktopWorkspaceVariables({ projectId, bridge = shellBridge() ??
           <span>• {row.key} = {row.value}</span>
           <span className="flex gap-1">
             <button type="button" className={BUTTON} disabled={busy} onClick={() => { setKey(row.key); setValue(row.value); }}>编辑</button>
-            <button type="button" className={BUTTON} disabled={busy} onClick={() => void write(() => deleteWorkspaceVariable(bridge, projectId, row.key))}>删除</button>
+            <button type="button" className={BUTTON} disabled={busy} onClick={() => void write(() => deleteWorkspaceVariable(api, projectId, row.key))}>删除</button>
           </span>
         </li>)}
       </ul>)}

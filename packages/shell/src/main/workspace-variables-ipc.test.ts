@@ -67,7 +67,7 @@ describe("workspace/task variable IPC", () => {
 
   it("shows inherited, overridden and restored values with provenance for one associated task", async () => {
     const f = fixture();
-    const project = await workspace(f);
+    await workspace(f);
     const inherited = await performProjectOperation(f.registry, { op: "taskVariables", taskId: TASK }, f.roots, f.variables) as {
       effective: Array<{ key: string; value: string; scope: string; inheritedValue: string | null }>; environment: Record<string, string>;
     };
