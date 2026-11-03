@@ -383,3 +383,57 @@ describe("#149 return keeps context + compact layout", () => {
     for (const option of APPEARANCE_OPTIONS) expect(screen.getByText(option.label)).toBeVisible();
   });
 });
+
+/**
+ * The production route end to end: 设置 is reached from a real task and returning
+ * restores THAT task/session instead of dropping back to an empty workspace page.
+ * (Copied minimally from `desktopShellSummary.test.tsx`'s production bridge.)
+ * Draft/focus/scroll live in the task's own stores and components, which this
+ * detour never unmounts state for; the real-Electron scroll/focus pass is listed
+ * as a residual in the ticket report.
+ */
+describe("#149 settings round trip on the production shell", () => {
+  const TASK_ID = "real-149";
+  const project = { id: "bcedc870-22bd-474e-ac55-78d30a9d763d", name: "真实项目", description: "系统 A", repositories: [], directories: [] };
+
+  function productionBridge() {
+    const tasks = [{ taskId: TASK_ID, name: "真实任务", branch: "task/main", repoCount: 1, updatedAt: "2026-09-22" }];
+    const roots = [{ label: "默认任务根", state: "ready" as const }];
+    return {
+      listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })),
+      importTaskRoot: vi.fn(async () => ({ ok: true, payload: { canceled: false, count: 1 } })),
+      projectOp: vi.fn(async (request: { op: string }) => request.op === "list"
+        ? { ok: true, payload: { initialized: true, projects: [project] } }
+        : { ok: true, payload: { roots, tasks: [{ taskId: TASK_ID, projectId: project.id, state: "assigned" }] } }),
+      taskOp: vi.fn(async (taskId: string, op: string) => op === "task/lifecycleState"
+        ? { ok: true, payload: { lifecycle: { taskId, archived: false, archivedAt: null } } }
+        : { ok: true, payload: { op } }),
+      sdkTurn: vi.fn(async (request: Record<string, unknown>) => ({ ok: true, payload: request["action"] === "subscribe"
+        ? { taskId: TASK_ID, sessionId: "main", snapshot: { source: "sdk-jsonl", sessionId: "main", messages: [], pending: false, interrupted: false }, turn: null }
+        : { unsubscribed: true } })),
+      onSdkTurnEvent: vi.fn(() => vi.fn()),
+    };
+  }
+
+  it("returns to the same task and session instead of dropping the context", async () => {
+    window.pidock = productionBridge() as unknown as typeof window.pidock;
+    const { App } = await import("../App");
+    render(<App />);
+
+    await screen.findByTestId("desktop-project-overview");
+    fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
+    fireEvent.click(await within(screen.getByRole("navigation", { name: "项目导航" })).findByRole("button", { name: project.name }));
+    fireEvent.click(await screen.findByRole("button", { name: "进入工作区" }));
+    await screen.findByTestId("desktop-conversation");
+
+    fireEvent.click(within(screen.getByTestId("desktop-sidebar")).getByRole("button", { name: "设置" }));
+    const page = await screen.findByTestId("desktop-settings-page");
+    expect(within(page).getByRole("button", { name: /返回任务工作区/ })).toHaveTextContent("真实任务");
+    // Esc is PiDock's own shortcut and lands back on the same task.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(await screen.findByTestId("desktop-conversation")).toBeInTheDocument();
+    expect(screen.getByTestId("desktop-shell")).toBeInTheDocument();
+    // No 未接线 placeholder and no forbidden management entry on the way back.
+    expect(screen.queryByText(/Extensions|Computer Use|Browser/)).toBeNull();
+  });
+});
