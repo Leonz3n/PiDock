@@ -195,6 +195,15 @@ export interface SdkAgentToolBrokerOptions {
   resolveRealPath(path: string): string;
   /** True while the Host is closing (no new effect may start). */
   closing(): boolean;
+  /**
+   * [Pencil T06] #141 cross-process shared real-path claim. A mutating path tool
+   * takes the SAME real-path keys a turn tool takes (in-process table + the
+   * app-private lock), so two real Host processes writing one shared directory
+   * mutually exclude. Absent means this Host has no shared-path layer (a
+   * standalone Host with no shared directory).
+   */
+  sharedPaths?: (input: { sessionId: string; label: string; realPath: string }) =>
+    { ok: true; release: () => void } | { ok: false; reason: string };
   approvalTimeoutMs?: number;
   /** Process boundary for `exec.run`; injected so tests drive their own. */
   runCommand?: (input: { command: string; cwd: string; timeoutMs: number }) => Promise<SdkAgentCommandResult>;
@@ -1094,6 +1103,7 @@ export class SdkAgentToolBroker {
       return await this.runWithGate({
         sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: cwdPath.absolute,
         operation: parsed.values.command,
+        realPath: cwdPath.real,
         version: versionOf([spec.name, spec.kind, cwdPath.real, parsed.values.command, base]),
         effect: () => this.executeCommand(parsed.values.command!, cwdPath.real),
       });
@@ -1109,6 +1119,7 @@ export class SdkAgentToolBroker {
       }
       return await this.runWithGate({
         sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: resolved.absolute,
+        realPath: resolved.real,
         version: versionOf([spec.name, spec.kind, resolved.real, fingerprint, createHash("sha256").update(parsed.values.content!).digest("hex")]),
         effect: () => this.executeWrite(resolved.real, parsed.values.content!),
       });
@@ -1444,6 +1455,8 @@ export class SdkAgentToolBroker {
     target: string;
     /** What the confirmation shows when `target` alone cannot state the real operation (an `exec.run` command). */
     operation?: string;
+    /** The real path this call writes ([Pencil T06] #141 shared-path claim). */
+    realPath?: string;
     version: string;
     effect: () => Promise<SdkAgentToolOutcome>;
   }): Promise<SdkAgentToolOutcome> {
@@ -1461,6 +1474,22 @@ export class SdkAgentToolBroker {
       });
       if (!claim.ok) return refuse("tool-refused:write-lock", writeClaimError(claim));
       claimId = claim.claimId;
+    }
+    // [Pencil T06] #141: a shared plain-directory target is also claimed on its
+    // REAL path, in-process and across Host processes. A refused claim releases
+    // the task write right and performs no effect.
+    let releasePath: (() => void) | undefined;
+    if (mutating && input.realPath !== undefined && this.options.sharedPaths !== undefined) {
+      const pathClaim = this.options.sharedPaths({
+        sessionId: input.sessionId,
+        label: `Agent 工具 ${input.name}`,
+        realPath: input.realPath,
+      });
+      if (!pathClaim.ok) {
+        if (claimId !== undefined) this.options.write.releaseWrite(claimId);
+        return refuse("tool-refused:shared-path-locked", pathClaim.reason);
+      }
+      releasePath = pathClaim.release;
     }
     try {
       if (preview.verdict === "ask") {
@@ -1481,6 +1510,7 @@ export class SdkAgentToolBroker {
       if (this.closed || this.options.closing()) return refuse("tool-refused:task-host-closing", "任务宿主正在关闭，执行已取消");
       return await input.effect();
     } finally {
+      releasePath?.();
       if (claimId !== undefined) this.options.write.releaseWrite(claimId);
     }
   }

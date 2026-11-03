@@ -83,7 +83,7 @@ describe("[UI 对齐] S8d tool panels are on-demand and close-only", () => {
     // (`task/sessionReadout`), the #24 execution-status read
     // (`task/executionState`) and [#117 第 7 项] the Host draft read
     // (`task/readDraft`) — and no panel op: opening a tool panel is still on demand.
-    await waitFor(() => expect(fixture.taskOpCalls.map((call) => call.op).sort()).toEqual(["task/executionState", "task/readDraft", "task/sessionList", "task/sessionReadout"]));
+    await waitFor(() => expect(fixture.taskOpCalls.map((call) => call.op).sort()).toEqual(["task/executionState", "task/listApprovals", "task/readDraft", "task/sessionList", "task/sessionReadout"]));
 
     fireEvent.click(screen.getByRole("button", { name: "运行" }));
     expect(await screen.findByTestId("desktop-tool-dock")).toHaveAttribute("data-tool", "runtime");

@@ -7,15 +7,18 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
 import { readHostDraft, saveHostDraft } from "../data/draftStore";
-import { executionStateThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
+import { executionStateThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
+import { DesktopApprovalCard, type ApprovalRead } from "./DesktopApprovalCard";
+import { approvalFailureText, approvalRequest, parseTaskApprovals, type ApprovalDecision, type TaskApproval } from "../data/toolApproval";
 import { executionStateFromHost, runRecordFromExecutionState, runStateOfExecution, type SessionExecutionView } from "../data/executionLedger";
 import { executionLabel, executionStepLabel } from "../pages/executionView";
 import { TurnStream } from "../data/turnStream";
 import {
-  activateSession, archiveSession, createSession, deleteSession, readSessionReadout, readTaskSessions,
+  activateSession, archiveSession, createSession, deleteSession, formatWindow, mergeSessionList, readSessionReadout, readTaskSessions,
   REASONING_LEVEL_TEXT, renameSession, restoreSession, setSessionReasoning, switchSessionModel,
   type SessionList, type SessionReadout, type SessionThinkingLevel, type TaskSession,
 } from "../data/taskSessions";
+import { definiteTurnRefusal } from "../data/turnRefusal";
 import { parseLifecycle } from "./DesktopArchivePage";
 import { attachmentRefusal, attachmentSelectionReport, attachmentSourceLabel, classifyComposerAttachment, describeReferenceChip, referenceProvenance, referenceSourceLabel, type CandidateRow } from "../data/composerRules";
 import type { Reference } from "../data/types";
@@ -317,6 +320,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       if (turn.state !== "accepted") {
         try { clearReceipt(taskId, sessionId, requestId); setReceiptError(null); }
         catch { setReceiptError("本机待确认请求记录无法清除，已禁止发送；请核验本机数据"); }
+        // [#139] The turn settled: its request is now in this session's JSONL,
+        // so the context/usage readout changes here — not only on switch.
+        readoutRefresh.current();
       }
       setCurrent({ ...attemptRef.current, turnId: turn.turnId, phase: turn.state === "accepted" ? "accepted" : "terminal", state: turn.state });
     }
@@ -332,11 +338,23 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const [unwired, setUnwired] = useState<string | null>(null);
   const [readoutRead, setReadoutRead] = useState<ReadoutRead>({ phase: "reading" });
   const [executionRead, setExecutionRead] = useState<ExecutionRead>({ phase: "reading" });
+  // [Pencil T05] ticket 140 本会话真实的确认记录（`task/listApprovals`）：待批准的工具调用
+  // 只有从这里来。`reading`/`failed` 是各自具名的状态，读取失败不渲染成「无待确认」。
+  const [approvalRead, setApprovalRead] = useState<ApprovalRead>({ phase: "reading" });
   const [modelOpen, setModelOpen] = useState(false);
   const [thinkingError, setThinkingError] = useState<string | null>(null);
   const [thinkingBusy, setThinkingBusy] = useState(false);
   const readoutAttempt = useRef(0);
+  /**
+   * [#139] The turn's own settle is a readout change: the Host derives `used`
+   * from this session's JSONL, which only has the new request AFTER the turn
+   * lands. `reconcile` calls this on terminal (done/failed/cancelled/
+   * interrupted); it re-reads quietly so the settled numbers appear without
+   * blanking the header to 未读取 for a frame.
+   */
+  const readoutRefresh = useRef<() => void>(() => {});
   const executionReadAttempt = useRef(0);
+  const approvalReadAttempt = useRef(0);
   const [taskMenu, setTaskMenu] = useState(false);
   const [archivePrompt, setArchivePrompt] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -518,7 +536,14 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         if (errorText(error).includes("provider-not-configured") || errorText(error).includes("invalid-prompt")) {
           try { clearReceipt(taskId, sessionId, current.requestId); setCurrent(null); setNotice(`无法发送：${errorText(error)}`); }
           catch { setReceiptError("本机待确认请求记录无法清除，已禁止发送；请核验本机数据"); }
-        } else { setCurrent({ ...current, phase: "unknown" }); setNotice(`请求结果未知：${errorText(error)}；请核验或按原 ID 重试`); }
+        } else {
+          // [#139] A DEFINITE refusal (`task-locked`/`sdk-session-busy`) never
+          // started a turn: it is busy/refused, not an unknown outcome. The
+          // request id is kept so the retry the evidence exercised still works.
+          const refusal = definiteTurnRefusal(errorText(error));
+          setCurrent({ ...current, phase: "unknown" });
+          setNotice(refusal === null ? `请求结果未知：${errorText(error)}；请核验或按原 ID 重试` : refusal.notice);
+        }
         return;
       }
       if (epoch !== generation.current) return;
@@ -687,6 +712,55 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     // [#139] The execution readout is per SESSION: switching sessions re-reads it.
   }, [attemptPhase, sessionId, taskId]);
   /**
+   * [Pencil T05] ticket 140 本会话的确认记录。和上面同一条既有读取节奏：挂载、会话切换、
+   * 回合阶段变化时各读一次，不自己开定时器。批准/拒绝之后由 `resolveToolApproval`
+   * 直接重读一次，因此卡片上看到的是 Host 结算后的状态，而不是本页的乐观猜测。
+   */
+  const loadApprovals = useCallback(async () => {
+    const attempt = ++approvalReadAttempt.current;
+    const result = await listApprovalsThroughShell({ taskId, sessionId });
+    if (approvalReadAttempt.current !== attempt) return;
+    if (!result.ok) { setApprovalRead({ phase: "failed", error: result.error ?? "" }); return; }
+    const approvals = parseTaskApprovals(result.payload, taskId, sessionId);
+    if (approvals === null) {
+      setApprovalRead({ phase: "failed", error: `Host 返回的确认记录无法解析：${hostAnswerText(result.payload)}` });
+      return;
+    }
+    setApprovalRead({ phase: "read", approvals });
+  }, [sessionId, taskId]);
+  useEffect(() => {
+    void loadApprovals();
+    return () => { approvalReadAttempt.current += 1; };
+  }, [attemptPhase, loadApprovals]);
+  /**
+   * 一次决定：`task/approve` 或 `task/reject`，载荷只有 `{sessionId, approvalId}`。
+   * 成功返回 `null`，失败返回具名原因（Host 自己的文本 + 一句可行动说明）；本页不
+   * 把失败当成已处理，也不重试同一确认。执行读数一并重读：批准的操作用一条新的
+   * Host 记录出现，而不是本页写上的「已执行」。
+   */
+  const resolveToolApproval = async (approval: TaskApproval, decision: ApprovalDecision): Promise<string | null> => {
+    const request = approvalRequest(approval, decision);
+    const result = await resolveApprovalThroughShell({ taskId, op: request.op, ...request.payload });
+    if (!result.ok) return approvalFailureText(result.error);
+    await loadApprovals();
+    const execution = await executionStateThroughShell({ taskId, sessionId });
+    if (execution.ok) {
+      const view = executionStateFromHost(execution.payload);
+      if (view !== null) setExecutionRead({ phase: "read", view });
+    }
+    return null;
+  };
+  /**
+   * [#139] Adopt a list reply. The Host now carries the same `provider` row in
+   * every read AND write reply; merging keeps a partial reply from nulling the
+   * provider the page already had (the model menu is the only way to switch
+   * models). `sessions`/`activeSessionId` always come from the reply.
+   */
+  const applyList = useCallback((list: SessionList) => setSessionList((current) => ({
+    phase: "read",
+    list: mergeSessionList(current.phase === "read" ? current.list : null, list),
+  })), []);
+  /**
    * [#139] The session list is the page's only session truth. It is read once
    * per task (and after every session write), and a failed read is a named state:
    * the page then keeps addressing the migrated `main` session, which the Host
@@ -695,7 +769,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const loadSessions = useCallback(async () => {
     const result = await readTaskSessions(taskId);
     if (!result.ok) { setSessionList({ phase: "failed", error: result.error }); return; }
-    setSessionList({ phase: "read", list: result.list });
+    applyList(result.list);
     // The Host's active pointer wins on the first read; once the reader has picked
     // a session, only a session that no longer exists (archived or deleted) moves
     // them — never a silent jump back.
@@ -704,7 +778,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       const present = result.list.sessions.some((session) => session.id === current && !session.archived);
       return picked.current && present ? current : target;
     });
-  }, [taskId]);
+  }, [applyList, taskId]);
   useEffect(() => { void loadSessions(); }, [loadSessions]);
   // The sidebar's session rows navigate here: an explicitly named session wins
   // over the task's stored active pointer until the user picks another one.
@@ -745,7 +819,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const result = await activateSession(taskId, target.id);
     setSessionBusy(false);
     if (!result.ok) { setSessionNotice(result.error); return; }
-    setSessionList({ phase: "read", list: result.list });
+    applyList(result.list);
     resetForSession(target.id);
     setSessionsOpen(false);
   };
@@ -755,14 +829,14 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const result = await createSession(taskId, name === undefined ? {} : { name });
     setSessionBusy(false);
     if (!result.ok) { setSessionNotice(result.error); return; }
-    setSessionList({ phase: "read", list: result.list });
+    applyList(result.list);
     const created = result.list.sessions.find((session) => session.id === result.list.activeSessionId);
     if (created) resetForSession(created.id);
     setSessionsOpen(false);
   };
   const applySessionWrite = (result: { ok: true; list: SessionList } | { ok: false; error: string }) => {
     if (!result.ok) { setSessionNotice(result.error); return; }
-    setSessionList({ phase: "read", list: result.list });
+    applyList(result.list);
   };
   const renameOne = async () => {
     if (renaming === null || sessionBusy) return;
@@ -809,14 +883,23 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
    * The attempt counter makes a late answer from a replaced read (or from the
    * session the user just left) unable to overwrite the current one.
    */
-  const loadReadout = useCallback(async () => {
+  const loadReadout = useCallback(async (mode: "show" | "quiet" = "show") => {
     const attempt = readoutAttempt.current + 1;
     readoutAttempt.current = attempt;
-    setReadoutRead({ phase: "reading" });
+    if (mode === "show") setReadoutRead({ phase: "reading" });
     const result = await readSessionReadout(taskId, sessionId);
     if (readoutAttempt.current !== attempt) return;
-    setReadoutRead(result.ok ? { phase: "read", readout: result.readout } : { phase: "failed", error: result.error });
+    if (result.ok) setReadoutRead({ phase: "read", readout: result.readout });
+    // A quiet refresh (the turn settled) keeps the previous numbers on a failed
+    // re-read instead of replacing them with an older "failed" state.
+    else if (mode === "show") setReadoutRead({ phase: "failed", error: result.error });
   }, [sessionId, taskId]);
+  // `reconcile` (declared earlier) refreshes through this ref so a settled turn
+  // re-reads the same readout the switch path reads.
+  useEffect(() => {
+    readoutRefresh.current = () => { void loadReadout("quiet"); };
+    return () => { readoutRefresh.current = () => {}; };
+  }, [loadReadout]);
   // A readout is only read for a session the page has actually resolved; before
   // the list answers there is no session to read.
   useEffect(() => { if (sessionList.phase === "reading") return; void loadReadout(); }, [loadReadout, sessionList.phase]);
@@ -833,6 +916,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const thinkingLabel = readoutRead.phase === "reading"
     ? "正在读取推理档位"
     : readoutRead.phase === "failed" ? `推理档位读取失败：${readoutRead.error}`
+    // [#139] An unbound session says so: "该模型不支持推理" would claim a model
+    // fact nobody read. Only a BOUND model can be unsupported.
+    : boundModel === null ? "推理 · 未绑定模型"
     : reasoningLevels.length === 0 ? "该模型不支持推理档位"
     : `推理 · ${thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}`;
 
@@ -861,7 +947,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   /** `used` is the prompt size of this session's last request; `null` is unknown, never 0. */
   const contextLabel = readout === null
     ? `上下文 ${readoutRead.phase === "reading" ? "未读取" : "读取失败"}`
-    : `上下文 ${readout.context.used === null ? "未报告" : `${(readout.context.used / 1000).toFixed(1)}k`} / ${readout.context.window === null ? "窗口未知" : `${Math.round(readout.context.window / 1000)}k`}`;
+    : `上下文 ${readout.context.used === null ? "未报告" : `${(readout.context.used / 1000).toFixed(1)}k`} / ${readout.context.window === null ? "窗口未知" : formatWindow(readout.context.window)}`;
   const contextTitle = readoutRead.phase === "reading"
     ? "正在读取本会话的 SDK 上下文占用；读取完成前不显示数字"
     : readoutRead.phase === "failed" ? `本会话上下文读数读取失败：${readoutRead.error}`
@@ -923,8 +1009,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
                 The composer carries the same three as controls; here they are
                 read-only, and every unknown stays named as unknown. */}
             <span data-testid="desktop-session-meta" className="inline-flex min-w-0 flex-wrap items-center gap-2" title={contextTitle}>
-              <span data-testid="desktop-session-model" className="truncate">模型 · {boundModel?.name ?? (sessionList.phase === "read" ? "未绑定" : "未读取")}</span>
-              <span data-testid="desktop-session-reasoning" className="truncate">推理 · {readoutRead.phase !== "read" ? (readoutRead.phase === "reading" ? "未读取" : "读取失败") : reasoningLevels.length === 0 ? "该模型不支持" : thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}</span>
+              <span data-testid="desktop-session-model" className="truncate">模型 · {boundModel?.name ?? (sessionList.phase === "read" ? "未绑定模型" : "未读取")}</span>
+              <span data-testid="desktop-session-reasoning" className="truncate">推理 · {readoutRead.phase !== "read" ? (readoutRead.phase === "reading" ? "未读取" : "读取失败") : boundModel === null ? "未绑定模型" : reasoningLevels.length === 0 ? "该模型不支持" : thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}</span>
               <span data-testid="desktop-session-context" className="truncate">{contextLabel}</span>
             </span>
             <Badge variant="soft">工具由 Host 代执行</Badge>
@@ -985,6 +1071,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       </div>
     </div>
     <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} />
+    {/* [Pencil T05] ticket 140 S01 的审批位：只呈现 Host 已记录的确认，批准/拒绝走
+        `task/approve|reject`。没有待确认时也说明「记录为空」，不把空读数当成功。 */}
+    <DesktopApprovalCard read={approvalRead} onResolve={resolveToolApproval} />
     {/* [Pencil T07] ticket 142: a created task lands on its `main` conversation entry
         even when no Provider/model is configured. The entry names that missing
         configuration and routes to 能力管理 → Providers; it never picks a
@@ -1075,12 +1164,12 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
             <Button type="button" size="sm" data-testid="composer-model" aria-haspopup="menu" aria-expanded={modelOpen}
               title={boundModel === null ? "本会话尚未绑定模型：先在「能力管理 → Providers」完成配置" : `${boundModel.name} · 窗口 ${boundModel.contextWindow} tokens · 切换模型保留本会话历史`}
               onClick={() => { setThinkingError(null); setModelOpen((open) => !open); }}>
-              <span data-testid="composer-model-name">{boundModel === null ? (provider ? "未配置模型" : "正在读取模型") : boundModel.name}</span><Icon name="down" className="h-3 w-3" />
+              <span data-testid="composer-model-name">{boundModel === null ? (sessionList.phase === "read" ? "未绑定模型" : "正在读取模型") : boundModel.name}</span><Icon name="down" className="h-3 w-3" />
             </Button>
             {modelOpen && <div role="menu" aria-label="会话模型" className="absolute right-0 bottom-full z-30 mb-1 w-[280px] rounded-[7px] border border-line bg-paper p-2 text-left shadow-md">
               {providerModels.length === 0 ? <p className="px-1 text-[10px] leading-5 text-muted">Host 未返回当前 Provider 的模型列表；切换模型不可用。</p> : <>
                 <p className="px-1 pb-1 text-[10px] leading-5 text-muted">切换只改本会话的绑定：历史与 JSONL 不变，后续回合用新模型。窗口装不下本会话上下文或回合进行中时，Host 会按名字拒绝。</p>
-                {providerModels.map((row) => <Button key={row.id} type="button" role="menuitemradio" aria-checked={row.id === boundModelId} variant="ghost" size="sm" className="w-full justify-start" disabled={thinkingBusy} onClick={() => void chooseModel(row.id)}>{row.name}<span className="ml-auto text-muted">{Math.round(row.contextWindow / 1000)}k · {row.reasoningLevels.length === 0 ? "无推理档位" : `${row.reasoningLevels.length} 档`}</span></Button>)}
+                {providerModels.map((row) => <Button key={row.id} type="button" role="menuitemradio" aria-checked={row.id === boundModelId} variant="ghost" size="sm" className="w-full justify-start" disabled={thinkingBusy} onClick={() => void chooseModel(row.id)}>{row.name}<span className="ml-auto text-muted">{formatWindow(row.contextWindow)} · {row.reasoningLevels.length === 0 ? "无推理档位" : `${row.reasoningLevels.length} 档`}</span></Button>)}
                 <Button type="button" variant="ghost" size="sm" className="mt-1 w-full justify-start" onClick={() => { setModelOpen(false); onOpenProviders(); }}><Icon name="settings" />能力管理 · Providers</Button>
               </>}
               {thinkingError && <p role="alert" className="mt-1 border border-[#e0b4b4] bg-[#fdf3f3] p-1.5 text-[10px] leading-5 break-words text-[#ad4545]">{thinkingError}</p>}
@@ -1088,6 +1177,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           </div>
           <div data-testid="composer-reasoning" role="group" aria-label="推理档位" title={thinkingLabel} className="inline-flex min-w-0 items-center gap-0.5 rounded-[6px] border border-line bg-soft px-0.5">
             {readoutRead.phase !== "read" ? <span className="px-1.5 py-0.5 text-[10px] text-muted">{readoutRead.phase === "reading" ? "推理档位未读取" : "推理档位读取失败"}</span>
+              : boundModel === null ? <span className="px-1.5 py-0.5 text-[10px] text-muted">未绑定模型</span>
               : reasoningLevels.length === 0 ? <span className="px-1.5 py-0.5 text-[10px] text-muted">无推理档位</span>
               : reasoningLevels.map((level: SessionThinkingLevel) => <Button key={level} type="button" size="sm" variant={level === thinkingLevel ? "secondary" : "ghost"} aria-pressed={level === thinkingLevel} disabled={thinkingBusy} className="h-6 px-1.5 text-[10px]" onClick={() => void chooseThinking(level)}>{REASONING_LEVEL_TEXT[level] ?? level}</Button>)}
           </div>
