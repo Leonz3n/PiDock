@@ -39,14 +39,16 @@ describe("explicit Project task association", () => {
     const f = fixture();
     f.task();
     const target = await f.project("Billing");
-    expect(JSON.parse(readFileSync(projectRegistryPath(f.data), "utf8")).version).toBe(1);
+    // A fresh registry is written on the current schema (v3, workspace settings + audit);
+    // the v1 -> v3 migration itself is covered by `project-workspace.test.ts`.
+    expect(JSON.parse(readFileSync(projectRegistryPath(f.data), "utf8")).version).toBe(3);
     expect(f.registry.association(id, f.roots)).toMatchObject({ projectId: null, state: "unassigned" });
     const receipt = await f.registry.claim(id, target.id, f.roots);
     expect(receipt).toMatchObject({ action: "claim", taskId: id, fromProjectId: null, toProjectId: target.id });
     const saved = JSON.parse(readFileSync(projectRegistryPath(f.data), "utf8"));
-    expect(saved.version).toBe(2);
+    expect(saved.version).toBe(3);
     expect(saved.receipts).toEqual([receipt]);
-    expect(JSON.parse(readFileSync(`${projectRegistryPath(f.data)}.bak`, "utf8")).version).toBe(1);
+    expect(JSON.parse(readFileSync(`${projectRegistryPath(f.data)}.bak`, "utf8")).receipts).toEqual([]);
     expect(saved.memberships[0]).toMatchObject({ taskId: id, createdAt, root: f.defaultRoot, dirId: id });
     const reopened = new ProjectRegistry(f.data);
     expect(reopened.association(id, new TaskRootIndex(f.data, f.defaultRoot))).toMatchObject({ projectId: target.id, state: "assigned" });
@@ -89,19 +91,21 @@ describe("explicit Project task association", () => {
     const f = fixture();
     const target = await f.project("One");
     const file = projectRegistryPath(f.data);
-    expect(JSON.parse(readFileSync(file, "utf8")).version).toBe(1);
+    const created = JSON.parse(readFileSync(file, "utf8"));
+    expect(created.version).toBe(3);
+    expect(created.receipts).toEqual([]);
     const failing = new ProjectRegistry(f.data, { beforeCommit: () => { throw new Error("interrupted delete"); } });
     await expect(failing.delete(target.id)).rejects.toThrow("interrupted delete");
     expect(f.registry.get(target.id)).toBeDefined();
-    expect(JSON.parse(readFileSync(file, "utf8")).version).toBe(1);
+    expect(readFileSync(file, "utf8")).toBe(JSON.stringify(created));
     const result = await f.registry.delete(target.id);
     expect(result).toMatchObject({ action: "delete", projectId: target.id });
     const saved = JSON.parse(readFileSync(file, "utf8"));
-    expect(saved.version).toBe(2);
+    expect(saved.version).toBe(3);
     expect(saved.projects).toEqual([]);
     expect(saved.receipts).toEqual([result]);
     expect(saved.receipts[0]).not.toHaveProperty("taskId");
-    expect(JSON.parse(readFileSync(`${file}.bak`, "utf8")).version).toBe(1);
+    expect(JSON.parse(readFileSync(`${file}.bak`, "utf8")).receipts).toEqual([]);
   });
 
   it("rejects structurally valid receipt loss and leaves preexisting v1 memberships unclaimed", async () => {
@@ -109,8 +113,10 @@ describe("explicit Project task association", () => {
     f.task();
     const first = await f.project("One");
     const file = projectRegistryPath(f.data);
-    const legacy = JSON.parse(readFileSync(file, "utf8"));
-    legacy.memberships.push({ taskId: id, projectId: first.id, createdAt, root: f.defaultRoot, dirId: id });
+    // A genuine v1 document: it predates the audit digest, so a hand-written membership
+    // is structurally valid and must be treated as needing repair, not trusted.
+    const legacy = { version: 1, projects: JSON.parse(readFileSync(file, "utf8")).projects,
+      memberships: [{ taskId: id, projectId: first.id, createdAt, root: f.defaultRoot, dirId: id }] };
     writeFileSync(file, JSON.stringify(legacy));
     expect(f.registry.association(id, f.roots).state).toBe("needs-repair");
     const unlinked = await f.registry.unlink(id, first.id);
@@ -170,7 +176,7 @@ describe("explicit Project task association", () => {
     expect(f.registry.association(id, f.roots).state).toBe("needs-repair");
     const file = projectRegistryPath(f.data);
     const content = JSON.parse(readFileSync(file, "utf8"));
-    for (const broken of [{ ...content, version: 3 }, { ...content, receipts: [{ action: "claim" }] }]) {
+    for (const broken of [{ ...content, version: 4 }, { ...content, receipts: [{ action: "claim" }] }]) {
       writeFileSync(file, JSON.stringify(broken));
       expect(() => f.registry.association(id, f.roots)).toThrow();
       await expect(f.registry.unlink(id, target.id)).rejects.toThrow();
@@ -186,7 +192,7 @@ describe("explicit Project task association", () => {
     const failing = new ProjectRegistry(f.data, { beforeCommit: () => { throw new Error("interrupted"); } });
     await expect(failing.claim(id, target.id, f.roots)).rejects.toThrow("interrupted");
     expect(readFileSync(file, "utf8")).toBe(original);
-    expect(JSON.parse(readFileSync(`${file}.bak`, "utf8")).version).toBe(1);
+    expect(JSON.parse(readFileSync(`${file}.bak`, "utf8")).projects).toEqual(JSON.parse(original).projects);
     expect(f.registry.association(id, f.roots).state).toBe("unassigned");
   });
 

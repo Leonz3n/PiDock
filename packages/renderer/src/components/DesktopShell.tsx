@@ -21,13 +21,14 @@
  * - The window width tiers match prototype A (1180/960/850/720 via `below-*` variants).
  */
 
-import type { ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Icon, type IconName } from "./Icon";
 import { BrandMark, LocalUserAvatar } from "./ui";
 import { desktopSummarySegments, type DesktopSummarySegment } from "../data/desktopShellSummary";
 import { hostText } from "../data/workspaceFiles";
+import { readTaskSessions, subscribeSessionWrites, type SessionList } from "../data/taskSessions";
 
 export interface DesktopShellTask {
   taskId: string;
@@ -43,14 +44,17 @@ export interface DesktopShellProject {
   id: string;
   name: string;
   description: string;
+  /** Tasks main reports for this workspace; `null` while the lifecycle read is unverified. */
+  taskCount: number | null;
 }
 
 /** Pages the shell can show; each nav entry names its own real page. */
 export type DesktopView =
   | { view: "project"; projectId: string }
   | { view: "unassigned" }
-  | { view: "task"; taskId: string }
-  | { view: "providers" }
+  // [#139] A task page may name the session it opens; omitting it opens the
+  // task's active session (the Host's own pointer).
+  | { view: "task"; taskId: string; sessionId?: string }
   | { view: "usage" }
   | { view: "schedules" }
   | { view: "archive" }
@@ -58,35 +62,49 @@ export type DesktopView =
   | { view: "env" }
   | { view: DesktopLocalPageKey };
 
-/** 能力管理 and 本机设置: the 系统 group's two local pages, each routed to a real page (#24). */
+/**
+ * 能力管理 and 设置: the 系统 group's TWO SEPARATE local pages, each routed to its
+ * own full-window page (#24, [Pencil T14] #149). They are separate destinations
+ * with separate navs — 能力管理 defaults to Providers, 设置 defaults to 外观 — and
+ * neither list carries Extensions / Computer Use / Browser entries.
+ */
 export type DesktopLocalPageKey = "capabilities" | "settings";
 
 const LABELS: Record<DesktopLocalPageKey, string> = {
   capabilities: "能力管理",
-  settings: "本机设置",
+  settings: "设置",
+};
+
+/** The compact rail's glyphs per design S06: blocks for 能力管理, sliders for 设置. */
+const LOCAL_PAGE_ICONS: Record<DesktopLocalPageKey, IconName> = {
+  capabilities: "grid",
+  settings: "sliders",
 };
 
 const NAV_ITEM_CLASS = "flex w-full items-center gap-[10px] rounded-[7px] px-[11px] py-[9px] text-left text-[12px] below-mid:justify-center";
 const HEADING_CLASS = "mt-6 mb-[7px] flex items-center justify-between px-[10px] text-[10px] tracking-[1.4px] text-[#91999f] uppercase below-mid:hidden";
 
-function SidebarNavButton({ label, icon, active, count, disabled, onSelect }: { label: string; icon: IconName; active: boolean; count?: number; disabled?: boolean; onSelect: () => void }) {
+function SidebarNavButton({ label, icon, active, count, countLabel, tone, disabled, onSelect }: { label: string; icon: IconName; active: boolean; count?: number; countLabel?: string; tone?: "attention"; disabled?: boolean; onSelect: () => void }) {
   return (
     <Button
       type="button"
       variant="ghost"
       title={label}
+      // The workspace rows are found by their own name; the count is a trailing
+      // meta chip, so it never becomes part of the accessible name.
+      aria-label={label}
       aria-current={active ? "page" : undefined}
       disabled={disabled}
       onClick={onSelect}
       className={`${NAV_ITEM_CLASS} my-0.5 h-auto border-transparent bg-transparent disabled:cursor-default disabled:opacity-45 ${
-        active ? "bg-[#e3e6ec] font-semibold text-[#283c6c]" : "text-[#69737a] hover:bg-[#eaebec]"
+        active ? "bg-[#e3e6ec] font-semibold text-[#283c6c]" : tone === "attention" ? "text-[#805c28] hover:bg-[#f0e6d4]" : "text-[#69737a] hover:bg-[#eaebec]"
       }`}
     >
       <Icon name={icon} />
       {/* The 64px rail keeps an accessible name per button (`sr-only`), unlike the
           prototype's `display:none`, without changing the wide layout. */}
-      <span className="below-mid:sr-only">{label}</span>
-      {count === undefined ? null : <Badge variant="soft" className="ml-auto rounded-[5px] border-transparent bg-[#e7eaea] px-1.5 text-[10px] below-mid:hidden">{count}</Badge>}
+      <span className="min-w-0 flex-1 truncate below-mid:sr-only">{label}</span>
+      {count === undefined ? null : <Badge variant="soft" className="ml-auto rounded-[5px] border-transparent bg-[#e7eaea] px-1.5 text-[10px] below-mid:hidden">{countLabel ?? count}</Badge>}
     </Button>
   );
 }
@@ -114,6 +132,50 @@ function TaskNavCard({ task, selected, onSelect }: { task: DesktopShellTask; sel
       </span>
     </Button>
   );
+}
+
+/**
+ * [#139] S01's session rows: the sessions the Host reports under ONE task
+ * (the selected one), with the active marker. A failure is stated, never
+ * hidden — and the rows are read from the Host's index, not guessed.
+ */
+function TaskSessionRows({ taskId, activeSessionId, onOpen }: { taskId: string; activeSessionId: string | null; onOpen: (sessionId: string) => void }) {
+  const [state, setState] = useState<{ phase: "reading" } | { phase: "read"; list: SessionList } | { phase: "failed"; error: string }>({ phase: "reading" });
+  /**
+   * [#139] Re-read after every session write, not only when `taskId` changes.
+   * The evidence caught a new session missing from these rows until the task was
+   * re-selected. `taskSessions` announces each accepted write (create / rename /
+   * archive / restore / delete / activate) and this row list — which is not the
+   * writer — reloads the Host's index on that signal.
+   */
+  const [writeRevision, setWriteRevision] = useState(0);
+  useEffect(() => subscribeSessionWrites((written) => {
+    if (written === taskId) setWriteRevision((value) => value + 1);
+  }), [taskId]);
+  useEffect(() => {
+    let live = true;
+    setState({ phase: "reading" });
+    void readTaskSessions(taskId).then((result) => {
+      if (!live) return;
+      setState(result.ok ? { phase: "read", list: result.list } : { phase: "failed", error: result.error });
+    });
+    return () => { live = false; };
+  }, [taskId, writeRevision]);
+  if (state.phase === "reading") return <p className="mb-1 ml-[27px] text-[10px] text-muted">正在读取会话…</p>;
+  if (state.phase === "failed") return <p role="status" className="mb-1 ml-[27px] text-[10px] text-[#9a6032]">会话列表读取失败：{state.error}</p>;
+  const visible = state.list.sessions.filter((session) => !session.archived);
+  return <div data-session-tree={taskId} className="mb-1 ml-[27px] border-l border-line pl-2">
+    {visible.length === 0 && <p className="text-[10px] text-muted">暂无会话</p>}
+    {visible.map((session) => {
+      const current = (activeSessionId ?? state.list.activeSessionId) === session.id;
+      return <button key={session.id} type="button" data-session-nav={session.id} aria-current={current ? "true" : undefined}
+        onClick={() => onOpen(session.id)}
+        className={`flex w-full min-w-0 items-center gap-1.5 rounded-[5px] px-1.5 py-1 text-left text-[11px] ${current ? "bg-[#e3e6ec] font-semibold text-[#283c6c]" : "text-[#69737a] hover:bg-[#eaebec]"}`}>
+        <span aria-hidden className={`h-1 w-1 shrink-0 rounded-full ${current ? "bg-[#283c6c]" : "bg-[#b6bcc4]"}`} />
+        <span className="truncate">{session.name}</span>
+      </button>;
+    })}
+  </div>;
 }
 
 type DesktopRoot = { label: string; state: "ready" | "error"; message?: string };
@@ -191,6 +253,9 @@ export function DesktopShell({
   view,
   onNavigate,
   projects,
+  projectsInitialized,
+  unassignedCount,
+  onNewWorkspace,
   tasks,
   allTaskCount,
   lifecyclePending,
@@ -203,6 +268,12 @@ export function DesktopShell({
   view: DesktopView;
   onNavigate: (next: DesktopView) => void;
   projects: DesktopShellProject[];
+  /** Whether main's registry exists; `false` is stated in the sidebar, never faked. */
+  projectsInitialized: boolean;
+  /** Unassigned tasks main reports; `null` while unverified. */
+  unassignedCount: number | null;
+  /** The S10 create dialog; the shell offers it next to the workspace tree. */
+  onNewWorkspace?: () => void;
   tasks: DesktopShellTask[];
   allTaskCount: number;
   lifecyclePending: boolean;
@@ -230,7 +301,7 @@ export function DesktopShell({
       : undefined;
   return (
     <div className="flex h-screen min-h-0 w-full bg-bg text-ink" data-testid="desktop-shell">
-      <aside data-testid="desktop-sidebar" className="flex min-h-0 w-[226px] shrink-0 flex-col border-r border-line bg-sidebar px-[13px] below-wide:w-[192px] below-mid:w-16 below-mid:px-2">
+      <aside data-testid="desktop-sidebar" className="flex min-h-0 w-[260px] shrink-0 flex-col border-r border-line bg-sidebar px-[13px] below-wide:w-[212px] below-mid:w-16 below-mid:px-2">
         <div className="flex h-16 items-center gap-[9px] px-2 below-mid:justify-center below-mid:px-0">
           <BrandMark />
           <span className="text-[19px] font-[680] tracking-[-0.8px] text-ink below-mid:hidden">PiDock</span>
@@ -249,21 +320,50 @@ export function DesktopShell({
         </div>
 
         <nav aria-label="主导航" className="flex min-h-0 flex-1 flex-col">
-          <div data-nav-group="workspace" role="group" aria-label="工作区" className="flex flex-col">
-            <SidebarNavButton label="项目总览" icon="grid" active={view.view === "project" || view.view === "unassigned"} onSelect={() => { const first = projects[0]; if (first) onNavigate({ view: "project", projectId: first.id }); else onNavigate({ view: "unassigned" }); }} />
-            <SidebarNavButton label="环境与服务" icon="settings" active={view.view === "env"} onSelect={() => onNavigate({ view: "env" })} />
-            <SidebarNavButton label="Token 用量" icon="chart" active={view.view === "usage"} onSelect={() => onNavigate({ view: "usage" })} />
-          </div>
-
-          <div data-nav-group="tasks" role="group" aria-label="进行中的任务" className="flex min-h-0 flex-col">
+          <div data-nav-group="workspaces" role="group" aria-label="工作空间与任务" className="flex min-h-0 flex-col">
             <div className={HEADING_CLASS}>
+              <span>工作空间与任务</span>
+              <span className="flex items-center gap-1 text-[10px] normal-case">{projects.length}
+                {onNewWorkspace ? <Button type="button" variant="ghost" size="icon-sm" aria-label="新建工作空间" title="新建工作空间" onClick={onNewWorkspace} className="h-5 w-5 border-transparent p-0 text-muted hover:bg-[#eaebec]"><Icon name="plus" /></Button> : null}
+              </span>
+            </div>
+            <div className="flex min-h-0 flex-col overflow-y-auto below-mid:hidden">
+              {projects.map((project) => (
+                <SidebarNavButton
+                  key={project.id}
+                  label={project.name}
+                  icon="folder"
+                  count={project.taskCount ?? undefined}
+                  countLabel={project.taskCount === null ? "未核验" : undefined}
+                  active={view.view === "project" && view.projectId === project.id}
+                  onSelect={() => onNavigate({ view: "project", projectId: project.id })}
+                />
+              ))}
+              <SidebarNavButton
+                label="未归属任务"
+                icon="inbox"
+                tone="attention"
+                count={unassignedCount ?? undefined}
+                countLabel={unassignedCount === null ? "未核验" : undefined}
+                active={view.view === "unassigned"}
+                onSelect={() => onNavigate({ view: "unassigned" })}
+              />
+              {projects.length === 0 ? <p className="px-[10px] pb-2 text-[10px] text-muted">{projectsInitialized ? "尚无工作空间；用「项目管理」新建。" : "项目映射未建立。"}</p> : null}
+            </div>
+
+            <div className={`${HEADING_CLASS} mt-4`}>
               <span>进行中的任务</span>
               <span className="text-[10px] normal-case">{lifecycleUnverified ? "未核验" : tasks.length}</span>
             </div>
             <div className="flex min-h-0 flex-col overflow-y-auto below-mid:hidden">
               {tasks.length === 0 ? <p className="px-[10px] pb-2 text-[10px] text-muted">{lifecycleUnverified ? "任务归档状态未核验完整。" : "已检查的任务根暂无进行中任务。"}</p> : null}
               {tasks.map((task) => (
-                <TaskNavCard key={task.taskId} task={task} selected={task.taskId === activeTaskId} onSelect={() => onNavigate({ view: "task", taskId: task.taskId })} />
+                <Fragment key={task.taskId}>
+                  <TaskNavCard task={task} selected={task.taskId === activeTaskId} onSelect={() => onNavigate({ view: "task", taskId: task.taskId })} />
+                  {task.taskId === activeTaskId && (
+                    <TaskSessionRows taskId={task.taskId} activeSessionId={view.view === "task" ? view.sessionId ?? null : null} onOpen={(sessionId) => onNavigate({ view: "task", taskId: task.taskId, sessionId })} />
+                  )}
+                </Fragment>
               ))}
             </div>
             <SidebarNavButton label="已归档" icon="archive" active={view.view === "archive"} onSelect={() => onNavigate({ view: "archive" })} />
@@ -272,9 +372,10 @@ export function DesktopShell({
           <div data-nav-group="system" className="mt-auto border-t border-line pt-[11px]">
             <SidebarNavButton label="需要处理" icon="clock" active={view.view === "attention"} onSelect={() => onNavigate({ view: "attention" })} />
             <SidebarNavButton label="定时任务" icon="clock" active={view.view === "schedules"} onSelect={() => onNavigate({ view: "schedules" })} />
-            <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "capabilities"} onSelect={() => onNavigate({ view: "capabilities" })} />
-            <SidebarNavButton label={LABELS.settings} icon="folder" active={view.view === "settings"} onSelect={() => onNavigate({ view: "settings" })} />
-            <SidebarNavButton label="模型与 Provider" icon="key" active={view.view === "providers"} onSelect={() => onNavigate({ view: "providers" })} />
+            <SidebarNavButton label="环境与服务" icon="settings" active={view.view === "env"} onSelect={() => onNavigate({ view: "env" })} />
+            <SidebarNavButton label="Token 用量" icon="chart" active={view.view === "usage"} onSelect={() => onNavigate({ view: "usage" })} />
+            <SidebarNavButton label={LABELS.capabilities} icon={LOCAL_PAGE_ICONS.capabilities} active={view.view === "capabilities"} onSelect={() => onNavigate({ view: "capabilities" })} />
+            <SidebarNavButton label={LABELS.settings} icon={LOCAL_PAGE_ICONS.settings} active={view.view === "settings"} onSelect={() => onNavigate({ view: "settings" })} />
             <div data-user-chip="local-workspace" title="本机工作区" className="flex items-center gap-[9px] px-2 py-[10px]">
               <LocalUserAvatar />
               <span className="truncate text-[11px] text-ink below-mid:hidden">本机工作区</span>
@@ -289,7 +390,7 @@ export function DesktopShell({
             breadcrumb; without `shrink-0`/`whitespace-nowrap` on the literal
             segments, CJK text wrapped one character per line and pushed the 48px
             bar taller. The project/task names are the only parts that truncate. */}
-        <header data-testid="desktop-breadcrumb" className="flex min-h-12 shrink-0 items-center gap-2 border-b border-line bg-paper px-4 text-[12px] below-mid:px-3">
+        <header data-testid="desktop-breadcrumb" className="flex min-h-[52px] shrink-0 items-center gap-2 border-b border-line bg-paper px-4 text-[12px] below-mid:px-3">
           <span className="shrink-0 whitespace-nowrap text-muted">工作区</span>
           <span className="shrink-0 text-[#cfd3d7]">/</span>
           <span className="min-w-0 truncate text-muted">{breadcrumb.project ?? "工作区"}</span>

@@ -16,6 +16,7 @@
  * unit tests inject an in-memory store instead of the filesystem.
  */
 
+import { join } from "node:path";
 import { shutdownDeadline } from "./shutdown-deadline.js";
 import type { TaskPathProtection } from "./protected-application-path.js";
 import { PiSessionChannel, type PiPermission, type PiReportedUsage, type PiRunState, type PiSessionDraft, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView, type PiUsageSource } from "../main/pi-session.js";
@@ -50,6 +51,21 @@ import {
   type PathScopeVerdict,
   type SharedRoot,
 } from "./path-coordination.js";
+/**
+ * The cross-process half of the shared real-path rule ([Pencil T06] #141).
+ * `SharedPathCoordinator` is one table per Host process, so two real Hosts (two
+ * tasks sharing a directory) need the app-private lock on disk as well. The port
+ * keeps `TaskWorkspaceHost` testable with a standalone table (absent = one task).
+ */
+export interface SharedPathLockPort {
+  claim(
+    owner: { taskId: string; sessionId: string; label: string },
+    paths: readonly string[],
+  ): { ok: true; added: readonly string[] } | { ok: false; error: string };
+  release(input: { taskId: string; sessionId: string; keepPaths?: readonly string[] }): string[];
+  releaseTask(taskId: string): string[];
+}
+
 import { validateProviderProfile, type ProviderProfileRow } from "../main/provider-config.js";
 import {
   buildTaskBranch,
@@ -59,6 +75,7 @@ import {
   planWorktreeCreation,
   previewTaskPaths,
   assertProvisionPlanSafe,
+  isSafeTaskChildName,
   isSafeTaskBranchRef,
   normalizeTaskPath,
   planResumeBranch,
@@ -138,12 +155,35 @@ import {
   type StoredSchedule,
 } from "../main/schedule-rules.js";
 import { TaskSchedules, type SaveScheduleInput, type SaveScheduleResult, type SchedulePreview } from "./schedules.js";
+import {
+  activateSessionInIndex,
+  archiveSessionInIndex,
+  bindSessionInIndex,
+  createSessionInIndex,
+  deleteSessionInIndex,
+  deleteSdkSessionArtifacts,
+  migrateSessionIndex,
+  readSessionIndex,
+  renameSessionInIndex,
+  restoreSessionInIndex,
+  sessionOf,
+  validateSessionIndex,
+  writeSessionIndex,
+  type CreateSessionInput,
+  type SessionBinding,
+  type SessionIndex,
+  type SessionPermission,
+  type SessionThinkingLevel,
+  type TaskSessionRecord,
+} from "./session-index.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { SdkTextKernelRouter } from "./sdk-kernel-router.js";
+import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import { SdkContextClient } from "./sdk-context-client.js";
 import { SdkAgentToolBroker, derivedPrimaryCheckouts, type SdkAgentServiceHost, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
 import type { ServiceTemplateEditPort } from "../rpc/service-template-request.js";
-import type { ExplicitTextProvider } from "./explicit-text-provider.js";
+import { availableReasoningLevels, type ExplicitTextProvider } from "./explicit-text-provider.js";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
   PI_USAGE_GROUP_LABELS,
   UNVERSIONED_PROVIDER_CONFIG,
@@ -191,6 +231,19 @@ export interface TaskStore {
   /** [PiDock 19] #21: remote entry, devices, pairing history and audit trail. */
   readRemoteDevices(taskDir: string): RemoteDeviceDiskRecord;
   writeRemoteDevices(taskDir: string, record: RemoteDeviceDiskRecord): void;
+  /**
+   * [Pencil T04] #139: the task's own session identity (`activeSessionId`,
+   * names, archive flags, per-session permission and model binding). A task
+   * with no sidecar migrates the historical `main` session on read.
+   */
+  readSessionIndex(taskDir: string, now: string): SessionIndex;
+  writeSessionIndex(taskDir: string, index: SessionIndex): SessionIndex;
+  /**
+   * [Pencil T04] #139: remove the SDK-owned per-session artifacts (binding
+   * directory + JSONL, turn journal) so a deleted session id cannot come back.
+   * The legacy snapshot is removed by `deleteSession`.
+   */
+  deleteSdkSession(taskDir: string, sessionId: string): void;
 }
 
 /**
@@ -376,6 +429,9 @@ function withRemovedIds(scope: PiUsageCleanupScope, removedIds: readonly string[
 }
 
 export const diskTaskStore: TaskStore = {
+  readSessionIndex: (taskDir, now) => readSessionIndex(taskDir, now),
+  writeSessionIndex: (taskDir, index) => writeSessionIndex(taskDir, index),
+  deleteSdkSession: (taskDir, sessionId) => deleteSdkSessionArtifacts(taskDir, sessionId),
   readTask: (taskDir) => readTaskRecordOnDisk(taskDir),
   writeTask: (taskDir, record) => writeTaskRecordOnDisk(taskDir, record),
   readSession: (taskDir, sessionId) => readSessionSnapshotOnDisk(taskDir, sessionId),
@@ -396,6 +452,7 @@ export const diskTaskStore: TaskStore = {
 
 export function memoryTaskStore(): TaskStore & {
   tasks: Map<string, TaskDiskRecord>;
+  indexes: Map<string, SessionIndex>;
   sessions: Map<string, PiSessionSnapshot>;
   usage: Map<string, { details: PiUsageDetail[]; exclusions: PiUsageCleanupScope[] }>;
   lifecycle: Map<string, LifecycleRecord>;
@@ -410,6 +467,7 @@ export function memoryTaskStore(): TaskStore & {
   const executions = new Map<string, ExecutionLedgerRecord>();
   const schedules = new Map<string, ScheduleDiskRecord>();
   const remoteDevices = new Map<string, RemoteDeviceDiskRecord>();
+  const indexes = new Map<string, SessionIndex>();
   return {
     tasks,
     sessions,
@@ -418,6 +476,20 @@ export function memoryTaskStore(): TaskStore & {
     executions,
     schedules,
     remoteDevices,
+    indexes,
+    readSessionIndex: (taskDir, now) => {
+      const stored = indexes.get(taskDir);
+      if (stored === undefined) return migrateSessionIndex(taskDir, now);
+      // Round-tripped through the validator so the mirror cannot hold an index
+      // the disk store would refuse.
+      return validateSessionIndex(JSON.parse(JSON.stringify(stored)));
+    },
+    writeSessionIndex: (taskDir, index) => {
+      const validated = validateSessionIndex(JSON.parse(JSON.stringify(index)));
+      indexes.set(taskDir, validated);
+      return validated;
+    },
+    deleteSdkSession: () => {},
     readTask: (taskDir) => tasks.get(taskDir) ?? null,
     writeTask: (taskDir, record) => {
       tasks.set(taskDir, record);
@@ -519,6 +591,52 @@ export interface ProvisionTaskInput {
    * another repo's commit or the task-level `fetchedCommit`.
    */
   fetchedCommits?: Readonly<Record<string, string>>;
+  /**
+   * [Pencil T02] #137: the explicit task workspace mode. Absent on legacy
+   * callers; `existing-git` carries `sharedRepos` and no worktree repos,
+   * `plain-dirs` carries no repos at all.
+   */
+  workspaceMode?: "worktree" | "existing-git" | "plain-dirs";
+  /**
+   * [Pencil T02] #137: existing registered Git checkouts used in place. Each
+   * entry records the real source path, current branch, observed HEAD and the
+   * identity the facts surface re-verifies on open. Never copied or rewritten.
+   */
+  sharedRepos?: readonly {
+    rootId: string;
+    sourcePath: string;
+    remote: string;
+    remoteBranch: string;
+    headCommit: string;
+    commonDir: string;
+    remoteDigest: string;
+  }[];
+  /**
+   * [Pencil T17] #152 creation intent. `scheduled` marks the task as the
+   * dedicated workspace of its own schedule rules; a first schedule may only be
+   * created there. Absent = ordinary task.
+   */
+  kind?: "normal" | "scheduled";
+  /**
+   * [Pencil T02] #137: recorded identity of each worktree source checkout,
+   * keyed by `repoDir`. Optional; a record without it is `待修复` on reopen.
+   */
+  repoIdentities?: Readonly<Record<string, {
+    sourcePath: string;
+    sourceRealPath?: string;
+    sourceDevice?: string;
+    sourceInode?: string;
+    commonDir?: string;
+    remoteDigest?: string;
+    /**
+     * [Pencil T07] #142: the checkout's ACTUAL identity observed by the caller
+     * right after `git worktree add` (real path, branch, HEAD). Stored verbatim
+     * beside the pinned baseline; absent values are not stored at all.
+     */
+    targetRealPath?: string;
+    targetBranch?: string;
+    targetHead?: string;
+  }>>;
   now?: string;
 }
 
@@ -701,6 +819,17 @@ export interface HostApprovalListing {
   executed: boolean;
   /** The concrete operation when `target` cannot state it (an `exec.run` command). */
   operation?: string;
+  /**
+   * [Pencil T06] #141 the resolved REAL path of `target` (absent when it cannot be
+   * resolved — the reader must then say it does not know, not guess).
+   */
+  realTarget?: string;
+  /**
+   * The linked original a shared plain-directory write really changes (absent for
+   * a task-private target). `sharedOriginal === undefined` is "not a linked
+   * original", never "unknown".
+   */
+  sharedOriginal?: string;
 }
 
 /**
@@ -725,6 +854,12 @@ export class TaskWorkspaceHost {
   private sdkContext: SdkContextClient | null = null;
   private sdkRouter: SdkTextKernelRouter | null = null;
   private sdkProviderGeneration = 0;
+  /**
+   * [#139] The installed Provider selection as the Host remembers it: the
+   * profile/model declarations a session binding is validated against, and the
+   * generation it was installed under. `null` while no Provider is configured.
+   */
+  private sdkConfig: { config: ExplicitTextProvider; thinkingLevel?: ModelThinkingLevel } | null = null;
   private sdkShutdown: Promise<void> | undefined;
   private sdkConfiguring: Promise<{ generation: number }> | undefined;
   private sdkDisposalFailed = false;
@@ -744,8 +879,14 @@ export class TaskWorkspaceHost {
         claimWrite: (sessionId, permission, intent) => this.claimWrite(sessionId, permission, intent),
         releaseWrite: (claimId) => this.releaseWrite(claimId),
       },
+      sharedPaths: (input) => this.claimAgentPath(input.sessionId, input.label, input.realPath),
       scope: () => this.sdkToolScope(),
       resolveRealPath: (path) => this.resolveRealPath(path),
+      // [#151] The same app-private Skills document the isolated context reads
+      // at session creation. The broker re-reads it on every skill resource
+      // read, so a source switched off or removed loses the read capability
+      // immediately (see `skill-resource-access.ts`).
+      ...(process.env["PIDOCK_SKILL_SOURCES_FILE"] ? { skillSourcesFile: () => process.env["PIDOCK_SKILL_SOURCES_FILE"] } : {}),
       // [PiDock 04] #7 box 5: the Agent's service tools read and control this
       // task's REAL services through the Host-owned runtime and driver (`host.ts`
       // hands the same pair to `task/serviceStatus`/`task/controlService`). A
@@ -770,11 +911,23 @@ export class TaskWorkspaceHost {
     // its original, reachable only through its stable in-task link name. The
     // broker confines every read/write to the recorded original under that
     // name, so the Agent sees the same files the user confirmed for sharing.
-    const sharedDirs = (record?.dirLinks ?? []).map((link) => ({
-      linkName: link.linkName,
-      path: `${taskDir}/${link.linkName}`,
-      sourcePath: link.sourcePath,
-    }));
+    const sharedDirs = [
+      ...(record?.dirLinks ?? []).map((link) => ({
+        linkName: link.linkName,
+        path: `${taskDir}/${link.linkName}`,
+        sourcePath: link.sourcePath,
+      })),
+      // [Pencil T06] #141: an `existing-git` task uses its registered checkouts
+      // IN PLACE (no copy, no task-private worktree), so those real paths are
+      // shared roots too and go through the SAME real-path claim as a plain
+      // directory link — two tasks on one checkout are two Hosts writing one
+      // resolved path.
+      ...(record?.sharedRepos ?? []).map((repo) => ({
+        linkName: repo.rootId,
+        path: repo.sourcePath,
+        sourcePath: repo.sourcePath,
+      })),
+    ];
     return {
       taskDir: this.taskDir,
       taskRoot: parentDirOf(this.taskDir),
@@ -811,7 +964,7 @@ export class TaskWorkspaceHost {
    * and it is only kept when that open succeeded: a failed install must leave the
    * task unconfigured (fail closed), never pointing at a dead context.
    */
-  configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
+  configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; thinkingLevel?: ModelThinkingLevel; workspaceId?: string } | null): Promise<{ generation: number }> {
     if (this.sdkShutdown) return Promise.reject(Error("sdk-host-closing"));
     if (this.executionClosing) return Promise.reject(Error("task-host-closing"));
     if (this.sdkDisposalFailed) return Promise.reject(Error("sdk-host-shutdown-unconfirmed"));
@@ -825,22 +978,31 @@ export class TaskWorkspaceHost {
     try { await shutdownDeadline(context.dispose(), 35_000, "sdk-host-shutdown-timeout"); }
     catch { this.sdkDisposalFailed = true; throw Error("sdk-host-shutdown-unconfirmed"); }
   }
-  private async installSdkProvider(provider: { config: ExplicitTextProvider; credential: string; workspaceId?: string } | null): Promise<{ generation: number }> {
+  private async installSdkProvider(provider: { config: ExplicitTextProvider; credential: string; thinkingLevel?: ModelThinkingLevel; workspaceId?: string } | null): Promise<{ generation: number }> {
     const previous = this.sdkContext;
     this.sdkContext = null;
     this.sdkRouter = null;
+    // The turn transport captured the previous router; a new Provider identity
+    // gets a new transport (durable journals make this safe, nothing replays).
+    this.resetSdkTurnTransport();
     if (previous) await this.disposeSdkContext(previous);
     if (this.sdkShutdown || this.executionClosing) throw Error(this.sdkShutdown ? "sdk-host-closing" : "task-host-closing");
     this.sdkProviderGeneration += 1;
+    this.sdkConfig = provider === null ? null : { config: provider.config, ...(provider.thinkingLevel === undefined ? {} : { thinkingLevel: provider.thinkingLevel }) };
     if (provider) {
       const context = this.sdkContextFactory({
         task: { taskId: this.taskId, taskDir: this.taskDir },
         config: provider.config,
         credential: provider.credential,
+        ...(provider.thinkingLevel === undefined ? {} : { thinkingLevel: provider.thinkingLevel }),
         // [PiDock 02m] #5: the Agent's tool calls are executed and decided by
         // this Host, never inside the isolated model context.
         toolHost: this.sdkTools,
         ...(provider.workspaceId === undefined ? {} : { workspaceId: provider.workspaceId }),
+        // [#151] Main names the app-private Skills source document on this
+        // Host's fork. The isolated context reads it when it creates a session,
+        // so a source toggle reaches the next session only.
+        ...(process.env["PIDOCK_SKILL_SOURCES_FILE"] ? { skillSourcesFile: process.env["PIDOCK_SKILL_SOURCES_FILE"] } : {}),
       });
       try { await context.open("main"); }
       catch (error) { await this.disposeSdkContext(context); throw error; }
@@ -865,12 +1027,42 @@ export class TaskWorkspaceHost {
   }
 
   /** True when this task currently has an isolated model context. */
+  /**
+   * [#139] The Provider configuration a session binding is expressed against:
+   * the profile id, its declared model rows (window, reasoning levels) and the
+   * installation generation. A caller that wants to change a session's model
+   * validates against THIS, never against a renderer-supplied catalog.
+   */
+  sdkProviderConfig(): { config: ExplicitTextProvider; thinkingLevel?: ModelThinkingLevel; generation: number } | null {
+    if (!this.sdkConfig || !this.sdkContext) return null;
+    return { ...this.sdkConfig, generation: this.sdkProviderGeneration };
+  }
+
+  /** [#139] The declared reasoning levels of one model of the installed profile. */
+  reasoningLevels(modelId: string): SessionThinkingLevel[] {
+    const row = this.sdkConfig?.config.models.find((model) => model.id === modelId);
+    return row ? availableReasoningLevels(row) : [];
+  }
+
+  /** The level a session binds when the caller names none: `off` when declared, else the first declared level. */
+  private reasoningLevelOf(config: ExplicitTextProvider, modelId: string, level?: ModelThinkingLevel): SessionThinkingLevel | null {
+    const row = config.models.find((model) => model.id === modelId);
+    if (!row) return null;
+    const levels = availableReasoningLevels(row);
+    if (level !== undefined && (levels as readonly string[]).includes(level)) return level as SessionThinkingLevel;
+    if (levels.includes("off")) return "off";
+    return levels[0] ?? null;
+  }
+
   get sdkProviderConfigured(): boolean {
     return this.sdkContext !== null;
   }
 
   shutdownSdk(): Promise<void> {
     this.sdkRouter = null;
+    // Seal but keep the transport observable: the quit path still has to wait
+    // for an in-flight terminal journal, and only then drops it.
+    this.sdkTurnTransportState?.seal();
     return this.sdkShutdown ??= Promise.resolve().then(() => this.drainSdk());
   }
   private async drainSdk(): Promise<void> {
@@ -968,6 +1160,12 @@ export class TaskWorkspaceHost {
      * template tool refused by name with nothing read or written.
      */
     private readonly templateEdits: () => ServiceTemplateEditPort | undefined = () => undefined,
+    /**
+     * [Pencil T06] #141 the app-private shared-path lock (`host.ts` wires the real
+     * one under `userData`). Absent means this Host has no cross-process partner,
+     * which is the truth for a standalone task Host in a test.
+     */
+    private readonly sharedPathLock?: SharedPathLockPort,
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
@@ -976,15 +1174,25 @@ export class TaskWorkspaceHost {
     this.executions = new TaskExecutionLedger(taskId, taskDir, store, now);
     this.schedules = new TaskSchedules(taskId, taskDir, store, {
       startRun: (input) => this.startScheduledRun(input),
-      liveExecution: (scheduleId) => this.executions.liveSchedule(scheduleId),
+      liveExecution: (scheduleId) => this.executions.liveSchedule(scheduleId) || this.schedules.hasRunningRun(scheduleId),
       archived: () => this.store.readLifecycle(this.taskDir)?.archived === true,
-      catalog: () =>
-        this.catalog.map((profile) => ({
-          id: profile.id,
-          enabled: profile.enabled,
-          models: profile.models.map((model) => ({ id: model.id })),
-        })),
       now: this.now,
+      taskKind: () => (this.store.readTask(this.taskDir)?.kind === "scheduled" ? "scheduled" : "normal"),
+      providerGeneration: () => this.sdkProviderConfig()?.generation,
+      // [Pencil T17] #152: the catalog the definition is validated against is
+      // the Provider this task really installed, so provider/model/credential
+      // are proven against the live binding instead of a renderer claim. Before
+      // any Provider is installed the pushed catalog (possibly empty = not
+      // handed over) is used, exactly like the earlier validation layer.
+      catalog: () => this.scheduleCatalog(),
+      credentialPresent: (providerId) => {
+        const installed = this.sdkConfig;
+        // Nothing installed yet: the credential cannot be proven here, and the
+        // trigger refuses by name. An installed Provider must be the ONE the
+        // schedule names: never silently run on another credential.
+        return installed === null ? true : installed.config.profileId === providerId;
+      },
+      directoryPresent: () => this.taskDirectoryPresent(),
     });
     this.remote = new TaskRemoteDevices(taskDir, store, { now, mintSecret });
   }
@@ -1079,15 +1287,86 @@ export class TaskWorkspaceHost {
     sessionId: string;
     schedule: StoredSchedule;
     approvalExpiresAt: string;
-  }): { state: "done" | "approval" | "failed"; approvalId?: string; failureReason?: string } {
+  }): { state: "done" | "approval" | "failed" | "running"; approvalId?: string; failureReason?: string; failureCode?: string; sessionId?: string } {
     this.assertExecutionOpen();
-    if (this.store === diskTaskStore) {
-      return { state: "failed", failureReason: "sdk-route-unwired: scheduled model runs require #44" };
+    const failed = (failureCode: string, failureReason: string) => ({ state: "failed" as const, failureCode, failureReason });
+    // [Pencil T17] #152 the fixed task workspace must still exist: a lost task
+    // folder is a named failure, never a run in another directory.
+    if (!this.taskDirectoryPresent()) {
+      return failed("directory-missing", "任务工作区目录不存在，不能运行；请修复任务目录后重试");
     }
+    if (this.store.readTask(this.taskDir) === null) {
+      return failed("directory-missing", "任务记录不存在，不能运行定时任务");
+    }
+    // The production path is the REAL SDK turn: the same transport interactive
+    // turns use, a NEW session per run from the #139 index, the saved binding
+    // and permission. The memory store keeps the legacy channel path for hosts
+    // that never had a Provider installed (unit-test wiring); production always
+    // installs one before a scheduled turn is possible.
+    if (this.sdkProviderConfigured) return this.startSdkScheduledRun(input, failed);
+    if (this.store !== diskTaskStore) return this.startLegacyScheduledRun(input);
+    return failed("credential-missing", `Provider ${input.schedule.providerId} 没有可用凭据（任务未安装 Provider 配置），不会绕过审批或换用其他凭据`);
+  }
+
+  /** [Pencil T17] #152 the real trigger: one accepted SDK turn per run. */
+  private startSdkScheduledRun(
+    input: { runId: string; sessionId: string; schedule: StoredSchedule },
+    failed: (failureCode: string, failureReason: string) => { state: "failed"; failureCode: string; failureReason: string },
+  ): { state: "done" | "approval" | "failed" | "running"; failureReason?: string; failureCode?: string; sessionId?: string } {
+    const installed = this.sdkProviderConfig();
+    if (installed === null) return failed("credential-missing", "Provider 配置未安装，不能运行定时任务");
+    // The saved binding/permission decide the run; the installed Provider must
+    // be the SAME identity. No fallback to another provider or model.
+    if (installed.config.profileId !== input.schedule.providerId) {
+      return failed("provider-missing", `定时任务保存的 Provider ${input.schedule.providerId} 与任务已安装的 Provider ${installed.config.profileId} 不一致，不会替换`);
+    }
+    const model = installed.config.models.find((row) => row.id === input.schedule.model);
+    if (model === undefined) {
+      return failed("model-not-declared", `Provider ${input.schedule.providerId} 未声明模型 ${input.schedule.model}，不会替换为其他模型`);
+    }
+    const transport = this.sdkTurnTransport();
+    // Basic overlap refusal (#153 owns the full scheduler): a turn already in
+    // flight is never queued behind or started on top of.
+    if (!transport.available()) {
+      return failed("task-locked", "上一个回合仍在执行，本次定时触发不重叠启动；请等待当前执行结束");
+    }
+    // A NEW session of this task, bound to the saved model/permission. It never
+    // reuses another run's conversation or another session's transcript.
+    let session: TaskSessionRecord;
+    try {
+      session = this.createScheduledSession(input.runId, input.schedule);
+    } catch (error) {
+      return failed("schedule-start-failed", `无法为本次执行创建独立会话：${error instanceof Error ? error.message : String(error)}`);
+    }
+    void (async () => {
+      try {
+        // The #139 index already carries the saved model/permission; `open`
+        // applies that binding instead of the task-wide default.
+        await transport.start(session.id, input.runId, input.schedule.prompt, () => {}, (turn) => {
+          const digest = this.sdkTextKernel().digest(session.id);
+          const actualModel = digest.model?.modelId;
+          const done = turn.state === "done";
+          this.schedules.settleRun(input.runId, {
+            result: done ? "completed" : "failed",
+            ...(actualModel === undefined ? {} : { actualModel }),
+            ...(done ? {} : { failureCode: "sdk-turn-failed", reason: `SDK 回合未完成（${turn.state}）` }),
+          });
+        });
+      } catch (error) {
+        this.schedules.settleRun(input.runId, {
+          result: "failed",
+          failureCode: "schedule-start-failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+    return { state: "running", sessionId: session.id };
+  }
+
+  /** Legacy in-memory channel trigger (unit-test wiring without a Provider). */
+  private startLegacyScheduledRun(input: { runId: string; sessionId: string; schedule: StoredSchedule; approvalExpiresAt: string }): { state: "done" | "approval" | "failed"; approvalId?: string; failureReason?: string } {
     const existing = this.store.readSession(this.taskDir, input.sessionId);
     if (existing !== null) {
-      // Ids are re-seeded from the persisted record, so this can only be a
-      // tampered/copied folder: refuse instead of continuing another run.
       throw new Error(`session-exists: 定时执行会话 ${input.sessionId} 已存在，不能复用`);
     }
     this.openSession(input.sessionId, {
@@ -1104,11 +1383,82 @@ export class TaskWorkspaceHost {
       if (result.state === "approval") return { state: "approval", approvalId: result.approvalId ?? "" };
       return { state: result.state === "done" ? "done" : "failed" };
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      // A refused turn still created the run's session; the failed run keeps the
-      // reason and the next occurrence is not blocked by it.
-      return { state: "failed", failureReason: reason };
+      return { state: "failed", failureReason: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  /** The installed Provider's own declared models, else the pushed catalog. */
+  private scheduleCatalog(): readonly { id: string; enabled?: boolean; models: readonly { id: string }[] }[] {
+    const installed = this.sdkConfig;
+    if (installed !== null) {
+      return [{ id: installed.config.profileId, enabled: true, models: installed.config.models.map((model) => ({ id: model.id })) }];
+    }
+    return this.catalog.map((profile) => ({
+      id: profile.id,
+      enabled: profile.enabled,
+      models: profile.models.map((model) => ({ id: model.id })),
+    }));
+  }
+
+  private taskDirectoryPresent(): boolean {
+    const { lstatSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+    try { return lstatSync(this.taskDir).isDirectory(); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  /**
+   * One run's own session in the #139 index, bound to the saved model and
+   * permission. The active-session pointer is kept where it was: a background
+   * trigger must not yank the user out of the conversation they are in.
+   */
+  private createScheduledSession(runId: string, schedule: StoredSchedule): TaskSessionRecord {
+    const installed = this.sdkConfig;
+    if (installed === null) throw new Error("credential-missing: Provider 配置未安装");
+    const binding: SessionBinding = {
+      profileId: installed.config.profileId,
+      modelId: schedule.model,
+      thinkingLevel: this.reasoningLevelOf(installed.config, schedule.model),
+      generation: this.sdkProviderGeneration,
+    };
+    const before = this.sessionIndex();
+    const created = createSessionInIndex(before, {
+      name: `定时执行 ${runId}`,
+      permission: schedule.permission,
+      binding,
+      now: this.now(),
+    });
+    const index = this.commitSessionIndex({ ...created.index, activeSessionId: before.activeSessionId });
+    return sessionOf(index, created.session.id);
+  }
+
+  // ---- [Pencil T17] #152 scheduler-owned SDK turn transport ----
+
+  private sdkTurnTransportState: SdkTurnTransport | null = null;
+  private sdkTurnsSealed = false;
+
+  /** The transport interactive and scheduled turns share (lazy, per Host). */
+  sdkTurnTransport(): SdkTurnTransport {
+    if (this.sdkTurnsSealed) throw new Error("sdk-host-closing");
+    return this.sdkTurnTransportState ??= new SdkTurnTransport(this.taskId, this.taskDir, this.sdkTextKernel());
+  }
+
+  /** The existing transport, if one was ever created; never creates one. */
+  currentSdkTurnTransport(): SdkTurnTransport | null {
+    return this.sdkTurnTransportState;
+  }
+
+  /** Drop the transport (Provider re-install): the router identity changed. */
+  resetSdkTurnTransport(): void {
+    this.sdkTurnTransportState = null;
+  }
+
+  /** Seal it at quit: no new turn may start after this. */
+  sealSdkTurnTransport(): void {
+    this.sdkTurnsSealed = true;
+    this.sdkTurnTransportState?.seal();
   }
 
   // ---- [PiDock 18] (#20) scheduled tasks ----
@@ -1142,6 +1492,19 @@ export class TaskWorkspaceHost {
     return this.schedules.remove(scheduleId);
   }
 
+  /** [Pencil T17] #152 creation intent of this task (dedicated schedule task or not). */
+  taskKind(): "normal" | "scheduled" {
+    return this.store.readTask(this.taskDir)?.kind === "scheduled" ? "scheduled" : "normal";
+  }
+
+  /** [Pencil T17] #152 settle an asynchronous run that was accepted as `running`. */
+  settleScheduleRun(
+    runId: string,
+    input: { result: "completed" | "awaiting-approval" | "skipped" | "failed"; actualModel?: string; reason?: string; failureCode?: string },
+  ): ScheduledRunRecord | undefined {
+    return this.schedules.settleRun(runId, input);
+  }
+
   /** 立即运行: one independent run now, without moving the next planned time. */
   runScheduleNow(scheduleId: string): ScheduledRunRecord {
     this.assertExecutionOpen();
@@ -1168,6 +1531,15 @@ export class TaskWorkspaceHost {
     return this.schedules.evaluateDue();
   }
 
+  /**
+   * [Pencil T18] #153 wake: every enabled schedule's plan moves to the resume
+   * instant. Nothing that elapsed while asleep is replayed or recorded.
+   */
+  resumeSchedulesAfterWake(at: string): { moved: string[] } {
+    this.assertExecutionOpen();
+    return this.schedules.resumeForward(at);
+  }
+
   /** 盒子 4: an expired confirmation is ended (ledger + turn) before any run is judged. */
   private settleDueApprovalWaits(): void {
     for (const expired of this.executions.settleDueApprovals()) this.endExpiredApprovalWait(expired.sessionId);
@@ -1184,6 +1556,7 @@ export class TaskWorkspaceHost {
     if (channel) this.store.writeSession(this.taskDir, channel.snapshot());
     this.settleApprovalClaim(sessionId);
     this.sharedPaths.release({ taskId: this.taskId, sessionId });
+    this.sharedPathLock?.release({ taskId: this.taskId, sessionId });
   }
 
   /**
@@ -1289,11 +1662,20 @@ export class TaskWorkspaceHost {
       this.protection?.assert(link.sourcePath);
       this.protection?.assert(`${this.taskDir}/${link.linkName}`);
     }
-    return (record?.dirLinks ?? []).map((link) => ({
-      directoryId: link.directoryId,
-      sourcePath: link.sourcePath,
-      realPath: this.resolveRealPath(link.sourcePath),
-    }));
+    return [
+      ...(record?.dirLinks ?? []).map((link) => ({
+        directoryId: link.directoryId,
+        sourcePath: link.sourcePath,
+        realPath: this.resolveRealPath(link.sourcePath),
+      })),
+      // [Pencil T06] #141 the same rule for an existing Git checkout used in
+      // place: a shared root keyed by its REAL path, never by a task id.
+      ...(record?.sharedRepos ?? []).map((repo) => ({
+        directoryId: repo.rootId,
+        sourcePath: repo.sourcePath,
+        realPath: this.resolveRealPath(repo.sourcePath),
+      })),
+    ];
   }
 
   /**
@@ -1334,13 +1716,31 @@ export class TaskWorkspaceHost {
   private claimPathScope(input: { sessionId: string; label: string; scope: AllowedPathScope }): ClaimedPathScope {
     if (input.scope.kind === "task") return { added: [], heldBefore: [] };
     const heldBefore = this.sessionPathKeys(input.sessionId);
+    const label = `${input.label}（共享目录 ${input.scope.directoryId}）`;
     const claim = this.sharedPaths.claim({
       taskId: this.taskId,
       sessionId: input.sessionId,
-      label: `${input.label}（共享目录 ${input.scope.directoryId}）`,
+      label,
       paths: [input.scope.key],
     });
     if (!claim.ok) throw new Error(sharedPathClaimError(claim));
+    // [Pencil T06] #141: the in-process table cannot serialize a DIFFERENT Host
+    // process, so the same real path is also taken in the app-private lock. A
+    // cross-process refusal rolls the in-process claim back to what it was, so a
+    // refused claim holds nothing (and an open confirmation keeps its own keys).
+    const locked = this.sharedPathLock?.claim(
+      { taskId: this.taskId, sessionId: input.sessionId, label },
+      [input.scope.key],
+    );
+    if (locked !== undefined && !locked.ok) {
+      this.sharedPaths.release({
+        taskId: this.taskId,
+        sessionId: input.sessionId,
+        keepPaths: heldBefore,
+        keepDerivedExecutionIds: this.liveDerivedExecutionIds(input.sessionId),
+      });
+      throw new Error(locked.error);
+    }
     return { added: claim.keys.filter((key) => !heldBefore.includes(key)), heldBefore };
   }
 
@@ -1357,6 +1757,8 @@ export class TaskWorkspaceHost {
   /** Release one session's shared path keys, keeping those a live derived execution still writes. */
   private releasePathScope(sessionId: string): void {
     this.sharedPaths.release({ taskId: this.taskId, sessionId, keepDerivedExecutionIds: this.liveDerivedExecutionIds(sessionId) });
+    // What the table still holds is exactly what the disk lock must keep.
+    this.sharedPathLock?.release({ taskId: this.taskId, sessionId, keepPaths: this.sessionPathKeys(sessionId) });
   }
 
   /**
@@ -1374,6 +1776,54 @@ export class TaskWorkspaceHost {
       keepPaths: claimed.heldBefore,
       keepDerivedExecutionIds: this.liveDerivedExecutionIds(sessionId),
     });
+    this.sharedPathLock?.release({ taskId: this.taskId, sessionId, keepPaths: this.sessionPathKeys(sessionId) });
+  }
+
+  /**
+   * [Pencil T06] #141 the Agent tool surface's shared-target claim: a mutating
+   * `fs.write` / `exec.run` from the real SDK path must take the SAME real-path
+   * keys a turn tool takes, in-process and cross-process. Task-private targets
+   * claim nothing (two tasks never share a worktree path).
+   */
+  claimAgentPath(sessionId: string, label: string, requested: string):
+    { ok: true; release: () => void } | { ok: false; reason: string } {
+    let scope: PathScopeVerdict;
+    try {
+      scope = this.pathScopeOf(requested);
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : "路径无法按真实路径校验" };
+    }
+    if (scope.kind === "outside") return { ok: true, release: () => undefined };
+    let claimed: ClaimedPathScope;
+    try {
+      claimed = this.claimPathScope({ sessionId, label, scope });
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : "共享真实路径不可用" };
+    }
+    return { ok: true, release: () => { this.releaseClaimedPathScope(sessionId, claimed); } };
+  }
+
+  /**
+   * The real target of one recorded tool target ([Pencil T06] #141): the resolved
+   * real path plus whether it is a shared plain-directory link (the original that
+   * a write really changes). `null` when the target cannot be resolved: the
+   * caller must then say it does not know instead of showing a guess.
+   */
+  realTargetOf(requested: string): { realPath: string; linkedOriginal: { directoryId: string; sourcePath: string } | null } | null {
+    if (requested.trim().length === 0) return null;
+    try {
+      const scope = this.pathScopeOf(requested);
+      if (scope.kind === "outside") return null;
+      const linked = scope.kind === "shared"
+        ? this.sharedRoots().find((root) => root.directoryId === scope.directoryId) ?? null
+        : null;
+      return {
+        realPath: scope.path,
+        linkedOriginal: linked ? { directoryId: linked.directoryId, sourcePath: linked.sourcePath } : null,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /** Session currently holding the Host-owned task write right, if any. */
@@ -1513,8 +1963,34 @@ export class TaskWorkspaceHost {
     if (!branched.ok) throw new Error(`${branched.error.code}: ${branched.error.message}`);
     const hasRepos = (input.repoSelections && input.repoSelections.length > 0) || (input.repos && input.repos.length > 0);
     const hasPlainDirs = input.plainDirs && input.plainDirs.length > 0;
+    const hasSharedRepos = input.sharedRepos !== undefined && input.sharedRepos.length > 0;
+    // [Pencil T02] #137: the mode is enforced here, in the Host record owner.
+    // `existing-git` records shared checkouts and no worktrees; `plain-dirs`
+    // records no Git repo at all; `worktree` is the default/legacy shape.
+    const workspaceMode: "worktree" | "existing-git" | "plain-dirs" =
+      input.workspaceMode ?? (hasRepos ? "worktree" : "plain-dirs");
+    if (workspaceMode !== "worktree" && workspaceMode !== "existing-git" && workspaceMode !== "plain-dirs") {
+      throw new Error("invalid-payload: task/provision.workspaceMode must be a known mode");
+    }
+    if (workspaceMode === "plain-dirs" && hasRepos) {
+      throw new Error("invalid-payload: plain-dirs mode cannot carry Git repositories");
+    }
+    if (workspaceMode === "existing-git" && (!hasSharedRepos || hasRepos)) {
+      throw new Error("invalid-payload: existing-git mode requires sharedRepos and no worktree repositories");
+    }
+    if (workspaceMode !== "existing-git" && hasSharedRepos) {
+      throw new Error("invalid-payload: sharedRepos require existing-git mode");
+    }
+    // [Pencil T07] #142 (#137 leftover): only a worktree task owns a task
+    // branch. Existing-Git-dir and plain-directory tasks create none, so their
+    // record says so explicitly (`branchKind: "none"`, empty `branch`) instead
+    // of spelling a fictitious `task/<id>` that never exists in any repository.
+    const taskBranch = workspaceMode === "worktree" ? branched.branch : "";
+    const branchKind: "task-worktree" | "none" = workspaceMode === "worktree" ? "task-worktree" : "none";
     let pinned: { ok: true; remoteBranch: string; commit: string };
-    if (hasRepos || !hasPlainDirs || (input.remoteBranch && input.remoteBranch.length > 0) || (input.fetchedCommit && input.fetchedCommit.length > 0)) {
+    const requiresRemotePin = workspaceMode !== "existing-git" &&
+      (hasRepos || !hasPlainDirs || (input.remoteBranch && input.remoteBranch.length > 0) || (input.fetchedCommit && input.fetchedCommit.length > 0));
+    if (requiresRemotePin) {
       const pinResult = pinBaseline(input.remoteBranch ?? "", input.fetchedCommit ?? "");
       if (!pinResult.ok) throw new Error(`${pinResult.error.code}: ${pinResult.error.message} (form kept, retry fetch)`);
       pinned = pinResult;
@@ -1579,6 +2055,38 @@ export class TaskWorkspaceHost {
         linkSnapshots.push(snap.snapshot);
       }
     }
+    // [Pencil T02] #137: snapshot each existing checkout's identity (a shared
+    // original, never a copy). The Host reads the device/inode itself; the
+    // branch/HEAD/common-dir/remote digest come from the caller's verified read.
+    let sharedSnapshots: {
+      rootId: string; sourcePath: string; sourceRealPath: string; remote: string; remoteBranch: string;
+      headCommit: string; commonDir: string; remoteDigest: string;
+      sourceDevice: string; sourceInode: string; snapshotAt: string;
+    }[] | null = null;
+    if (input.sharedRepos !== undefined) {
+      sharedSnapshots = [];
+      const seenRoots = new Set<string>();
+      for (const entry of input.sharedRepos) {
+        if (!isSafeTaskChildName(entry.rootId) || seenRoots.has(entry.rootId)) {
+          throw new Error("invalid-payload: task/provision.sharedRepos rootId must be a unique safe task child name");
+        }
+        seenRoots.add(entry.rootId);
+        if (!isAbsoluteTaskRoot(entry.sourcePath)) {
+          throw new Error("invalid-payload: task/provision.sharedRepos sourcePath must be absolute");
+        }
+        if (!entry.remote || !entry.remoteBranch || !/^[a-f0-9]{40}$/.test(entry.headCommit) || !entry.commonDir || !/^[a-f0-9]{64}$/.test(entry.remoteDigest)) {
+          throw new Error("invalid-payload: task/provision.sharedRepos identity is incomplete");
+        }
+        const identity = this.plainDirSourceIdentity(entry.sourcePath);
+        if (identity === undefined) {
+          throw new Error("source-identity-unreadable: 已有 Git 目录来源身份不可读取，未创建任务记录");
+        }
+        sharedSnapshots.push({ rootId: entry.rootId, sourcePath: entry.sourcePath, sourceRealPath: entry.sourcePath,
+          remote: entry.remote, remoteBranch: entry.remoteBranch, headCommit: entry.headCommit, commonDir: entry.commonDir,
+          remoteDigest: entry.remoteDigest, sourceDevice: identity.device, sourceInode: identity.inode,
+          snapshotAt: input.now ?? this.now() });
+      }
+    }
     const repos = pinnedRepos !== null ? pinnedRepos.map((repo) => repo.repoDir) : [...(input.repos ?? [])];
     const paths = previewTaskPaths(resolved.root, input.dirId, repos, []);
     // #52: two code paths build this same path with different separators on
@@ -1599,7 +2107,8 @@ export class TaskWorkspaceHost {
       taskId: this.taskId,
       name: named.name,
       dirId: input.dirId,
-      branch: branched.branch,
+      branch: taskBranch,
+      branchKind,
       root: resolved.root,
       taskDir: this.taskDir,
       remoteBranch: pinned.remoteBranch,
@@ -1607,13 +2116,42 @@ export class TaskWorkspaceHost {
       repos,
       repoSources:
         pinnedRepos !== null
-          ? pinnedRepos.map((repo) => ({
-              repoDir: repo.repoDir,
-              remote: repo.remote,
-              remoteBranch: repo.remoteBranch,
-              baseCommit: repo.commit,
-            }))
+          ? pinnedRepos.map((repo) => {
+              const recorded = input.repoIdentities?.[repo.repoDir];
+              // The worktree folder's own identity is read here (it exists by
+              // the time a real creation provisions); an absent target identity
+              // is left unstored and reported as `待修复`, never guessed.
+              const target = this.plainDirSourceIdentity(join(this.taskDir, repo.repoDir));
+              return {
+                repoDir: repo.repoDir,
+                remote: repo.remote,
+                remoteBranch: repo.remoteBranch,
+                baseCommit: repo.commit,
+                ...(recorded?.sourcePath !== undefined ? { sourcePath: recorded.sourcePath } : {}),
+                ...(recorded?.sourceRealPath !== undefined ? { sourceRealPath: recorded.sourceRealPath } : {}),
+                ...(recorded?.sourceDevice !== undefined && recorded.sourceInode !== undefined
+                  ? { sourceDevice: recorded.sourceDevice, sourceInode: recorded.sourceInode } : {}),
+                ...(recorded?.commonDir !== undefined ? { commonDir: recorded.commonDir } : {}),
+                ...(recorded?.remoteDigest !== undefined ? { remoteDigest: recorded.remoteDigest } : {}),
+                ...(target !== undefined ? { targetDevice: target.device, targetInode: target.inode } : {}),
+                // [Pencil T07] #142: the observed target identity the caller read
+                // back from the real worktree, never derived from `baseCommit`.
+                ...(recorded?.targetRealPath !== undefined ? { targetRealPath: recorded.targetRealPath } : {}),
+                ...(recorded?.targetBranch !== undefined ? { targetBranch: recorded.targetBranch } : {}),
+                ...(recorded?.targetHead !== undefined ? { targetHead: recorded.targetHead } : {}),
+              };
+            })
           : undefined,
+      workspaceMode,
+      ...(input.kind !== undefined ? { kind: input.kind } : previous?.kind !== undefined ? { kind: previous.kind } : {}),
+      sharedRepos: sharedSnapshots !== null
+        ? sharedSnapshots.map((repo) => ({
+            rootId: repo.rootId, sourcePath: repo.sourcePath, sourceRealPath: repo.sourceRealPath,
+            remote: repo.remote, remoteBranch: repo.remoteBranch, headCommit: repo.headCommit,
+            commonDir: repo.commonDir, remoteDigest: repo.remoteDigest,
+            sourceDevice: repo.sourceDevice, sourceInode: repo.sourceInode, snapshotAt: repo.snapshotAt,
+          }))
+        : undefined,
       dirLinks:
         linkSnapshots !== null
           ? linkSnapshots.map((link) => ({
@@ -1647,6 +2185,10 @@ export class TaskWorkspaceHost {
       }
       if (pinnedRepos === null && previous.repoSources !== undefined) record.repoSources = previous.repoSources;
       if (linkSnapshots === null && previous.dirLinks !== undefined) record.dirLinks = previous.dirLinks;
+      // [Pencil T02] #137: a re-provision that does not name a mode or shared
+      // checkouts keeps the recorded ones (append/resume never drops them).
+      if (input.workspaceMode === undefined && previous.workspaceMode !== undefined) record.workspaceMode = previous.workspaceMode;
+      if (sharedSnapshots === null && previous.sharedRepos !== undefined) record.sharedRepos = previous.sharedRepos;
       // #6 recovery: a re-provision must not erase a still-unresolved
       // per-repo prepare error (resume is the only flow that clears it).
       if (previous.repoPrepareErrors !== undefined) record.repoPrepareErrors = [...previous.repoPrepareErrors];
@@ -1719,6 +2261,14 @@ export class TaskWorkspaceHost {
     const stored = this.store.readTask(this.taskDir);
     if (!stored) throw new Error("unknown task: no task record; provision the task before appending");
     if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    // [Pencil T02] #137: a task whose workspace mode is not `worktree` has no
+    // independent worktrees. Appending one would contradict the recorded mode
+    // (and the record parser refuses it), so this fails closed by name instead
+    // of corrupting a shared-checkout / plain-directory task.
+    const storedMode = stored.workspaceMode ?? ((stored.sharedRepos?.length ?? 0) > 0 ? "existing-git" : stored.repos.length > 0 ? "worktree" : "plain-dirs");
+    if (storedMode !== "worktree") {
+      throw new Error("workspace-mode-refusal: 该任务不是独立 Worktree 模式（已有 Git 目录 / 仅普通目录），不能追加独立 Worktree 仓库；请新建独立 Worktree 任务");
+    }
     const validated = validateRepoSelections(input.repoSelections);
     if (!validated.ok) {
       const error: MultiRepoError = validated.error;
@@ -1792,6 +2342,7 @@ export class TaskWorkspaceHost {
       name: stored.name,
       dirId: stored.dirId,
       branch: stored.branch,
+      ...(stored.branchKind !== undefined ? { branchKind: stored.branchKind } : {}),
       root: stored.root,
       taskDir: stored.taskDir,
       remoteBranch: stored.remoteBranch,
@@ -1807,6 +2358,11 @@ export class TaskWorkspaceHost {
         })),
       ],
       dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      // [Pencil T02] #137: a record rewrite carries the workspace mode and the
+      // shared checkouts it holds. Dropping them would silently re-derive the
+      // task's shape instead of keeping what the user created.
+      ...(stored.workspaceMode !== undefined ? { workspaceMode: stored.workspaceMode } : {}),
+      ...(stored.sharedRepos !== undefined ? { sharedRepos: stored.sharedRepos } : {}),
       repoPrepareErrors:
         stored.repoPrepareErrors !== undefined ? [...stored.repoPrepareErrors] : undefined,
       now: at,
@@ -1906,6 +2462,7 @@ export class TaskWorkspaceHost {
       name: stored.name,
       dirId: stored.dirId,
       branch: stored.branch,
+      ...(stored.branchKind !== undefined ? { branchKind: stored.branchKind } : {}),
       root: stored.root,
       taskDir: this.taskDir,
       remoteBranch: stored.remoteBranch,
@@ -1913,6 +2470,11 @@ export class TaskWorkspaceHost {
       repos: stored.repos,
       repoSources: stored.repoSources,
       dirLinks: [...existingLinks, ...appended],
+      // [Pencil T02] #137: appending a plain directory must not drop the task's
+      // recorded mode or its existing-Git sources — otherwise an `existing-git`
+      // task would silently lose its shared checkout binding on this write.
+      ...(stored.workspaceMode !== undefined ? { workspaceMode: stored.workspaceMode } : {}),
+      ...(stored.sharedRepos !== undefined ? { sharedRepos: stored.sharedRepos } : {}),
       repoPrepareErrors: stored.repoPrepareErrors,
       now: at,
     });
@@ -2272,6 +2834,7 @@ export class TaskWorkspaceHost {
       name: stored.name,
       dirId: stored.dirId,
       branch: stored.branch,
+      ...(stored.branchKind !== undefined ? { branchKind: stored.branchKind } : {}),
       root: stored.root,
       taskDir: stored.taskDir,
       remoteBranch: stored.remoteBranch,
@@ -2279,6 +2842,8 @@ export class TaskWorkspaceHost {
       repos: [...stored.repos],
       repoSources: stored.repoSources !== undefined ? [...stored.repoSources] : undefined,
       dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      ...(stored.workspaceMode !== undefined ? { workspaceMode: stored.workspaceMode } : {}),
+      ...(stored.sharedRepos !== undefined ? { sharedRepos: stored.sharedRepos } : {}),
       repoPrepareErrors: nextErrors.length > 0 ? nextErrors : undefined,
       now: this.now(),
     });
@@ -2373,6 +2938,97 @@ export class TaskWorkspaceHost {
     return this.store.listSessions(this.taskDir);
   }
 
+  // ---- [Pencil T04] #139: task-wide session identity and lifecycle ----
+
+  /**
+   * The task's session index: which sessions exist, what they are called, which
+   * one is active, each one's permission and model binding. A task without a
+   * sidecar migrates its historical `main` session on read.
+   */
+  sessionIndex(): SessionIndex {
+    return this.store.readSessionIndex(this.taskDir, this.now());
+  }
+
+  private commitSessionIndex(next: SessionIndex): SessionIndex {
+    return this.store.writeSessionIndex(this.taskDir, next);
+  }
+
+  /** The binding a session created now starts with: the configured Provider, or none. */
+  private currentBinding(): SessionBinding | null {
+    const installed = this.sdkConfig;
+    if (!installed) return null;
+    return {
+      profileId: installed.config.profileId,
+      modelId: installed.config.modelId,
+      thinkingLevel: this.reasoningLevelOf(installed.config, installed.config.modelId, installed.thinkingLevel),
+      generation: this.sdkProviderGeneration,
+    };
+  }
+
+  /**
+   * Create one session with its own id, a fresh SDK context and the task's
+   * current model binding. It becomes the active session (S08's 新建会话 entry
+   * opens the new one); nothing is copied from another session.
+   */
+  createTaskSession(input: { name?: string; permission?: SessionPermission } = {}): { session: TaskSessionRecord; index: SessionIndex } {
+    const created = createSessionInIndex(this.sessionIndex(), {
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.permission === undefined ? {} : { permission: input.permission }),
+      binding: this.currentBinding(),
+      now: this.now(),
+    } satisfies CreateSessionInput);
+    const index = this.commitSessionIndex(created.index);
+    return { session: sessionOf(index, created.session.id), index };
+  }
+
+  renameTaskSession(sessionId: string, name: string): SessionIndex {
+    return this.commitSessionIndex(renameSessionInIndex(this.sessionIndex(), sessionId, name, this.now()));
+  }
+
+  /** Archive keeps the transcript; the pointer moves to the next real session. */
+  archiveTaskSession(sessionId: string): SessionIndex {
+    return this.commitSessionIndex(archiveSessionInIndex(this.sessionIndex(), sessionId, this.now()));
+  }
+
+  restoreTaskSession(sessionId: string): SessionIndex {
+    return this.commitSessionIndex(restoreSessionInIndex(this.sessionIndex(), sessionId, this.now()));
+  }
+
+  activateTaskSession(sessionId: string): SessionIndex {
+    return this.commitSessionIndex(activateSessionInIndex(this.sessionIndex(), sessionId, this.now()));
+  }
+
+  /**
+   * Delete one session: its index record, its legacy snapshot and the SDK-owned
+   * binding/transcript/journal. Deleting the active session selects the next
+   * real one; it never substitutes a fresh empty session. A live channel is
+   * removed from memory first so nothing keeps writing into a deleted id.
+   */
+  deleteTaskSession(sessionId: string): SessionIndex {
+    const next = deleteSessionInIndex(this.sessionIndex(), sessionId);
+    const index = this.commitSessionIndex(next);
+    this.channels.delete(sessionId);
+    this.store.deleteSession(this.taskDir, sessionId);
+    this.store.deleteSdkSession(this.taskDir, sessionId);
+    return index;
+  }
+
+  /** Set (or clear) one session's model/reasoning binding; the identity of that session. */
+  bindTaskSession(sessionId: string, binding: SessionBinding | null): SessionIndex {
+    return this.commitSessionIndex(bindSessionInIndex(this.sessionIndex(), sessionId, binding, this.now()));
+  }
+
+  /**
+   * [#139] A session a model turn may use: it must exist in the task's index and
+   * must not be archived. Nothing is created here, so a turn can never land in a
+   * session the user did not choose.
+   */
+  sessionForTurn(sessionId: string): TaskSessionRecord {
+    const session = sessionOf(this.sessionIndex(), sessionId);
+    if (session.archived) throw new Error("session-archived");
+    return session;
+  }
+
   /**
    * Open the designated session, restoring its persisted snapshot when one
    * exists. A snapshot naming a different task is rejected: reopen never
@@ -2414,6 +3070,22 @@ export class TaskWorkspaceHost {
     if (live) return live.currentPermission;
     const saved = this.store.readSession(this.taskDir, sessionId);
     return saved?.permission ?? null;
+  }
+
+  /**
+   * [#146] Whether one session has live work the lifecycle must settle first,
+   * read **without** opening or creating the session: a running/approval-waiting
+   * Host turn and the confirmations parked on it. A session with no snapshot is
+   * simply not live (never an error: the index is the authority on existence).
+   */
+  sessionActivity(sessionId: string): { running: boolean; pendingApprovals: number } {
+    const live = this.channels.get(sessionId);
+    const snapshot = live ? live.snapshot() : this.store.readSession(this.taskDir, sessionId);
+    if (!snapshot) return { running: false, pendingApprovals: 0 };
+    return {
+      running: snapshot.runState === "running" || snapshot.runState === "approval",
+      pendingApprovals: snapshot.approvals.filter((approval) => approval.status === "pending").length,
+    };
   }
 
   openSession(
@@ -2947,7 +3619,14 @@ export class TaskWorkspaceHost {
       if (sessionId !== undefined && id !== sessionId) continue;
       const channel = this.openSession(id);
       for (const approval of channel.snapshot().approvals) {
-        out.push({ ...approval });
+        // [Pencil T06] #141: the confirmation states the REAL target and whether
+        // the write changes a linked original, not just the lexical path.
+        const real = this.realTargetOf(approval.target);
+        out.push({
+          ...approval,
+          realTarget: real?.realPath,
+          sharedOriginal: real?.linkedOriginal?.sourcePath,
+        });
       }
     }
     return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -2978,6 +3657,9 @@ export class TaskWorkspaceHost {
     this.executions.stopSession(sessionId, { derive: derived });
     // 盒子 5：中止后不留共享真实路径的旧声明（派生条目已一并丢弃）。
     this.sharedPaths.release({ taskId: this.taskId, sessionId });
+    // [Pencil T06] #141: cancel releases the app-private lock too, so the other
+    // Host process can write the same real path right away.
+    this.sharedPathLock?.release({ taskId: this.taskId, sessionId });
     this.store.writeSession(this.taskDir, channel.snapshot());
     return this.writeState();
   }
@@ -3000,6 +3682,9 @@ export class TaskWorkspaceHost {
       this.approvalClaims.clear();
       this.write.reset();
       this.sharedPaths.releaseTask(this.taskId);
+      // [Pencil T06] #141: Host exit releases every real-path lock of this task
+      // instead of leaving a record for the stale-owner policy to recover.
+      this.sharedPathLock?.releaseTask(this.taskId);
     });
   }
 

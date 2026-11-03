@@ -2,7 +2,13 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { ProviderProfileStore, SELECTION_VALUE_ROTATION_LIMITATION, resolveProviderCredential } from "./provider-profile-store.js";
+import {
+  ProviderProfileStore,
+  SELECTION_STORED_CREDENTIAL_NOTE,
+  SELECTION_VALUE_ROTATION_LIMITATION,
+  resolveProviderCredential,
+  type ProviderProfileInput,
+} from "./provider-profile-store.js";
 
 const SECRET = "sk-live-should-never-be-stored-0123456789";
 
@@ -11,21 +17,28 @@ function store() {
   return { dir, store: new ProviderProfileStore(dir, () => "2026-09-29T00:00:00.000Z") };
 }
 
-const input = {
+const input: ProviderProfileInput = {
   name: "Local gateway",
+  notes: "公司专用账号",
+  protocol: "openai-completions",
   baseUrl: "https://models.example.test/v1",
+  credentials: { kind: "env", ref: "PIDOCK_PROVIDER_EXAMPLE" },
+  models: [
+    { id: "gpt-5-mini", name: "GPT-5 mini", contextWindow: 128000, maxTokens: 8192, reasoning: false },
+    { id: "gpt-5", name: "GPT-5", contextWindow: 200000, maxTokens: 16384, reasoning: true, thinkingLevelMap: { minimal: "minimal", low: "low", medium: "medium", high: "high" } },
+  ],
   modelId: "gpt-5-mini",
-  contextWindow: 128000,
-  maxTokens: 8192,
-  authRef: "PIDOCK_PROVIDER_EXAMPLE",
 };
 
-it("persists metadata and the credential reference only, with private file modes", () => {
+it("persists metadata, every declared model row and the credential reference only", () => {
   const { dir, store: profiles } = store();
   const profile = profiles.save(input);
-  expect(profile).toMatchObject({ ...input, generation: 1 });
+  expect(profile).toMatchObject({ name: input.name, protocol: "openai-completions", modelId: "gpt-5-mini", generation: 1, notes: "公司专用账号" });
+  expect(profile.models.map((row) => row.id)).toEqual(["gpt-5-mini", "gpt-5"]);
+  expect(profile.credentials).toEqual({ kind: "env", ref: "PIDOCK_PROVIDER_EXAMPLE" });
   const raw = readFileSync(join(dir, "provider-profiles.json"), "utf8");
   expect(raw).toContain("PIDOCK_PROVIDER_EXAMPLE");
+  expect(raw).toContain("\"version\":2");
   expect(raw).not.toContain(SECRET);
   expect(raw).not.toContain("sk-");
 });
@@ -46,21 +59,54 @@ it.skipIf(process.platform === "win32")("keeps the profile document and its dire
 it("keeps the generation stable for cosmetic edits and bumps it for defining changes", () => {
   const { store: profiles } = store();
   const created = profiles.save(input);
-  expect(profiles.save({ ...input, id: created.id, name: "Renamed" }).generation).toBe(1);
+  expect(profiles.save({ ...input, id: created.id, name: "Renamed", notes: "新备注" }).generation).toBe(1);
   expect(profiles.list().profiles[0]?.name).toBe("Renamed");
-  expect(profiles.save({ ...input, id: created.id, modelId: "gpt-5" }).generation).toBe(2);
-  expect(profiles.save({ ...input, id: created.id, authRef: "PIDOCK_PROVIDER_OTHER" }).generation).toBe(3);
+  // Every defining dimension invalidates an existing session binding.
+  const bumps = [
+    { ...input, id: created.id, baseUrl: "https://other.example.test/v1" },
+    { ...input, id: created.id, protocol: "anthropic-messages" as const },
+    { ...input, id: created.id, modelId: "gpt-5" },
+    { ...input, id: created.id, credentials: { kind: "env" as const, ref: "PIDOCK_PROVIDER_OTHER" } },
+    { ...input, id: created.id, models: [input.models[0]!, { ...input.models[1]!, maxTokens: 4096 }] },
+  ];
+  let generation = 1;
+  for (const next of bumps) {
+    generation += 1;
+    expect(profiles.save(next).generation).toBe(generation);
+  }
 });
 
 it("drops a task selection when the selected profile changes meaning", () => {
   const { store: profiles } = store();
   const created = profiles.save(input);
-  expect(profiles.select("task-1", created.id)).toMatchObject({ taskId: "task-1", profileId: created.id, generation: 1 });
-  expect(profiles.selection("task-1")).toMatchObject({ generation: 1 });
-  profiles.save({ ...input, id: created.id, maxTokens: 4096 });
+  expect(profiles.select("task-1", created.id)).toMatchObject({ taskId: "task-1", profileId: created.id, generation: 1, modelId: "gpt-5-mini", thinkingLevel: "off" });
+  profiles.save({ ...input, id: created.id, modelId: "gpt-5" });
   // The user must re-select explicitly: a silent swap would continue a session
   // under an identity it was never bound to.
   expect(profiles.selection("task-1")).toBeNull();
+});
+
+it("selects a model and a reasoning level per task, defaulting from the model's declaration", () => {
+  const { store: profiles } = store();
+  const created = profiles.save(input);
+  expect(profiles.select("task-1", created.id, "gpt-5", "medium")).toMatchObject({ modelId: "gpt-5", thinkingLevel: "medium" });
+  // A reasoning-capable model defaults to a thinking level; a non-reasoning one to `off`.
+  expect(profiles.select("task-2", created.id).thinkingLevel).toBe("off");
+  expect(profiles.select("task-3", created.id, "gpt-5").thinkingLevel).toBe("high");
+  expect(() => profiles.select("task-4", created.id, "not-a-model")).toThrow("provider-model-unknown");
+  expect(() => profiles.select("task-4", created.id, "gpt-5", "ultra" as never)).toThrow();
+});
+
+it("hands the isolated context an explicit protocol, every model row and the selected window", () => {
+  const { store: profiles } = store();
+  const created = profiles.save(input);
+  const config = profiles.config(created.id, "gpt-5");
+  expect(config).toMatchObject({
+    profileId: created.id, protocol: "openai-completions", baseUrl: input.baseUrl, modelId: "gpt-5",
+    contextWindow: 200000, maxTokens: 16384, credentialSource: "env", authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1,
+  });
+  expect(config.models.map((row) => row.id)).toEqual(["gpt-5-mini", "gpt-5"]);
+  expect(() => profiles.config(created.id, "unknown")).toThrow("provider-model-unknown");
 });
 
 it("scopes selections per task and removes both on profile deletion", () => {
@@ -81,12 +127,21 @@ it("scopes selections per task and removes both on profile deletion", () => {
 
 it("refuses configurations the runtime would reject anyway", () => {
   const { store: profiles } = store();
-  expect(() => profiles.save({ ...input, baseUrl: "http://models.example.test/v1" })).toThrow();
-  expect(() => profiles.save({ ...input, baseUrl: "https://user:pw@models.example.test/v1" })).toThrow();
-  expect(() => profiles.save({ ...input, authRef: "OPENAI_API_KEY" })).toThrow();
-  expect(() => profiles.save({ ...input, modelId: "" })).toThrow();
-  expect(() => profiles.save({ ...input, contextWindow: 1 })).toThrow();
-  expect(() => profiles.save({ ...input, maxTokens: 10 ** 9 })).toThrow();
+  const model = input.models[0]!;
+  const bad: Partial<ProviderProfileInput>[] = [
+    { baseUrl: "http://models.example.test/v1" },
+    { baseUrl: "https://user:pw@models.example.test/v1" },
+    { credentials: { kind: "env", ref: "OPENAI_API_KEY" } },
+    { models: [{ ...model, id: "" }] },
+    { models: [{ ...model, contextWindow: 1 }] },
+    { models: [{ ...model, maxTokens: 10 ** 9 }] },
+    { models: [model, model] },
+    { modelId: "missing" },
+    // A non-reasoning model may not carry a thinking map: that would let the UI
+    // offer levels the SDK cannot honour.
+    { models: [{ ...model, thinkingLevelMap: { low: "low" } }] },
+  ];
+  for (const patch of bad) expect(() => profiles.save({ ...input, ...patch })).toThrow();
   expect(profiles.list().profiles).toHaveLength(0);
 });
 
@@ -95,14 +150,42 @@ it("fails closed on an unreadable or foreign document instead of guessing", () =
   profiles.save(input);
   const file = join(dir, "provider-profiles.json");
   const good = readFileSync(file, "utf8");
-  writeFileSync(file, "{\"version\":2,\"profiles\":[],\"selections\":[]}");
+  writeFileSync(file, "{\"version\":3,\"profiles\":[],\"selections\":[]}");
   expect(() => profiles.list()).toThrow(/version/);
   writeFileSync(file, "{ not json");
   expect(() => profiles.list()).toThrow();
-  writeFileSync(file, JSON.parse(good).profiles[0] && JSON.stringify({ version: 1, profiles: [{ ...JSON.parse(good).profiles[0], credential: SECRET }], selections: [] }));
+  const profile = JSON.parse(good).profiles[0];
+  writeFileSync(file, JSON.stringify({ version: 2, profiles: [{ ...profile, credential: SECRET }], selections: [] }));
   expect(() => profiles.list()).toThrow(/fields/);
+  writeFileSync(file, JSON.stringify({ version: 2, profiles: [{ ...profile, native: { providerId: "other", fingerprint: null, writtenAt: null } }], selections: [] }));
+  expect(() => profiles.list()).toThrow(/native/);
   writeFileSync(file, good);
   expect(profiles.list().profiles).toHaveLength(1);
+});
+
+it("migrates a v1 document to the explicit protocol it was actually built with", () => {
+  const { dir, store: profiles } = store();
+  const legacy = {
+    version: 1,
+    profiles: [{
+      id: "p-11111111-2222-3333-4444-555555555555", name: "Legacy", baseUrl: "https://models.example.test/v1",
+      modelId: "gpt-5-mini", contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE",
+      generation: 2, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    }],
+    selections: [{ taskId: "task-1", profileId: "p-11111111-2222-3333-4444-555555555555", generation: 2, at: "2026-01-01T00:00:00.000Z" }],
+  };
+  writeFileSync(join(dir, "provider-profiles.json"), JSON.stringify(legacy));
+  const profile = profiles.list().profiles[0]!;
+  // v1 registered every profile through the `openai-completions` runtime; the
+  // migration records that fact rather than guessing from the vendor or URL.
+  expect(profile).toMatchObject({ protocol: "openai-completions", modelId: "gpt-5-mini", generation: 2 });
+  expect(profile.credentials).toEqual({ kind: "env", ref: "PIDOCK_PROVIDER_EXAMPLE" });
+  expect(profile.models).toEqual([{ id: "gpt-5-mini", name: "gpt-5-mini", contextWindow: 128000, maxTokens: 8192, reasoning: false }]);
+  expect(profile.native).toEqual({ providerId: `pidock-${profile.id}`, fingerprint: null, writtenAt: null });
+  expect(profiles.selection("task-1")).toMatchObject({ modelId: "gpt-5-mini", thinkingLevel: "off", generation: 2 });
+  // Writing again persists the v2 shape.
+  profiles.save({ ...input, id: profile.id });
+  expect(JSON.parse(readFileSync(join(dir, "provider-profiles.json"), "utf8")).version).toBe(2);
 });
 
 it("resolves the credential from its reference and never from ambient fallback", () => {
@@ -116,29 +199,31 @@ it("resolves the credential from its reference and never from ambient fallback",
 
 it("never lets a name-like credential reference resolve an unrelated variable", () => {
   const { store: profiles } = store();
-  expect(() => profiles.save({ ...input, authRef: "PIDOCK_PROVIDER_EXAMPLE;rm -rf /" })).toThrow();
-  expect(() => profiles.save({ ...input, authRef: "PIDOCK_PROVIDER_EXAMPLE\nOPENAI_API_KEY" })).toThrow();
+  expect(() => profiles.save({ ...input, credentials: { kind: "env", ref: "PIDOCK_PROVIDER_EXAMPLE;rm -rf /" } })).toThrow();
+  expect(() => profiles.save({ ...input, credentials: { kind: "env", ref: "PIDOCK_PROVIDER_EXAMPLE\nOPENAI_API_KEY" } })).toThrow();
 });
 
-it("records the same-reference value rotation limitation on every persisted selection", () => {
+it("states the credential-rotation limitation that matches each credential source", () => {
   const { dir, store: profiles } = store();
   const created = profiles.save(input);
   profiles.select("task-1", created.id);
-  // #46: the digest pins the credential reference *name*, so a rotated value
-  // behind that name is undetectable and changes neither endpoint nor
-  // generation. The persisted record must state this limitation itself.
+  // #46: for an env reference the digest pins the *name*, so a rotated value
+  // behind that name is undetectable. The persisted record must say so itself.
+  expect(profiles.list().selections[0]?.note).toBe(SELECTION_VALUE_ROTATION_LIMITATION);
   const raw = readFileSync(join(dir, "provider-profiles.json"), "utf8");
   expect(raw).toMatch(/rotation/i);
-  // Scoped to the note: the profile's own "generation" field would match a
-  // whole-document /generation/i and prove nothing about the disclosure.
   expect(raw).toMatch(/"note":"[^"]*generation/i);
-  const note = profiles.list().selections[0]?.note ?? "";
-  expect(note).toMatch(/rotation/i);
-  expect(note).toMatch(/not detected/i);
-  expect(note).toMatch(/generation/i);
+
+  // A stored credential pins the ciphertext revision, so replacing the key is
+  // observed (it bumps the generation) and the note says that instead.
+  const stored = profiles.save({
+    ...input, name: "Stored", credentials: { kind: "store", revision: 3 },
+  });
+  profiles.select("task-2", stored.id);
+  expect(profiles.list().selections.find((row) => row.taskId === "task-2")?.note).toBe(SELECTION_STORED_CREDENTIAL_NOTE);
 });
 
-it("keeps a pre-note selection document readable and refuses a contradicting note", () => {
+it("refuses a selection note that contradicts the recorded disclosure", () => {
   const { dir, store: profiles } = store();
   const created = profiles.save(input);
   profiles.select("task-1", created.id);
@@ -146,13 +231,21 @@ it("keeps a pre-note selection document readable and refuses a contradicting not
   const good = readFileSync(file, "utf8");
   const stripped = JSON.parse(good);
   delete stripped.selections[0].note;
-  // No migration: an existing record without the note stays readable.
+  // A pre-note record stays readable.
   writeFileSync(file, JSON.stringify(stripped));
   expect(profiles.list().selections[0]?.note).toBeUndefined();
-  // A record that claims a different limitation is foreign, not trusted.
   stripped.selections[0].note = "nothing to disclose";
   writeFileSync(file, JSON.stringify(stripped));
   expect(() => profiles.list()).toThrow();
   writeFileSync(file, good);
   expect(profiles.list().selections[0]?.note).toBe(SELECTION_VALUE_ROTATION_LIMITATION);
+});
+
+it("records what PiDock last wrote to the native file without changing the generation", () => {
+  const { store: profiles } = store();
+  const created = profiles.save(input);
+  const recorded = profiles.recordNative(created.id, { providerId: `pidock-${created.id}`, fingerprint: "a".repeat(64), writtenAt: "2026-09-29T00:00:00.000Z" });
+  expect(recorded.native.fingerprint).toBe("a".repeat(64));
+  expect(recorded.generation).toBe(1);
+  expect(() => profiles.recordNative(created.id, { providerId: "other", fingerprint: null, writtenAt: null })).toThrow();
 });

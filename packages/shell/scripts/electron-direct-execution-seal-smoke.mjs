@@ -39,7 +39,7 @@ try {
   host.openSession("main", { permission: "auto" });
   const legacy = host.openSession("legacy", { permission: "auto" }), lateMarker = join(taskDir, "late-legacy-marker.txt");
   const address = /** @type {import("node:net").AddressInfo} */ (server.address());
-  await host.configureSdkProvider({ config: { profileId: "fixture", baseUrl: `http://127.0.0.1:${address.port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_FIXTURE", generation: 1 }, credential });
+  await host.configureSdkProvider({ config: { profileId: "fixture", baseUrl: `http://127.0.0.1:${address.port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_FIXTURE", generation: 1, protocol: "openai-completions", credentialSource: "env", models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }] }, credential });
   const kernel = host.sdkTextKernel(); assert.equal((await kernel.open("main")).tools.length, 4); // #5: the production AgentSession now declares the four task-scoped tools behind the Host broker.
   let delta = false; const prompt = kernel.prompt("main", "direct seal fixture", (event) => { if (event.type === "delta") delta = true; });
   void prompt.catch(() => {});

@@ -13,11 +13,21 @@ const openManagement = async () => {
   fireEvent.click(await screen.findByRole("button", { name: "项目管理" }));
 };
 
-const project = { id: "bcedc870-22bd-474e-ac55-78d30a9d763d", name: "真实项目", description: "系统 A", repositories: [{ id: "dad5fcb4-c91f-4ab0-bc33-fbb82053f871", name: "Web", path: "/private/work/web" }], directories: [] };
+const sidebar = () => within(screen.getByTestId("desktop-sidebar"));
+const managementNav = () => within(screen.getByRole("navigation", { name: "项目导航" }));
+const createWorkspace = () => within(screen.getByTestId("desktop-inventory")).getByRole("button", { name: "新建工作空间" });
+
+const project = { id: "bcedc870-22bd-474e-ac55-78d30a9d763d", name: "真实项目", description: "系统 A", repositories: [{ id: "dad5fcb4-c91f-4ab0-bc33-fbb82053f871", name: "Web", path: "/private/work/web" }], directories: [] as Array<{ id: string; name: string; path: string }>, environment: [] as Array<{ key: string; value: string }>, branchTemplate: "feature/{task-name}" };
 const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?: string } = {}): PidockBridge => ({
   listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })),
   importTaskRoot: vi.fn(async () => ({ ok: true, payload: { canceled: false, count: 1 } })),
-  taskOp: vi.fn(async (taskId, op) => ({ ok: true, payload: { lifecycle: { taskId, archived: false, archivedAt: null }, op } })),
+  // [#139] The production route reads a task's sessions and one session's readout;
+  // this default answers the migrated single session, `main`.
+  taskOp: vi.fn(async (taskId, op) => {
+    if (op === "task/sessionList") return { ok: true, payload: { activeSessionId: "main", sessions: [{ id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: null }], provider: null } };
+    if (op === "task/sessionReadout") return { ok: true, payload: { session: { id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: null }, active: true, model: null, reasoningLevels: [], context: { used: null, window: null, source: "unknown" }, usage: null, turns: 0, transcriptModel: null, pending: false, interrupted: false } };
+    return { ok: true, payload: { lifecycle: { taskId, archived: false, archivedAt: null }, op } };
+  }),
   projectOp: vi.fn(async (request) => {
     if (settings.fail) return { ok: false, error: settings.fail };
     if (request.op === "list") return { ok: true, payload: { initialized: settings.projectPresent ?? true, projects: settings.projectPresent === false ? [] : [project] } };
@@ -158,11 +168,11 @@ describe("Desktop production data", () => {
     }
     expect(host.importTaskRoot).not.toHaveBeenCalled();
     expect(listTasks).toHaveBeenCalledTimes(2);
-    expect(projectOp.mock.calls.map(([request]) => request.op)).toEqual(["list", "associations", "list", "associations"]);
+    expect(projectOp.mock.calls.map(([request]) => request.op).filter((op) => op !== "verifySources")).toEqual(["list", "associations", "list", "associations"]);
     if (surface === "overview") await openManagement();
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
     expect(screen.getByLabelText("仓库路径 1")).toHaveValue(project.repositories[0]?.path);
-    expect(screen.getByRole("button", { name: project.name })).toBeInTheDocument();
+    expect(managementNav().getByRole("button", { name: project.name })).toBeInTheDocument();
   });
 
   it("keeps root Retry in place through busy and failed reads, preserving the edit draft and selection", async () => {
@@ -178,35 +188,35 @@ describe("Desktop production data", () => {
     render(<App />);
     await openManagement();
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
-    const name = screen.getByLabelText("项目名称");
+    const name = screen.getByLabelText("工作空间名称 *");
     fireEvent.change(name, { target: { value: "未保存的名称" } });
-    fireEvent.change(screen.getByLabelText("描述"), { target: { value: "未保存的描述" } });
+    fireEvent.change(screen.getByLabelText("描述与业务用途"), { target: { value: "未保存的描述" } });
     listTasks.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRead = reject; }));
     const retries = screen.getAllByRole("button", { name: "重试读取默认任务根" });
     fireEvent.click(retries[0]!);
     fireEvent.click(retries[1]!);
     expect(listTasks).toHaveBeenCalledTimes(2);
-    expect(screen.getByLabelText("项目名称")).toBe(name);
+    expect(screen.getByLabelText("工作空间名称 *")).toBe(name);
     expect(name).toHaveValue("未保存的名称");
-    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存更改" })).toBeDisabled();
     for (const retry of retries) expect(retry).toBeDisabled();
     expect(screen.getAllByRole("status")[0]).toHaveTextContent("正在重读任务根");
     rejectRead?.(new Error("任务根读取暂时失败"));
     await waitFor(() => expect(screen.getAllByText("任务根读取暂时失败").length).toBeGreaterThan(0));
-    expect(screen.getByLabelText("项目名称")).toBe(name);
-    expect(screen.getByLabelText("描述")).toHaveValue("未保存的描述");
-    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+    expect(screen.getByLabelText("工作空间名称 *")).toBe(name);
+    expect(screen.getByLabelText("描述与业务用途")).toHaveValue("未保存的描述");
+    expect(screen.getByRole("button", { name: "保存更改" })).toBeEnabled();
     for (const retry of screen.getAllByRole("button", { name: "重试读取默认任务根" })) expect(retry).toBeEnabled();
     restored = true;
     fireEvent.click(screen.getAllByRole("button", { name: "重试读取默认任务根" })[1]!);
     await waitFor(() => expect(screen.queryByText("任务根读取暂时失败")).toBeNull());
-    expect(screen.getByLabelText("项目名称")).toBe(name);
+    expect(screen.getByLabelText("工作空间名称 *")).toBe(name);
     expect(name).toHaveValue("未保存的名称");
-    expect(screen.getByLabelText("描述")).toHaveValue("未保存的描述");
+    expect(screen.getByLabelText("描述与业务用途")).toHaveValue("未保存的描述");
     expect(screen.getByRole("heading", { name: project.name })).toBeInTheDocument();
     expect(screen.getByText("real-1")).toBeInTheDocument();
     expect(host.importTaskRoot).not.toHaveBeenCalled();
-    expect(projectOp.mock.calls.every(([request]) => request.op === "list" || request.op === "associations")).toBe(true);
+    expect(projectOp.mock.calls.every(([request]) => request.op === "list" || request.op === "associations" || request.op === "verifySources")).toBe(true);
   });
 
   it("lists the default and a registered override root together, surfaces one failing root, and never touches the demo fixture", async () => {
@@ -250,11 +260,14 @@ describe("Desktop production data", () => {
       ? { initialized: false, projects: [] }
       : { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } })) };
     render(<App />);
-    const overview = await screen.findByTestId("desktop-project-overview");
-    expect(within(overview).getByRole("heading", { name: "项目映射未建立" })).toBeInTheDocument();
-    expect(overview).toHaveTextContent("本机尚未建立持久项目映射");
-    // No Project id or count is fabricated to fill the card.
-    expect(screen.getByTestId("overview-repo-count")).toHaveTextContent("0");
+    // No workspace exists, so the reachable page is the explicit 未归属任务 surface:
+    // it names the missing mapping instead of inventing a Project card.
+    const unassigned = await screen.findByTestId("desktop-unassigned");
+    expect(within(unassigned).getByRole("heading", { name: "项目映射未建立" })).toBeInTheDocument();
+    expect(unassigned).toHaveTextContent("本机尚未建立持久工作空间映射");
+    expect(screen.queryByTestId("overview-repo-count")).toBeNull();
+    expect(screen.queryByTestId("overview-task-count")).toBeNull();
+    expect(within(screen.getByTestId("desktop-sidebar")).getByText("项目映射未建立。")).toBeInTheDocument();
     await openManagement();
     const nav = screen.getByRole("navigation", { name: "项目导航" });
     expect(within(nav).getByText("项目映射未建立")).toBeInTheDocument();
@@ -280,7 +293,7 @@ describe("Desktop production data", () => {
       return { ok: true, payload: { tasks: [], roots: broken } };
     });
     fireEvent.click(screen.getByRole("button", { name: "重试读取默认任务根" }));
-    fireEvent.click(screen.getByRole("button", { name: "本机设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await screen.findByTestId("desktop-settings-page");
     releaseRead?.();
     await waitFor(() => expect(screen.getByRole("button", { name: "重试读取默认任务根" })).toBeEnabled());
@@ -288,7 +301,7 @@ describe("Desktop production data", () => {
     expect(screen.queryByTestId("desktop-project-overview")).toBeNull();
   });
 
-  it("routes 能力管理 and 本机设置 to their real pages instead of a 未接线 placeholder", async () => {
+  it("routes 能力管理 and 设置 to their real pages instead of a 未接线 placeholder", async () => {
     window.pidock = bridge();
     render(<App />);
     expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
@@ -307,10 +320,10 @@ describe("Desktop production data", () => {
     expect(screen.queryByRole("heading", { name: "能力管理 · 未接线" })).toBeNull();
     expect(screen.queryByText(/此入口保留，接入后在此页展示真实状态/)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "本机设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(await screen.findByTestId("desktop-settings-page")).toBeInTheDocument();
     expect(screen.queryByTestId("desktop-capabilities-page")).toBeNull();
-    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("本机设置")).toBeInTheDocument();
+    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("设置")).toBeInTheDocument();
     expect(screen.queryByTestId("desktop-unwired")).toBeNull();
     expect(screen.queryByRole("heading", { name: "本机设置 · 未接线" })).toBeNull();
   });
@@ -329,12 +342,12 @@ describe("Desktop production data", () => {
     expect(await screen.findByText("真实任务")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "恢复" }));
     await waitFor(() => expect(taskOp).toHaveBeenCalledWith("real-1", "task/restore", {}));
-    fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
+    fireEvent.click(sidebar().getByRole("button", { name: project.name }));
     await waitFor(() => expect(screen.getByTestId("overview-task-count")).toHaveTextContent("1"));
     expect(screen.getAllByRole("button", { name: /真实任务/ }).length).toBeGreaterThan(0);
   });
 
-  it("opens usage without a task and switches cleanly to Provider and schedules", async () => {
+  it("opens usage without a task and switches cleanly to 能力管理 and schedules", async () => {
     const taskOp = vi.fn(async () => ({ ok: true, payload: { schedules: [], runs: [] } }));
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots } })), projectOp: vi.fn(async (request) => request.op === "list"
       ? { ok: true, payload: { initialized: true, projects: [project] } }
@@ -342,12 +355,12 @@ describe("Desktop production data", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "Token 用量" }));
     expect(await screen.findByTestId("usage-needs-task")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "模型与 Provider" }));
-    expect(await screen.findByTestId("desktop-providers-page")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "能力管理" }));
+    expect(await screen.findByTestId("providers-panel")).toBeInTheDocument();
     expect(screen.queryByTestId("desktop-usage-page")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "定时任务" }));
     expect(await screen.findByTestId("desktop-schedules-page")).toBeInTheDocument();
-    expect(screen.queryByTestId("desktop-providers-page")).toBeNull();
+    expect(screen.queryByTestId("providers-panel")).toBeNull();
     expect(taskOp).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "需要处理" }));
     expect(await screen.findByTestId("desktop-attention-page")).toBeInTheDocument();
@@ -380,7 +393,7 @@ describe("Desktop production data", () => {
     render(<App />);
     // Prototype A opens on the first project; the unassigned list is an explicit pick.
     await openManagement();
-    fireEvent.click(screen.getByRole("button", { name: /^未归属任务/ }));
+    fireEvent.click(managementNav().getByRole("button", { name: /^未归属任务/ }));
     // The sidebar lists the real task as well (prototype A), so both surfaces are checked.
     // `findAllByText` resolves as soon as ONE match exists, so asserting the count
     // on its result raced the second surface (sidebar + unassigned list): under a
@@ -389,7 +402,7 @@ describe("Desktop production data", () => {
     await waitFor(() => expect(screen.getAllByText("真实任务")).toHaveLength(2));
     expect(screen.getByRole("heading", { name: "未归属任务" })).toBeInTheDocument();
     expect(screen.queryByText("/private/work/web")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "真实项目" }));
+    fireEvent.click(managementNav().getByRole("button", { name: "真实项目" }));
     expect(screen.getByText("/private/work/web")).toBeInTheDocument();
     expect(screen.getByText("此项目暂无任务")).toBeInTheDocument();
     expect(screen.queryByText("Atlas Web")).not.toBeInTheDocument();
@@ -409,13 +422,13 @@ describe("Desktop production data", () => {
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(screen.getByRole("button", { name: /^未归属任务/ }));
+    fireEvent.click(managementNav().getByRole("button", { name: /^未归属任务/ }));
     const target = await screen.findByRole("combobox", { name: "真实任务 目标项目" });
     fireEvent.change(target, { target: { value: project.id } });
     fireEvent.click(screen.getByRole("button", { name: "认领" }));
     await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "claim", taskId: "real-1", projectId: project.id }));
     await waitFor(() => expect(screen.getByText("已检查的任务根暂无未归属任务")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "真实项目" }));
+    fireEvent.click(managementNav().getByRole("button", { name: "真实项目" }));
     fireEvent.change(screen.getByRole("combobox", { name: "真实任务 目标项目" }), { target: { value: "6fd712ce-a43b-4614-a459-de81d78a16aa" } });
     fireEvent.click(screen.getByRole("button", { name: "转移" }));
     await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "transfer", taskId: "real-1", fromProjectId: project.id, toProjectId: "6fd712ce-a43b-4614-a459-de81d78a16aa" }));
@@ -430,45 +443,71 @@ describe("Desktop production data", () => {
     const projectOp = vi.fn(async (request: Parameters<NonNullable<PidockBridge["projectOp"]>>[0]) => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects: createdPresent ? [current, created] : [current] } };
       if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
-      if (request.op === "update") { current.description = (request.input as { description: string }).description; return { ok: true, payload: { ...current } }; }
+      if (request.op === "update") {
+        const input = request.input as { name?: string; description: string; repositories: typeof current.repositories; directories: typeof current.directories };
+        Object.assign(current, { ...input, name: input.name ?? current.name });
+        return { ok: true, payload: { ...current } };
+      }
       if (request.op === "create") { createdPresent = true; return { ok: true, payload: created }; }
-      if (request.op === "rename") current.name = request.name!;
       return { ok: true, payload: {} };
     });
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
+    fireEvent.click(await managementNav().findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "重新命名" } });
-    fireEvent.change(screen.getByLabelText("描述"), { target: { value: "修改描述" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "rename", projectId: project.id, name: "重新命名" }));
-    expect(projectOp).toHaveBeenCalledWith({ op: "update", projectId: project.id, input: { description: "修改描述", repositories: project.repositories, directories: [] } });
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "重新命名" } });
+    fireEvent.change(screen.getByLabelText("描述与业务用途"), { target: { value: "修改描述" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+    // Bullet D: name + description + sources leave in ONE update — a rename can no
+    // longer commit while the details fail, so no `rename` request exists at all.
+    await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "update", projectId: project.id, input: {
+      name: "重新命名", description: "修改描述", repositories: project.repositories, directories: [],
+      environment: [], branchTemplate: "feature/{task-name}" } }));
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "rename")).toHaveLength(0);
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "update")).toHaveLength(1);
     expect(await screen.findByRole("heading", { name: "重新命名" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /^项目$/ }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "新增项目" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "create", input: { name: "新增项目", description: "", repositories: [], directories: [] } }));
+    fireEvent.click(createWorkspace());
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "新增项目" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加普通目录" }));
+    fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "Docs" } });
+    fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/docs" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建工作区并保存配置" }));
+    await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "create", input: {
+      name: "新增项目", description: "", repositories: [], directories: [{ name: "Docs", path: "/local/docs" }],
+      environment: [], branchTemplate: "feature/{task-name}" } }));
   });
 
-  it("refuses delete of a bound project and exposes repair without offering transfer", async () => {
+  it("refuses delete of a bound project and lists the blocking tasks with repair instead of a bare error", async () => {
+    const other = { ...project, id: "6fd712ce-a43b-4614-a459-de81d78a16aa", name: "另一个项目", repositories: [] };
+    let blockers: { taskId: string; state: "needs-repair" }[] = [{ taskId: "real-1", state: "needs-repair" }];
     const projectOp = vi.fn(async (request: { op: string }) => {
-      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project] } };
+      if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project, other] } };
       if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: project.id, state: "needs-repair" }] } };
+      if (request.op === "blockers") return { ok: true, payload: { projectId: project.id, tasks: blockers } };
+      if (request.op === "unlink") blockers = [];
       if (request.op === "delete") return { ok: false, error: "project has associated tasks" };
       return { ok: true, payload: {} };
     });
-    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [], roots } })), projectOp };
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
+    fireEvent.click(await managementNav().findByRole("button", { name: "真实项目" }));
     expect(screen.getByText(/关联待修复/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "转移" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("project has associated tasks"));
-    expect(projectOp).toHaveBeenCalledWith({ op: "delete", projectId: project.id });
+    const dialog = await screen.findByRole("dialog", { name: "删除工作空间「真实项目」" });
+    await waitFor(() => expect(within(dialog).getByText(/有 1 个任务仍关联此工作空间/)).toBeInTheDocument());
+    expect(within(dialog).getByText("真实任务")).toBeInTheDocument();
+    // Bullet 3: the blocker is a named task with an explicit action — never the
+    // raw "project has associated tasks" string.
+    expect(within(dialog).queryByText(/project has associated tasks/)).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "转移" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "删除工作空间" })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "解绑" }));
+    await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "unlink", taskId: "real-1", expectedProjectId: project.id }));
+    expect(await within(dialog).findByText(/没有关联任务/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除工作空间" }));
+    await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "delete", projectId: project.id }));
   });
 
   it("retains a failed create draft with source rows through reread, retry and cancel", async () => {
@@ -491,36 +530,38 @@ describe("Desktop production data", () => {
     window.pidock = { ...bridge(), listTasks, projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "未保存项目" } });
-    fireEvent.change(screen.getByLabelText("描述"), { target: { value: "原样保留" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加仓库" }));
+    fireEvent.click(createWorkspace());
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "未保存项目" } });
+    fireEvent.change(screen.getByLabelText("描述与业务用途"), { target: { value: "原样保留" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加 Git 仓库" }));
     fireEvent.change(screen.getByLabelText("仓库名称 1"), { target: { value: "Web" } });
     fireEvent.change(screen.getByLabelText("仓库路径 1"), { target: { value: "/local/web" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加普通目录" }));
     fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "Notes" } });
     fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/notes" } });
     holdRead = true;
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建工作区并保存配置" }));
     expect(await screen.findByRole("status")).toHaveTextContent("正在读取本机项目与任务");
-    expect(screen.queryByLabelText("项目名称")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("工作空间名称 *")).not.toBeInTheDocument();
     await waitFor(() => expect(releaseRead).toBeTypeOf("function"));
     holdRead = false;
     releaseRead?.();
     expect(await screen.findByRole("alert")).toHaveTextContent("项目名称重复");
-    expect(screen.getByLabelText("项目名称")).toHaveValue("未保存项目");
+    expect(screen.getByLabelText("工作空间名称 *")).toHaveValue("未保存项目");
     expect(screen.getByLabelText("仓库路径 1")).toHaveValue("/local/web");
     expect(screen.getByLabelText("目录路径 1")).toHaveValue("/local/notes");
     rejectCreate = false;
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(projectOp).toHaveBeenCalledTimes(6));
-    expect(projectOp).toHaveBeenLastCalledWith({ op: "associations" });
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "创建项目" })).not.toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /^项目$/ }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "取消草稿" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建工作区并保存配置" }));
+    // The reread after the committed create: one more list+associations pair (the
+    // per-source verification that follows is not a write).
+    await waitFor(() => expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(2));
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "associations")).toHaveLength(3);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新建工作空间" })).not.toBeInTheDocument());
+    fireEvent.click(createWorkspace());
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "取消草稿" } });
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    fireEvent.click(screen.getByRole("button", { name: /^项目$/ }));
-    expect(screen.getByLabelText("项目名称")).toHaveValue("");
+    fireEvent.click(createWorkspace());
+    expect(screen.getByLabelText("工作空间名称 *")).toHaveValue("");
   });
 
   it("keeps the submitted draft when a write succeeds but authoritative reread fails", async () => {
@@ -535,19 +576,20 @@ describe("Desktop production data", () => {
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "待核验" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
+    fireEvent.click(createWorkspace());
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "待核验" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加普通目录" }));
     fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "Documents" } });
     fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/documents" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建工作区并保存配置" }));
     expect(await screen.findByText("注册表暂不可读")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/项目创建已提交/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByRole("heading", { name: "待核验" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("项目名称")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("工作空间名称 *")).not.toBeInTheDocument();
     expect(screen.queryByText(/操作结果无法核验/)).not.toBeInTheDocument();
-    expect(projectOp).toHaveBeenCalledWith({ op: "create", input: { name: "待核验", description: "", repositories: [], directories: [{ name: "Documents", path: "/local/documents" }] } });
+    expect(projectOp).toHaveBeenCalledWith({ op: "create", input: { name: "待核验", description: "", repositories: [],
+      directories: [{ name: "Documents", path: "/local/documents" }], environment: [], branchTemplate: "feature/{task-name}" } });
     expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(1);
   });
 
@@ -563,16 +605,19 @@ describe("Desktop production data", () => {
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "等待确认" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(createWorkspace());
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "等待确认" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加普通目录" }));
+    fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "Docs" } });
+    fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/docs" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建工作区并保存配置" }));
     expect(await screen.findByText("读取失败")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
-    expect(await screen.findByLabelText("项目名称")).toHaveValue("等待确认");
-    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
-    await waitFor(() => expect(screen.getByText(/尚未在本机清单中确认/)).toBeInTheDocument());
+    expect(await screen.findByLabelText("工作空间名称 *")).toHaveValue("等待确认");
+    expect(screen.getByRole("button", { name: "创建工作区并保存配置" })).toBeDisabled();
+    expect((await screen.findAllByText(/尚未在本机清单中确认/)).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "重新核验" }));
-    expect(await screen.findByLabelText("项目名称")).toHaveValue("等待确认");
+    expect(await screen.findByLabelText("工作空间名称 *")).toHaveValue("等待确认");
     expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(1);
   });
 
@@ -590,24 +635,27 @@ describe("Desktop production data", () => {
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "A" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(createWorkspace());
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "A" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加普通目录" }));
+    fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "Docs" } });
+    fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/docs" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建工作区并保存配置" }));
     expect(await screen.findByText("读取失败")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByRole("button", { name: "重新核验" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "B" }));
+    fireEvent.click(managementNav().getByRole("button", { name: "B" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "B 待改名" } });
-    fireEvent.change(screen.getByLabelText("描述"), { target: { value: "B 未保存的描述" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "B 待改名" } });
+    fireEvent.change(screen.getByLabelText("描述与业务用途"), { target: { value: "B 未保存的描述" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加普通目录" }));
     fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "B notes" } });
     fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/b-notes" } });
     showA = true;
     fireEvent.click(screen.getByRole("button", { name: "重新核验" }));
     expect(await screen.findByRole("heading", { name: "B" })).toBeInTheDocument();
-    expect(screen.getByLabelText("项目名称")).toHaveValue("B 待改名");
-    expect(screen.getByLabelText("描述")).toHaveValue("B 未保存的描述");
+    expect(screen.getByLabelText("工作空间名称 *")).toHaveValue("B 待改名");
+    expect(screen.getByLabelText("描述与业务用途")).toHaveValue("B 未保存的描述");
     expect(screen.getByLabelText("目录路径 1")).toHaveValue("/local/b-notes");
     expect(screen.queryByRole("button", { name: "重新核验" })).not.toBeInTheDocument();
     expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(1);
@@ -622,18 +670,21 @@ describe("Desktop production data", () => {
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: /^项目$/ }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "没有 ID" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByText(/创建返回异常/)).toBeInTheDocument();
-    expect(screen.getByLabelText("项目名称")).toHaveValue("没有 ID");
-    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    fireEvent.click(createWorkspace());
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "没有 ID" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加普通目录" }));
+    fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "Docs" } });
+    fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/docs" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建工作区并保存配置" }));
+    expect(await screen.findAllByText(/创建返回异常/)).not.toHaveLength(0);
+    expect(screen.getByLabelText("工作空间名称 *")).toHaveValue("没有 ID");
+    expect(screen.getByRole("button", { name: "创建工作区并保存配置" })).toBeDisabled();
     expect(projectOp.mock.calls.filter(([request]) => request.op === "create")).toHaveLength(1);
   });
 
-  it("preserves the attempted rename after partial edit and distinguishes committed details", async () => {
+  it("commits a rename atomically with the source changes and keeps the draft when main refuses", async () => {
     const current = { ...project, repositories: [...project.repositories], directories: [] as Array<{ id: string; name: string; path: string }> };
-    let rejectRename = true;
+    let rejectUpdate = true;
     let nextId = 0;
     let nextRepoId = 0;
     const issuedIds: string[] = [];
@@ -642,61 +693,62 @@ describe("Desktop production data", () => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [current] } };
       if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
       if (request.op === "update") {
-        const details = request.input as { description: string; repositories: typeof current.repositories; directories: typeof current.directories };
-        Object.assign(current, { ...details, repositories: details.repositories.map((row) => {
+        if (rejectUpdate) return { ok: false, error: "名称冲突" };
+        const details = request.input as { name?: string; description: string; repositories: typeof current.repositories; directories: typeof current.directories };
+        Object.assign(current, { ...details, name: details.name ?? current.name, repositories: details.repositories.map((row) => {
           const id = row.id ?? `00000000-0000-4000-8000-${String(100 + ++nextRepoId).padStart(12, "0")}`;
           if (!row.id) issuedRepoIds.push(id);
           return { ...row, id };
         }), directories: details.directories.map((row) => {
           const id = row.id ?? `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`;
-          issuedIds.push(id);
+          if (!row.id) issuedIds.push(id);
           return { ...row, id };
         }) });
         return { ok: true, payload: { ...current } };
-      }
-      if (request.op === "rename") {
-        if (rejectRename) return { ok: false, error: "名称冲突" };
-        current.name = request.name!;
       }
       return { ok: true, payload: {} };
     });
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
+    fireEvent.click(await managementNav().findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "目标名称" } });
-    fireEvent.change(screen.getByLabelText("描述"), { target: { value: "已写入描述" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加仓库" }));
+    fireEvent.change(screen.getByLabelText("工作空间名称 *"), { target: { value: "目标名称" } });
+    fireEvent.change(screen.getByLabelText("描述与业务用途"), { target: { value: "已写入描述" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加 Git 仓库" }));
     fireEvent.change(screen.getByLabelText("仓库名称 2"), { target: { value: "API" } });
     fireEvent.change(screen.getByLabelText("仓库路径 2"), { target: { value: "/local/api" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加目录" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加普通目录" }));
     fireEvent.change(screen.getByLabelText("目录名称 1"), { target: { value: "Notes" } });
     fireEvent.change(screen.getByLabelText("目录路径 1"), { target: { value: "/local/notes" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("资料已保存，但重命名失败");
-    expect(screen.getByRole("heading", { name: "真实项目" })).toBeInTheDocument();
-    expect(screen.getByText("已写入描述", { selector: "p" })).toBeInTheDocument();
-    expect(screen.getByLabelText("项目名称")).toHaveValue("目标名称");
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+    // The refused write changes NOTHING: the old two-request rename split is gone.
+    expect((await screen.findAllByRole("alert")).map((node) => node.textContent).join(" ")).toContain("名称冲突");
+    expect(screen.getByLabelText("工作空间名称 *")).toHaveValue("目标名称");
+    expect(screen.getByLabelText("描述与业务用途")).toHaveValue("已写入描述");
     expect(screen.getByLabelText("目录路径 1")).toHaveValue("/local/notes");
-    const firstDirectoryId = "00000000-0000-4000-8000-000000000001";
-    expect(issuedIds).toEqual([firstDirectoryId]);
-    const firstRepoId = "00000000-0000-4000-8000-000000000101";
-    expect(issuedRepoIds).toEqual([firstRepoId]);
-    fireEvent.change(screen.getByLabelText("描述"), { target: { value: "再次修改描述" } });
-    rejectRename = false;
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(screen.queryByRole("heading", { name: "目标名称" })).toBeNull();
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "update")).toHaveLength(1);
+    expect(projectOp.mock.calls.filter(([request]) => request.op === "rename")).toHaveLength(0);
+    expect(issuedIds).toEqual([]);
+    rejectUpdate = false;
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
     expect(await screen.findByRole("heading", { name: "目标名称" })).toBeInTheDocument();
-    expect(issuedIds).toEqual([firstDirectoryId, firstDirectoryId]);
+    expect(screen.getByText("已写入描述", { selector: "p" })).toBeInTheDocument();
+    const firstDirectoryId = "00000000-0000-4000-8000-000000000001";
+    const firstRepoId = "00000000-0000-4000-8000-000000000101";
+    expect(issuedIds).toEqual([firstDirectoryId]);
     expect(issuedRepoIds).toEqual([firstRepoId]);
-    expect(current.repositories[1]?.id).toBe(firstRepoId);
     expect(current.directories[0]?.id).toBe(firstDirectoryId);
-    expect(current.description).toBe("再次修改描述");
+    expect(current.repositories[1]?.id).toBe(firstRepoId);
+    // Reopening the committed workspace reuses main's ids, so a later save cannot
+    // mint duplicates for sources that already exist.
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
-    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "取消重命名" } });
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
-    expect(screen.getByLabelText("项目名称")).toHaveValue("目标名称");
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+    await waitFor(() => expect(projectOp.mock.calls.filter(([request]) => request.op === "update")).toHaveLength(3));
+    expect(issuedIds).toEqual([firstDirectoryId]);
+    expect(issuedRepoIds).toEqual([firstRepoId]);
+    expect(current.description).toBe("已写入描述");
   });
 
   it("shows unavailable inventory tasks without enabling claim", async () => {
@@ -705,7 +757,7 @@ describe("Desktop production data", () => {
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
     render(<App />);
     await openManagement();
-    fireEvent.click(screen.getByRole("button", { name: /^未归属任务/ }));
+    fireEvent.click(managementNav().getByRole("button", { name: /^未归属任务/ }));
     expect(await screen.findByText(/任务不可用/)).toBeInTheDocument();
     expect(screen.getAllByText("真实任务")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "认领" })).toBeDisabled();
@@ -729,7 +781,7 @@ describe("Desktop production data", () => {
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: mixedTasks, roots } })), projectOp };
     render(<App />);
     const summary = await screen.findByTestId("overview-unassigned");
-    expect(summary).toHaveTextContent("另有 1 个任务尚未归属任何项目，可在「项目管理」里认领或新建任务。");
+    expect(summary).toHaveTextContent("另有 1 个任务尚未归属任何工作空间，可在「未归属任务」中显式认领。");
     expect(summary).toHaveTextContent("其中 1 个任务当前不可用，无法认领，请先检查任务根。");
     // The unavailable row must not be advertised as claimable.
     expect(summary).not.toHaveTextContent("另有 2 个");
@@ -740,20 +792,23 @@ describe("Desktop production data", () => {
     const projectOp = vi.fn(async (request: { op: string }) => {
       if (request.op === "list") return { ok: true, payload: { initialized: true, projects } };
       if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
+      if (request.op === "blockers") return { ok: true, payload: { projectId: project.id, tasks: [] } };
       if (request.op === "delete") projects = projects.filter((item) => item.id !== project.id);
       return { ok: true, payload: {} };
     });
     window.pidock = { ...bridge(), listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })), projectOp };
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
+    fireEvent.click(await managementNav().findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    const dialog = await screen.findByRole("dialog", { name: "删除工作空间「真实项目」" });
+    await waitFor(() => expect(within(dialog).getByText(/没有关联任务/)).toBeInTheDocument());
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除工作空间" }));
+    await waitFor(() => expect(projectOp).toHaveBeenCalledWith({ op: "delete", projectId: project.id }));
     expect(await screen.findByRole("heading", { name: "未归属任务" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "B" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
-    expect(projectOp).toHaveBeenCalledWith({ op: "delete", projectId: project.id });
-    fireEvent.click(screen.getByRole("button", { name: "B" }));
+    fireEvent.click(managementNav().getByRole("button", { name: "B" }));
     projects = [];
     fireEvent.click(screen.getByRole("button", { name: "找回任务根" }));
     expect(await screen.findByRole("heading", { name: "未归属任务" })).toBeInTheDocument();
@@ -782,7 +837,7 @@ describe("Desktop production data", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查看 main 会话" }));
     const conversation = await screen.findByTestId("desktop-conversation");
     expect(await within(conversation).findByText("SDK main 完成结果")).toBeInTheDocument();
-    expect(within(conversation).getByRole("tab", { name: "main" })).toBeInTheDocument();
+    expect(within(conversation).getByRole("tab", { name: "主会话" })).toBeInTheDocument();
     expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("真实任务")).toBeInTheDocument();
     expect(sdkTurn).toHaveBeenCalledWith({ action: "subscribe", taskId: "real-1", sessionId: "main" });
     expect(sdkTurn).not.toHaveBeenCalledWith(expect.objectContaining({ action: "start" }));
@@ -830,7 +885,7 @@ describe("Desktop production data", () => {
     expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
     expect(sdkTurn).not.toHaveBeenCalled();
     expect(taskOp).not.toHaveBeenCalledWith("real-1", "task/markAttentionRead", expect.anything());
-    fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
+    fireEvent.click(sidebar().getByRole("button", { name: project.name }));
     expect(screen.queryByText(message)).not.toBeInTheDocument();
   });
 
@@ -843,7 +898,7 @@ describe("Desktop production data", () => {
     const demoRead = vi.spyOn(memoryHost, "getWorkspace");
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
+    fireEvent.click(await managementNav().findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
     expect(await screen.findByText(/尚未开始/)).toBeInTheDocument();
     // The shell keeps the workspace context visible: sidebar, breadcrumb and session tab.
@@ -858,29 +913,34 @@ describe("Desktop production data", () => {
     await waitFor(() => expect(sdkTurn).toHaveBeenCalledWith({ action: "unsubscribe", taskId: "real-1", sessionId: "main" }));
   });
 
-  it("reads the composer's reasoning tier and occupancy from the Host on the production route", async () => {
+  it("reads the composer's reasoning level and context usage from this session's readout on the production route", async () => {
     const sdkTurn = vi.fn(async (request: Record<string, unknown>) => ({ ok: true, payload: request.action === "subscribe" ?
       { taskId: "real-1", sessionId: "main", snapshot: { source: "sdk-jsonl", sessionId: "main", messages: [], pending: false, interrupted: false }, turn: null } :
       { unsubscribed: true } }));
     const shell = bridge({ assigned: true });
-    // The Host answers with its own session readout; the composer must show THAT
-    // tier and THAT occupancy — `xhigh` is nobody's default here.
-    const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionContext"
-      ? { ok: true, payload: { context: { providerId: "provider-loopback", providerName: "Loopback", model: "issue47-model", modelName: null, availability: { status: "available" }, window: 200, used: 24.8, source: "estimated", tokens: 4321, percent: 12.4, thinking: "xhigh", thinkingCatalog: "declared" } } }
+    // [#139] The Host answers with THIS SESSION's readout, derived from the real SDK
+    // session; the composer must show that level and that usage — `xhigh` is
+    // nobody's default here, and the window comes from the bound model.
+    const session = { id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: { profileId: "p-1", modelId: "issue47-model", thinkingLevel: "xhigh", generation: 1 } };
+    const taskOp = vi.fn(async (_taskId: string, op: string) => op === "task/sessionList"
+      ? { ok: true, payload: { activeSessionId: "main", sessions: [session], provider: { profileId: "p-1", modelId: "issue47-model", generation: 1, models: [{ id: "issue47-model", name: "Issue47", contextWindow: 200000, maxTokens: 8192, reasoning: true, reasoningLevels: ["medium", "xhigh"] }] } } }
+      : op === "task/sessionReadout" ? { ok: true, payload: { session, active: true, model: { id: "issue47-model", name: "Issue47", contextWindow: 200000, maxTokens: 8192, reasoning: true }, reasoningLevels: ["medium", "xhigh"], context: { used: 24800, window: 200000, source: "sdk-usage" }, usage: { input: 24800, output: 400, cacheRead: 0, cacheWrite: 0 }, turns: 1, transcriptModel: { provider: "pidock-p-1", modelId: "issue47-model" }, pending: false, interrupted: false } }
       : { ok: true, payload: { lifecycle: { taskId: "real-1", archived: false, archivedAt: null } } });
     window.pidock = { ...shell, taskOp, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
     render(<App />);
     await openManagement();
-    fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
+    fireEvent.click(await managementNav().findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
     const conversation = await screen.findByTestId("desktop-conversation");
 
-    const reasoning = await within(conversation).findByTestId("composer-thinking");
-    await waitFor(() => expect(reasoning).toHaveTextContent("推理 · 极高（xhigh）"));
-    expect(reasoning).not.toBeDisabled();
+    const reasoning = await within(conversation).findByTestId("composer-reasoning");
+    // Only the levels this model declares are offered, and the stored one is pressed.
+    await waitFor(() => expect(within(reasoning).getByRole("button", { name: "很高" })).toHaveAttribute("aria-pressed", "true"));
+    expect(within(reasoning).getAllByRole("button").map((button) => button.textContent)).toEqual(["中", "很高"]);
     expect(within(conversation).queryByText("推理（未接线）")).toBeNull();
-    await waitFor(() => expect(within(conversation).getByTestId("composer-context")).toHaveTextContent("上下文 24.8k / 200k · 12.4% · 估算"));
-    expect(taskOp).toHaveBeenCalledWith("real-1", "task/sessionContext", { sessionId: "main" });
+    await waitFor(() => expect(within(conversation).getByTestId("composer-context")).toHaveTextContent("上下文 24.8k / 200k"));
+    expect(taskOp).toHaveBeenCalledWith("real-1", "task/sessionReadout", { sessionId: "main" });
+    expect(within(conversation).getByTestId("composer-model-name")).toHaveTextContent("Issue47");
   });
 
   it("fails visibly without bridge and retains native task root import", async () => {
@@ -954,10 +1014,10 @@ describe("[UI 对齐 S8e] project overview page", () => {
     window.pidock = bridge({ projectPresent: true });
     render(<App />);
     await screen.findByTestId("desktop-project-overview");
-    expect(screen.queryByLabelText("项目名称")).toBeNull();
+    expect(screen.queryByLabelText("工作空间名称 *")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
     expect(await screen.findByRole("heading", { name: "真实项目" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "返回项目总览" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回工作空间总览" }));
     expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
   });
 });

@@ -26,8 +26,9 @@ import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
 import { buildTaskDiskRecord, readTaskRecordOnDisk, serializeTaskRecord } from "./task-store.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { commandPathTokens, derivedPrimaryCheckouts, resolveSdkAgentToolPath } from "./sdk-agent-tool-broker.js";
-import { SDK_AGENT_TOOL_NAMES } from "./sdk-agent-tool-contract.js";
+import { SDK_AGENT_TOOL_NAMES, SERVICE_TEMPLATE_TOOL } from "./sdk-agent-tool-contract.js";
 import { protectApplicationProfile } from "./protected-application-path.js";
+import type { ServiceTemplateEditPort } from "../rpc/service-template-request.js";
 import type { SdkContextClient, SdkContextOptions } from "./sdk-context-client.js";
 
 const roots: string[] = [];
@@ -41,7 +42,7 @@ const PROVIDER_CONFIG = {
   maxTokens: 8192,
   authRef: "PIDOCK_PROVIDER_EXAMPLE",
   generation: 1,
-};
+  protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "gpt-5-mini", name: "gpt-5-mini", contextWindow: 128000, maxTokens: 8192, reasoning: false }]};
 
 const GIT_ENV = {
   ...process.env,
@@ -112,7 +113,7 @@ function fixture(): Fixture {
  * result) answers with the result text, so a refusal reaches the assertions the
  * way the model would see it.
  */
-async function stubRuntime(cacheDir: string): Promise<ModelRuntime> {
+async function stubRuntime(cacheDir: string, seenModels: string[] = []): Promise<ModelRuntime> {
   const runtime = await ModelRuntime.create({
     authPath: join(cacheDir, ".pidock-sdk-auth.json"),
     modelsPath: join(cacheDir, ".pidock-sdk-models.json"),
@@ -126,6 +127,11 @@ async function stubRuntime(cacheDir: string): Promise<ModelRuntime> {
     getModels: () => [model],
     stream: (_model, context, options) => provider.streamSimple(_model, context, options),
     streamSimple: (_model, context) => {
+      // Pi 1.5: which model the SDK really asks for. `createAgentSession` falls
+      // back to its own initial model when no explicit model is given
+      // (`createAgentSession` -> `findInitialModel`); recording the provider/id
+      // every stream is called with is what proves the explicit binding won.
+      seenModels.push(`${_model.provider}/${_model.id}`);
       const messages = context.messages as { role: string; content: unknown }[];
       const text = (value: unknown): string => typeof value === "string" ? value
         : Array.isArray(value) ? (value as { type: string; text?: string }[]).filter((part) => part.type === "text").map((part) => part.text ?? "").join("") : "";
@@ -160,13 +166,25 @@ async function stubRuntime(cacheDir: string): Promise<ModelRuntime> {
 interface Harness {
   host: TaskWorkspaceHost;
   fixture: Fixture;
+  /** Every `provider/model` the SDK asked the stub for, in order. */
+  seenModels: string[];
+  /** The session JSONL as the SDK wrote it (the real transcript). */
+  transcript(): Promise<string>;
   prompt(tool: string, args: Record<string, unknown>): Promise<{ state: string; text: string }>;
 }
 
-/** The real Host with the worker hop replaced by a loopback context client. */
-async function harness(): Promise<Harness> {
+/**
+ * The real Host with the worker hop replaced by a loopback context client.
+ *
+ * `templates` (optional) is the shared-template port the Host hands its broker.
+ * A test that drives the template tool through the REAL SDK needs one, but not
+ * necessarily main's catalog: the seam under test is "what values does the Host
+ * receive and bind", so a recording port is the honest stand-in for main.
+ */
+async function harness(options: { templates?: () => ServiceTemplateEditPort | undefined; mcp?: boolean } = {}): Promise<Harness> {
   const parts = fixture();
-  const runtime = await stubRuntime(parts.taskDir);
+  const seenModels: string[] = [];
+  const runtime = await stubRuntime(parts.taskDir, seenModels);
   // The Host's source of truth about the task is its store; in production that
   // is `diskTaskStore` reading `task.json`. Seed the memory store with exactly
   // the record the fixture wrote so the scope is the real one.
@@ -181,6 +199,7 @@ async function harness(): Promise<Harness> {
       const kernel = new PiSdkTextKernel("task-aaaaaaaa", parts.taskDir, {
         model, modelRuntime: runtime,
         callTool: (sessionId, request) => caller.call(sessionId, request),
+        ...(options.mcp ? { mcpConfigPath: join(parts.taskDir, ".pidock-sdk-agent", "mcp.json") } : {}),
       });
       return {
         open: (sessionId: string) => kernel.open(sessionId),
@@ -192,11 +211,24 @@ async function harness(): Promise<Harness> {
       } as unknown as SdkContextClient;
     },
     protectApplicationProfile(parts.profileDir),
+    () => undefined,
+    options.templates,
   );
   let turn = 0;
   return {
     host,
     fixture: parts,
+    seenModels,
+    /**
+     * The JSONL the SDK itself appended to. Read after at least one turn: the
+     * kernel writes a per-session binding that names the file, and that file is
+     * the transcript the model and the user really share (tool results included).
+     * The router is looked up per call - `configureSdkProvider` replaces it, so a
+     * router captured here at construction time would be the stale bare reader.
+     */
+    async transcript() {
+      return readFileSync((await host.sdkTextKernel().open("main")).file, "utf8");
+    },
     async prompt(tool, args) {
       turn += 1;
       const issued = `00000000-0000-4000-8000-${String(turn).padStart(12, "0")}`;
@@ -287,6 +319,52 @@ it("lists and searches inside the task and runs a command in the worktree", asyn
     expect(readFileSync(join(h.fixture.worktree, ".gitignore"), "utf8")).toBe("node_modules\n");
   }
   await h.host.shutdownSdk();
+});
+
+/**
+ * [#151] The production wiring, not just the broker option: main hands the Host
+ * fork `PIDOCK_SKILL_SOURCES_FILE`, and the Host's broker must read that same
+ * app-private document for its read-only Skills grant. An external source is
+ * readable while enabled; switching it off through the real document loses the
+ * grant on the VERY NEXT read, without restarting the Host or the session.
+ */
+it("serves an external Skills source read through the env-wired broker and loses it when disabled", async () => {
+  const h = await harness();
+  const source = join(h.fixture.root, "external-skills");
+  const skillDir = join(source, "pdf-tools");
+  mkdirSync(join(skillDir, "references"), { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), "---\nname: pdf-tools\ndescription: PDFs.\n---\n\nSKILL-BODY-EXTERNAL\n");
+  writeFileSync(join(skillDir, "references", "format.md"), "FORMAT-EXTERNAL\n");
+  const configFile = join(h.fixture.root, "skill-sources.json");
+  const writeConfig = (enabled: boolean): void => {
+    writeFileSync(configFile, JSON.stringify({ version: 1, sources: [{ id: "src-aaaa1111", path: source, enabled }] }));
+  };
+  writeConfig(true);
+  vi.stubEnv("PIDOCK_SKILL_SOURCES_FILE", configFile);
+  try {
+    await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+    await h.host.setPermission("main", "auto");
+
+    const read = await h.prompt("fs.read", { path: join(skillDir, "SKILL.md") });
+    expect(read.text).toContain("SKILL-BODY-EXTERNAL");
+    const resource = await h.prompt("fs.read", { path: join(skillDir, "references", "format.md") });
+    expect(resource.text).toContain("FORMAT-EXTERNAL");
+
+    // Writes and listings outside the task are still refused (the grant is read-only).
+    const written = await h.prompt("fs.write", { path: join(skillDir, "planted.md"), content: "planted" });
+    expect(written.text).toContain("tool-refused:");
+    expect(existsSync(join(skillDir, "planted.md"))).toBe(false);
+    const listed = await h.prompt("fs.search", { path: source });
+    expect(listed.text).toContain("tool-refused:");
+
+    // The real document is re-read per call: off means refused by name now.
+    writeConfig(false);
+    const disabled = await h.prompt("fs.read", { path: join(skillDir, "SKILL.md") });
+    expect(disabled.text).toContain("tool-refused:skill-source-disabled");
+  } finally {
+    vi.unstubAllEnvs();
+    await h.host.shutdownSdk();
+  }
 });
 
 // win32 (#53): the platform refusal has to reach the caller as a NAME, because the failure it
@@ -875,4 +953,449 @@ it("derives the original checkout from the worktree's own git pointer", async ()
   // The pointer git writes is already a real path (macOS `/var` is a link).
   expect(derivedPrimaryCheckouts([parts.worktree])).toEqual([realpathSync(parts.checkout)]);
   expect(derivedPrimaryCheckouts([parts.taskDir])).toEqual([]);
+});
+
+/**
+ * Pi 1.5: the SDK validates AND COERCES tool arguments with
+ * `@earendil-works/pi-schema` (`compile(schema, {coerce: true}).parse(...)`,
+ * pi-ai `validateToolArguments`) before pi-agent-core calls `execute`, so the
+ * Host receives converted values, never the model's raw ones. The comment beside
+ * `parseArguments` states the decisions; each test below drives the REAL kernel,
+ * the REAL SDK and the REAL broker for one converted shape and asserts what the
+ * Host sees, what is approved and what really happens. The "1.4" note in each
+ * name is the measured 1.4 result for the same literal (the 1.4 validator
+ * returned it for these schemas), i.e. the behaviour these tests would fail on.
+ */
+it("writes the coerced null (1.5 literal \"null\", not 1.4's empty string) and the result counts the converted bytes", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+
+  // 1.4: content:null -> "" (an empty file). 1.5: -> "null".
+  const written = await h.prompt("fs.write", { path: "repo/coerced-null.txt", content: null });
+  expect(written.state).toBe("done");
+  expect(readFileSync(join(h.fixture.worktree, "coerced-null.txt"), "utf8")).toBe("null");
+  // The tool result names the bytes the CONVERTED value has, so the model reads
+  // what was written instead of "0 bytes" for a file that holds 4.
+  expect(written.text).toContain("Successfully wrote 4 bytes");
+  await h.host.shutdownSdk();
+});
+
+it("reads the coerced null path as the literal in-task name, and still refuses it outside a worktree on write", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  // A file really named `null` in the task folder. 1.4 turned `path:null` into
+  // "" and the broker refused the empty name; 1.5 turns it into "null", so the
+  // Host sees a normal in-scope name.
+  writeFileSync(join(h.fixture.taskDir, "null"), "named null\n");
+  const read = await h.prompt("fs.read", { path: null });
+  expect(read.state).toBe("done");
+  expect(read.text).toContain("named null");
+  // The conversion does not widen the write boundary: a `null` name outside a
+  // worktree is the same named refusal as any other name (1.4 refused the empty
+  // name earlier, with the same net effect: the write does not happen).
+  const before = snapshot(h.fixture.root);
+  const refused = await h.prompt("fs.write", { path: null, content: "x" });
+  expect(refused.text).toContain("tool-refused:not-a-worktree");
+  expect(snapshot(h.fixture.root)).toEqual(before);
+  await h.host.shutdownSdk();
+});
+
+it("truncates an integer argument and then applies the Host bounds (1.4 refused both shapes outright)", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  writeFileSync(join(h.fixture.worktree, "lines.txt"), "one\ntwo\nthree\nfour\n");
+
+  // 1.4: "3.5"/1.9 -> `must be integer` and nothing ran. 1.5: 3 and 1.
+  const coerced = await h.prompt("fs.read", { path: "repo/lines.txt", offset: "3.5", limit: 1.9 });
+  expect(coerced.state).toBe("done");
+  expect(coerced.text).toContain("3\tthree");
+  expect(coerced.text).not.toContain("four");
+  expect(coerced.text).not.toContain("two");
+
+  // Truncation happens BEFORE the Host's bounds, and the Host's bounds still
+  // decide: 0.5 -> 0 is refused by `minimum: 1` (the SDK validator), and a value
+  // the schema does not bound is refused by the broker's own positive-integer
+  // check - the conversion never turns a bad number into an accepted one.
+  const zero = await h.prompt("fs.read", { path: "repo/lines.txt", offset: 0.5 });
+  expect(zero.text).toContain("offset");
+  expect(zero.text).toContain(">= 1");
+  const tooBig = await h.prompt("fs.read", { path: "repo/lines.txt", limit: 1_000_001 });
+  expect(tooBig.text).toContain("tool-refused:invalid-arguments");
+  expect(tooBig.text).toContain("limit");
+  await h.host.shutdownSdk();
+});
+
+it("drops an optional null exactly as 1.4 did, so a bounded read falls back to the whole file", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  writeFileSync(join(h.fixture.worktree, "lines.txt"), "one\ntwo\nthree\n");
+  const plain = await h.prompt("fs.read", { path: "repo/lines.txt" });
+  const withNulls = await h.prompt("fs.read", { path: "repo/lines.txt", offset: null, limit: null });
+  expect(withNulls).toEqual(plain);
+  expect(withNulls.text).toContain("1\tone");
+  expect(withNulls.text).toContain("3\tthree");
+  await h.host.shutdownSdk();
+});
+
+it("refuses an unknown field before the effect, names it, and keeps the credential out of the transcript", async () => {
+  const h = await harness();
+  const credential = "synthetic-key-do-not-print";
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential });
+  await h.host.setPermission("main", "auto");
+  // 1.4 spoke TypeBox (`bogus: schema is false`); 1.5 speaks pi-schema
+  // (`unknown field`). Neither wording is asserted - what matters is that the
+  // call is refused before `execute`, that the offending FIELD is named, and that
+  // nothing was written.
+  const result = await h.prompt("fs.write", { path: "repo/unknown.txt", content: "x", bogus: 1 });
+  expect(result.state).toBe("done");
+  expect(result.text).toContain("bogus");
+  expect(existsSync(join(h.fixture.worktree, "unknown.txt"))).toBe(false);
+  // The transcript the model and the user share never carries the Provider
+  // credential, whatever the refusal wording is.
+  const transcript = await h.transcript();
+  expect(transcript).toContain("bogus");
+  expect(transcript).not.toContain(credential);
+  await h.host.shutdownSdk();
+});
+
+it("refuses a failed schema conversion by naming the argument, with no write and no credential in the transcript", async () => {
+  const h = await harness();
+  const credential = "synthetic-key-do-not-print";
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential });
+  await h.host.setPermission("main", "auto");
+  const before = snapshot(h.fixture.root);
+  const result = await h.prompt("fs.write", { path: "repo/object-content.txt", content: { a: 1 } });
+  expect(result.state).toBe("done");
+  // 1.4: `content: must be string`; 1.5: `/content: expected string, got object`.
+  expect(result.text).toContain("content");
+  expect(snapshot(h.fixture.root)).toEqual(before);
+  expect(existsSync(join(h.fixture.worktree, "object-content.txt"))).toBe(false);
+  expect(await h.transcript()).not.toContain(credential);
+  await h.host.shutdownSdk();
+});
+
+it("writes a large argument (90 KB) whole and keeps the credential out of it", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  // Pi 1.5 parses streamed tool-call arguments with `StreamingJsonParser`; a big
+  // argument must still reach the Host as ONE value and land byte-for-byte.
+  const content = `${"0123456789abcdef".repeat(5_625)}\n`;
+  expect(Buffer.byteLength(content, "utf8")).toBe(90_001);
+  const result = await h.prompt("fs.write", { path: "repo/large.txt", content });
+  expect(result.state).toBe("done");
+  expect(result.text).toContain("Successfully wrote 90001 bytes");
+  expect(readFileSync(join(h.fixture.worktree, "large.txt"), "utf8")).toBe(content);
+  await h.host.shutdownSdk();
+});
+
+/**
+ * The recording shared-template port the template coercion tests hand the Host.
+ * It stands in for main (the catalog's owner) but not for the seam under test:
+ * the broker's review -> confirmation -> apply sequence is the real one, and the
+ * rows it receives and writes are the values the SDK produced.
+ */
+function recordingTemplatePort(initial: { key: string; value: string }[]) {
+  const state = { rows: [...initial], reviews: [] as { shared: unknown; dependencies?: unknown; descriptor: unknown }[], applied: [] as { shared: unknown; dependencies?: unknown; descriptor: unknown }[] };
+  const review = (shared: unknown) => {
+    const rows = shared as { key: string; value: string }[];
+    const before = new Map(state.rows.map((row) => [row.key, row.value]));
+    const after = new Map(rows.map((row) => [row.key, row.value]));
+    const added = [...after.keys()].filter((key) => !before.has(key));
+    const removed = [...before.keys()].filter((key) => !after.has(key));
+    const changed = [...after.keys()].filter((key) => before.has(key) && before.get(key) !== after.get(key))
+      .map((key) => ({ key, before: before.get(key)!, after: after.get(key)! }));
+    return { added, removed, changed };
+  };
+  const snapshotOf = (edit: { shared: unknown; descriptor: unknown; dependencies?: unknown }) => {
+    const diff = review(edit.shared);
+    const contentChanged = diff.added.length + diff.removed.length + diff.changed.length > 0;
+    return {
+      serviceId: "svc-coerced",
+      pinnedVersion: 1,
+      version: 2,
+      versionLabel: "v2",
+      saved: false,
+      descriptorChanged: JSON.stringify(edit.descriptor) !== JSON.stringify({ name: "API a", program: "node" }),
+      dependenciesChanged: edit.dependencies !== undefined,
+      contentChanged,
+      diff,
+      restartNeeded: [],
+    };
+  };
+  const port: ServiceTemplateEditPort = {
+    async review(edit) {
+      state.reviews.push(edit);
+      return { ok: true, review: snapshotOf(edit) };
+    },
+    async apply(edit, reviewedPinnedVersion) {
+      state.applied.push(edit);
+      state.rows = (edit.shared as { key: string; value: string }[]).map((row) => ({ key: row.key, value: row.value }));
+      return { ok: true, review: { ...snapshotOf(edit), saved: true, pinnedVersion: reviewedPinnedVersion } };
+    },
+  };
+  return { port, state };
+}
+
+it("wraps a single template row/declaration into one row before the diff, the fingerprint and the write (1.4 refused both)", async () => {
+  const templates = recordingTemplatePort([{ key: "SERVICE_GREETING", value: "hello-a" }]);
+  const h = await harness({ templates: () => templates.port });
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+
+  const running = h.prompt("service.template.update", {
+    serviceId: "svc-coerced",
+    descriptor: { name: "API a", program: "node" },
+    // 1.4: `shared: must be array`. 1.5: a one-row array.
+    shared: { key: "SERVICE_GREETING", value: "hello-b" },
+    dependencies: { to: "svc-peer", kind: "call" },
+  });
+  await vi.waitFor(() => expect(h.host.listApprovals("main").some((row) => row.status === "pending")).toBe(true));
+  const asked = h.host.listApprovals("main").find((row) => row.status === "pending")!;
+  // The confirmation names the CONVERTED edit: one changed row, one dependency
+  // declaration - not the single objects the model sent.
+  expect(asked.tool).toBe(SERVICE_TEMPLATE_TOOL);
+  expect(asked.operation).toContain("修改 1 行");
+  expect(asked.operation).toContain("依赖声明有变化");
+  expect(templates.state.reviews[0]?.shared).toEqual([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+  expect(templates.state.reviews[0]?.dependencies).toEqual([{ to: "svc-peer", kind: "call" }]);
+  expect(templates.state.applied).toEqual([]);
+
+  h.host.approve("main", asked.id);
+  await running;
+  // What was reviewed is what was written, row for row.
+  expect(templates.state.applied[0]?.shared).toEqual([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+  expect(templates.state.applied[0]?.dependencies).toEqual([{ to: "svc-peer", kind: "call" }]);
+  expect(templates.state.rows).toEqual([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+  await h.host.shutdownSdk();
+});
+
+it("binds the same payload version to the same CONVERTED values, whatever raw shape produced them", async () => {
+  // The fingerprint (`versionOf`) is computed from the converted edit, so the
+  // model's spelling cannot change what a confirmation authorizes: a single row
+  // and the one-element array it becomes mint the SAME contentVersion, and the
+  // confirmation of one shape can only ever execute that same converted value.
+  // One task/session throughout - the version is also bound to the task's own
+  // service target, so a fresh fixture would produce a different hash for a
+  // reason that has nothing to do with the arguments.
+  const templates = recordingTemplatePort([{ key: "SERVICE_GREETING", value: "hello-a" }]);
+  const h = await harness({ templates: () => templates.port });
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  const ask = async (shared: unknown) => {
+    const running = h.prompt(SERVICE_TEMPLATE_TOOL, { serviceId: "svc-coerced", descriptor: { name: "API a", program: "node" }, shared });
+    await vi.waitFor(() => expect(h.host.listApprovals("main").some((row) => row.status === "pending")).toBe(true));
+    const asked = h.host.listApprovals("main").find((row) => row.status === "pending")!;
+    return { asked, running };
+  };
+
+  // The single object and the array that coerces to the same one row: same
+  // reviewed edit, so the same version and the same operation text.
+  const single = await ask({ key: "SERVICE_GREETING", value: "hello-b" });
+  h.host.reject("main", single.asked.id);
+  expect((await single.running).text).toContain("tool-refused:approval-rejected");
+  const array = await ask([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+  expect(array.asked.contentVersion).toBe(single.asked.contentVersion);
+  expect(array.asked.operation).toBe(single.asked.operation);
+  h.host.approve("main", array.asked.id);
+  await array.running;
+  // What the confirmation named is exactly what was written.
+  expect(templates.state.applied[0]?.shared).toEqual([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+
+  // A different VALUE is a different authorization, whichever shape spells it.
+  const other = await ask({ key: "SERVICE_GREETING", value: "hello-c" });
+  expect(other.asked.contentVersion).not.toBe(single.asked.contentVersion);
+  h.host.reject("main", other.asked.id);
+  await other.running;
+  await h.host.shutdownSdk();
+});
+
+it("refuses a coerced single string that is not a row, so arrayification cannot smuggle a bad template row", async () => {
+  const templates = recordingTemplatePort([{ key: "SERVICE_GREETING", value: "hello-a" }]);
+  const h = await harness({ templates: () => templates.port });
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  // 1.4 refused `shared: "abc"` as `must be array`; 1.5 wraps it as ["abc"], and
+  // the Host's own key-exact row reader refuses it - the conversion never widens
+  // what an edit may contain.
+  const result = await h.prompt(SERVICE_TEMPLATE_TOOL, { serviceId: "svc-coerced", descriptor: { name: "API a", program: "node" }, shared: "abc" });
+  expect(result.text).toContain("tool-refused:invalid-arguments");
+  expect(templates.state.reviews).toEqual([]);
+  expect(templates.state.applied).toEqual([]);
+  expect(h.host.listApprovals("main")).toEqual([]);
+  await h.host.shutdownSdk();
+});
+
+it("keeps the explicit model binding across real turns (no SDK default-model fallback)", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  await h.prompt("fs.read", { path: "repo/notes.txt" });
+  // Pi 1.5 moved to the models.dev v2 catalog with a new default model. An
+  // explicit selection must still be the only model the SDK asks for.
+  expect(h.seenModels.length).toBeGreaterThan(0);
+  expect(new Set(h.seenModels)).toEqual(new Set([`${model.provider}/${model.id}`]));
+  await h.host.shutdownSdk();
+});
+
+// ---------------------------------------------------------------------------
+// [Pencil T15] #150: real managed MCP server, real SDK turn, real Host gate.
+// ---------------------------------------------------------------------------
+
+const MCP_FIXTURE = join(import.meta.dirname, "..", "..", "scripts", "fixtures", "mcp-stdio-fixture.mjs");
+const MCP_SERVER = "pidock-mcp-fixture";
+const MCP_ECHO = "mcp__pidock_mcp_fixture__echo";
+const MCP_MUTATE = "mcp__pidock_mcp_fixture__mutate";
+
+/** Write the same native mcp.json main's manager writes, with the real fixture child. */
+function configureMcpFixture(h: Harness, options: { enabled?: boolean } = {}): { log: string; pidFile: string; path: string } {
+  const agentDir = join(h.fixture.taskDir, ".pidock-sdk-agent");
+  mkdirSync(agentDir, { recursive: true });
+  const log = join(h.fixture.root, "mcp-fixture.log");
+  const pidFile = join(h.fixture.root, "mcp-fixture.pid");
+  const path = join(agentDir, "mcp.json");
+  writeFileSync(path, JSON.stringify({
+    mcpServers: {
+      [MCP_SERVER]: {
+        type: "stdio",
+        command: process.execPath,
+        args: [MCP_FIXTURE],
+        env: { MCP_FIXTURE_LOG: log, MCP_FIXTURE_PID: pidFile },
+        exposure: "direct",
+        timeout: 30,
+        ...(options.enabled === false ? { enabled: false } : {}),
+      },
+    },
+  }));
+  return { log, pidFile, path };
+}
+
+const pidGone = async (pid: number) => {
+  await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 10_000 });
+};
+
+it("runs a real managed MCP tool through the Host approval path and records input/result in the session JSONL", async () => {
+  const h = await harness({ mcp: true });
+  const files = configureMcpFixture(h);
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "default");
+
+  const running = h.host.sdkTextKernel().prompt(
+    "main",
+    JSON.stringify({ tool: MCP_MUTATE, args: { value: "hello mcp" } }),
+    undefined,
+    "00000000-0000-4000-8000-000000000101",
+  );
+  await vi.waitFor(() => expect(h.host.listApprovals("main").some((item) => item.status === "pending")).toBe(true));
+  const approval = h.host.listApprovals("main").find((item) => item.status === "pending")!;
+  // The existing Host gate, not a second policy: AGENT_TOOL_SCOPE + the same
+  // tier, and the card names the exact MCP server/tool and the model's input.
+  expect(approval).toMatchObject({ tool: MCP_MUTATE, scope: "agent-tool", permissionAtRequest: "default" });
+  // Pi sanitizes the server part in a tool name (`-` → `_`); the approval names
+  // that same registered identity, not a second spelling.
+  expect(approval.target).toBe(`${h.fixture.taskDir}/mcp/pidock_mcp_fixture/mutate`);
+  expect(approval.operation).toContain(`{"value":"hello mcp"}`);
+  h.host.approve("main", approval.id);
+
+  const result = await running;
+  expect(result.state).toBe("done");
+  expect(result.text).toContain("tool-result:");
+  expect(result.text).toContain("mutated: hello mcp");
+
+  // The session's own JSONL holds the actual call and its actual result.
+  const transcript = await h.transcript();
+  expect(transcript).toContain(MCP_MUTATE);
+  expect(transcript).toContain("hello mcp");
+  expect(transcript).toContain("mutated: hello mcp");
+  // The same JSONL projection the conversation page renders ends with the real
+  // MCP result inside the assistant reply (the UI has no separate tool card).
+  const projected = h.host.sdkTextKernel().projection("main");
+  expect(projected.messages.at(-1)).toMatchObject({ role: "assistant" });
+  expect(projected.messages.at(-1)?.text).toContain("mutated: hello mcp");
+  // The real child process served the real call, not a stub.
+  const seen = readFileSync(files.log, "utf8");
+  expect(seen).toContain("initialize");
+  expect(seen).toContain("tools/call");
+  expect(seen).toContain("hello mcp");
+  expect(await h.host.sdkTextKernel().open("main")).toMatchObject({ tools: expect.arrayContaining([MCP_MUTATE]) });
+
+  const pid = Number(readFileSync(files.pidFile, "utf8"));
+  await h.host.shutdownSdk();
+  await pidGone(pid);
+});
+
+it("read-only refuses a non-read MCP tool before the server sees it", async () => {
+  const h = await harness({ mcp: true });
+  const files = configureMcpFixture(h);
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "read");
+
+  const result = await h.prompt(MCP_MUTATE, { value: "must-not-run" });
+  expect(result.text).toContain("tool-refused:gate-denied");
+  // The hook refused, so the extension never invoked a server tool.
+  const seen = readFileSync(files.log, "utf8");
+  expect(seen).not.toContain("mutated: must-not-run");
+  expect(h.host.listApprovals("main")).toEqual([]);
+  await h.host.shutdownSdk();
+});
+
+it("keeps a running session on its loaded servers and gives a new session the changed mcp.json", async () => {
+  const h = await harness({ mcp: true });
+  const files = configureMcpFixture(h);
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+
+  const first = await h.prompt(MCP_ECHO, { text: "before save" });
+  expect(first.text).toContain("fixture: before save");
+  expect((await h.host.sdkTextKernel().open("main")).tools).toContain(MCP_ECHO);
+  const initializes = () => readFileSync(files.log, "utf8").split("\n").filter((line) => line.startsWith("initialize ")).length;
+  expect(initializes()).toBe(1);
+
+  // Exactly what tapping 停用 in the manager writes. The open session keeps the
+  // server and its tool; the next session reads the file and has neither.
+  configureMcpFixture(h, { enabled: false });
+  expect((await h.host.sdkTextKernel().open("main")).tools).toContain(MCP_ECHO);
+  const again = await h.prompt(MCP_ECHO, { text: "still here" });
+  expect(again.text).toContain("fixture: still here");
+
+  await h.host.sdkTextKernel().open("other");
+  // Give the extension the same startup window a real connection would need.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect((await h.host.sdkTextKernel().open("other")).tools).not.toContain(MCP_ECHO);
+  expect(initializes()).toBe(1);
+
+  // Re-enable: a session that starts after the save gets the server back.
+  configureMcpFixture(h);
+  await h.host.sdkTextKernel().open("third");
+  await vi.waitFor(async () => expect((await h.host.sdkTextKernel().open("third")).tools).toContain(MCP_ECHO), { timeout: 10_000 });
+  expect(initializes()).toBe(2);
+  await h.host.shutdownSdk();
+});
+
+it("stop/cancel withdraws a parked MCP approval and recycles the real child process", async () => {
+  const h = await harness({ mcp: true });
+  const files = configureMcpFixture(h);
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "default");
+
+  const running = h.host.sdkTextKernel().prompt(
+    "main",
+    JSON.stringify({ tool: MCP_MUTATE, args: { value: "parked" } }),
+    undefined,
+    "00000000-0000-4000-8000-000000000102",
+  );
+  await vi.waitFor(() => expect(h.host.listApprovals("main").some((item) => item.status === "pending")).toBe(true));
+  const pid = Number(readFileSync(files.pidFile, "utf8"));
+  await h.host.sdkTextKernel().cancel("main");
+  const result = await running;
+  expect(result.state).not.toBe("done");
+  // A decision after the stop cannot reach a tool call for a cancelled turn.
+  expect(h.host.listApprovals("main").some((item) => item.status === "pending")).toBe(false);
+  await pidGone(pid);
+  expect(readFileSync(files.log, "utf8")).not.toContain("mutated: parked");
+  await h.host.shutdownSdk();
 });

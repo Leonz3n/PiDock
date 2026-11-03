@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskSchedules, type SchedulePorts, type ScheduleStartResult } from "./schedules.js";
@@ -13,6 +13,9 @@ import { memoryTaskStore as memoryStore } from "./task-host.js";
 
 const TASK_ID = "task-a";
 const TASK_DIR = join(mkdtempSync(join(tmpdir(), "pidock-s18-")), "task-abcdef12");
+// [Pencil T17] #152: a schedule definition requires its fixed task workspace
+// to exist, even on the in-memory store the legacy wiring tests use.
+mkdirSync(TASK_DIR, { recursive: true });
 const BASE = { name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-anthropic", model: "claude-sonnet", permission: "default" as const };
 
 function memorySchedules(): { store: { readSchedules(taskDir: string): ScheduleDiskRecord; writeSchedules(taskDir: string, record: ScheduleDiskRecord): void }; record(): ScheduleDiskRecord } {
@@ -377,7 +380,7 @@ describe("[PiDock 18] Host wiring", () => {
   it("creates one independent session per trigger in the same task workspace and records a scheduled execution", () => {
     let now = "2026-09-23T02:00:00.000Z";
     const taskHost = host(() => now);
-    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"] });
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"], kind: "scheduled" });
     taskHost.setProviderCatalog([
       { id: "provider-anthropic", name: "Anthropic 官方", protocol: "anthropic-messages", baseUrl: "https://api.anthropic.com", enabled: true, models: [{ id: "claude-sonnet-4-5", name: "Claude Sonnet", contextWindow: 200_000 }] },
     ]);
@@ -407,7 +410,7 @@ describe("[PiDock 18] Host wiring", () => {
   it("a scheduled confirmation expires at min(24h, next plan) and stays a scheduled execution", () => {
     const now = "2026-09-23T02:00:00.000Z";
     const taskHost = host(() => now);
-    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"] });
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"], kind: "scheduled" });
     // The scheduled origin is what a scheduled turn would carry; a gated tool
     // parks the execution on a confirmation so the deadline is observable.
     const turn = taskHost.sendMessage(
@@ -439,7 +442,7 @@ describe("[PiDock 18] Host wiring", () => {
   it("records a failed run when the session permission refuses the scheduled turn", () => {
     let now = "2026-09-23T02:00:00.000Z";
     const taskHost = host(() => now);
-    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"] });
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"], kind: "scheduled" });
     const saved = taskHost.saveSchedule({ name: "只读巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-local", model: "pidock-default", permission: "read", enabled: true });
     const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
     now = "2026-09-24T01:20:00.000Z";
@@ -453,7 +456,7 @@ describe("[PiDock 18] Host wiring", () => {
   it("settles an expired scheduled confirmation before judging the next cycle, and an edit never extends it", () => {
     let now = "2026-09-23T02:00:00.000Z";
     const taskHost = host(() => now);
-    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"] });
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"], kind: "scheduled" });
     const saved = taskHost.saveSchedule({ name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true });
     const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
     // A scheduled turn parked on a confirmation whose deadline is min(24h, next plan).
@@ -488,7 +491,7 @@ describe("[PiDock 18] Host wiring", () => {
   it("settles an expired confirmation before 立即运行, so a dead wait never blocks it", () => {
     let now = "2026-09-23T02:00:00.000Z";
     const taskHost = host(() => now);
-    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"] });
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"], kind: "scheduled" });
     const saved = taskHost.saveSchedule({ name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true });
     const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
     const waiting = taskHost.sendMessage(
@@ -514,7 +517,7 @@ describe("[PiDock 18] Host wiring", () => {
   it("does not run a schedule of an archived task and refuses 立即运行 until restored", () => {
     let now = "2026-09-24T01:00:00.000Z";
     const taskHost = host(() => now);
-    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"] });
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"], kind: "scheduled" });
     const saved = taskHost.saveSchedule({ name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true });
     const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
     expect(archive(taskHost).paused.map((schedule) => schedule.scheduleId)).toEqual([scheduleId]);
@@ -522,5 +525,48 @@ describe("[PiDock 18] Host wiring", () => {
     expect(taskHost.evaluateSchedules()).toEqual([]);
     expect(() => taskHost.runScheduleNow(scheduleId)).toThrow("archived");
     expect(taskHost.setScheduleEnabled(scheduleId, true)).toMatchObject({ ok: false, code: "archived" });
+  });
+
+  it("refuses to bolt the first rule onto an ordinary task (#152)", () => {
+    const taskHost = host(() => "2026-09-23T02:00:00.000Z");
+    taskHost.provision({ name: "普通任务", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"] });
+    expect(taskHost.taskKind()).toBe("normal");
+    const refused = taskHost.saveSchedule({
+      name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险",
+      providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true,
+    });
+    expect(refused).toMatchObject({ ok: false, code: "not-schedule-task" });
+    expect(taskHost.listSchedules()).toEqual([]);
+  });
+
+  it("accepts a dedicated schedule task and persists the planned next run (#152)", () => {
+    const taskHost = host(() => "2026-09-23T02:00:00.000Z");
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"], kind: "scheduled" });
+    expect(taskHost.taskKind()).toBe("scheduled");
+    const saved = taskHost.saveSchedule({
+      name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险",
+      providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true,
+    });
+    // 09:15 Asia/Shanghai on the next local day = 01:15Z.
+    expect(saved.ok && saved.schedule.nextRunAt).toBe("2026-09-24T01:15:00.000Z");
+    // Disabling keeps the saved plan; it never fabricates a new trigger time.
+    const paused = taskHost.setScheduleEnabled(saved.ok ? saved.schedule.scheduleId : "", false);
+    expect(paused.ok).toBe(true);
+  });
+
+  it("settles an accepted run once and never rewrites a terminal record (#152)", () => {
+    const taskHost = host(() => "2026-09-23T02:00:00.000Z");
+    taskHost.provision({ name: "定时巡检", dirId: "task-abcdef12", remoteBranch: "main", fetchedCommit: "a5a4a0d1234", repos: ["front-monorepo"], kind: "scheduled" });
+    const saved = taskHost.saveSchedule({
+      name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险",
+      providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true,
+    });
+    const scheduleId = saved.ok ? saved.schedule.scheduleId : "";
+    const run = taskHost.runScheduleNow(scheduleId);
+    expect(run.result).toBe("completed");
+    const settled = taskHost.settleScheduleRun(run.runId, { result: "failed", reason: "不应改写", actualModel: "late-model" });
+    // A terminal record is returned unchanged: no second settlement, no fabricated model.
+    expect(settled?.result).toBe("completed");
+    expect(settled?.actualModel).toBeUndefined();
   });
 });

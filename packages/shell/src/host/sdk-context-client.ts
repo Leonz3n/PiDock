@@ -20,9 +20,10 @@
 
 import { shutdownDeadline } from "./shutdown-deadline.js";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { buildSdkContextEnv, type SdkContextTaskBinding } from "./sdk-context-env.js";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { validateExplicitTextProvider, type ExplicitTextProvider } from "./explicit-text-provider.js";
 import type { SdkTextEvent, SdkTextResult } from "./sdk-text-kernel.js";
 import type { SdkAgentToolOutcome, SdkAgentToolRequest } from "./sdk-agent-tool-contract.js";
@@ -41,9 +42,16 @@ export interface SdkToolHost {
 }
 
 export interface SdkTextKernelPort {
-  open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[] }>;
+  /** [#139] The opened session also reports the model and clamped level it runs with. */
+  open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[]; modelId?: string; thinkingLevel?: string }>;
   prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void, issuedTurnId?: string): Promise<SdkTextResult>;
   cancel(sessionId: string): Promise<void>;
+  /**
+   * [#139] Bind one session to another model of the installed profile, keeping
+   * its transcript. Absent means this kernel cannot change a binding (the
+   * read-only kernel), and the caller refuses by name instead of pretending.
+   */
+  bind?(sessionId: string, binding: { modelId: string; thinkingLevel?: ModelThinkingLevel }): Promise<{ modelId: string; thinkingLevel: string }>;
   dispose(): Promise<void>;
 }
 
@@ -65,6 +73,12 @@ export interface SdkContextOptions {
   task: SdkContextTaskBinding;
   config: ExplicitTextProvider;
   credential: string;
+  /**
+   * The reasoning level the user selected for the bound model. Validated by
+   * main against the model's declared capability; the SDK clamps anything the
+   * model does not support, so this is never a value the UI invented.
+   */
+  thinkingLevel?: ModelThinkingLevel;
   /** Workspace id for log correlation only. */
   workspaceId?: string;
   /**
@@ -72,6 +86,18 @@ export interface SdkContextOptions {
    * still declares no tools, so nothing can execute (fail closed).
    */
   toolHost?: SdkToolHost;
+  /**
+   * [Pencil T15] issue 150: the exact native `mcp.json` the session loads.
+   * Defaults to the Host's `PIDOCK_MCP_CONFIG` (set only by main's task-host
+   * spawn), so a context without one has no MCP surface.
+   */
+  mcpConfigPath?: string;
+  /**
+   * [#151] The app-private Skills source document (`skill-sources.json`). The
+   * worker's kernel reads it when it creates a session, so a running session is
+   * never mutated: a toggle reaches the next session only.
+   */
+  skillSourcesFile?: string;
   /** Injected for tests; defaults to the compiled worker next to this file. */
   spawn?: (env: Record<string, string>, workerData: unknown) => SdkContextWorkerLike;
   /** Bound on the worker's bootstrap reply; a silent worker must not hang a turn. */
@@ -133,7 +159,18 @@ export class SdkContextClient implements SdkTextKernelPort {
       // `toolsEnabled` is the broker marker the worker gates its tool
       // declarations on: absent (no `toolHost`) means the isolated context must
       // declare no tools, so a tool can never exist without a Host executor.
-      const workerData = { task: this.options.task, config: this.options.config, credential: this.options.credential, toolsEnabled: this.options.toolHost !== undefined };
+      const mcpConfigPath = this.options.mcpConfigPath ?? process.env["PIDOCK_MCP_CONFIG"];
+      if (mcpConfigPath !== undefined && (!isAbsolute(mcpConfigPath) || mcpConfigPath.includes("\0"))) throw new Error("sdk-context-input-invalid");
+      const workerData = {
+        task: this.options.task, config: this.options.config, credential: this.options.credential,
+        toolsEnabled: this.options.toolHost !== undefined,
+        ...(this.options.thinkingLevel === undefined ? {} : { thinkingLevel: this.options.thinkingLevel }),
+        // Only a Host that wired a broker gets the MCP path too: MCP tools are
+        // decided by that broker, so advertising them without it would be a
+        // tool whose only answer is a refusal.
+        ...(this.options.toolHost === undefined || mcpConfigPath === undefined ? {} : { mcpConfigPath }),
+        ...(this.options.skillSourcesFile === undefined ? {} : { skillSourcesFile: this.options.skillSourcesFile }),
+      };
       const worker = this.options.spawn?.(env, workerData) ?? new Worker(new URL("./sdk-context-worker.js", import.meta.url), { env, workerData });
       this.worker = worker;
       await new Promise<void>((resolve, reject) => {
@@ -248,12 +285,21 @@ export class SdkContextClient implements SdkTextKernelPort {
     });
   }
 
-  async open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[] }> {
+  async open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[]; modelId?: string; thinkingLevel?: string }> {
     const payload = await this.call({ op: "open", sessionId });
     const tools = payload["tools"];
     if (typeof payload["sdkId"] !== "string" || typeof payload["file"] !== "string" || !Array.isArray(tools) ||
         tools.some((tool) => typeof tool !== "string")) throw new Error("sdk-context-reply-invalid");
-    return { sdkId: payload["sdkId"], file: payload["file"], tools: tools as string[] };
+    return { sdkId: payload["sdkId"], file: payload["file"], tools: tools as string[],
+      ...(typeof payload["modelId"] === "string" ? { modelId: payload["modelId"] } : {}),
+      ...(typeof payload["thinkingLevel"] === "string" ? { thinkingLevel: payload["thinkingLevel"] } : {}) };
+  }
+
+  async bind(sessionId: string, binding: { modelId: string; thinkingLevel?: ModelThinkingLevel }): Promise<{ modelId: string; thinkingLevel: string }> {
+    const payload = await this.call({ op: "bind", sessionId, modelId: binding.modelId,
+      ...(binding.thinkingLevel === undefined ? {} : { thinkingLevel: binding.thinkingLevel }) });
+    if (typeof payload["modelId"] !== "string" || typeof payload["thinkingLevel"] !== "string") throw new Error("sdk-context-reply-invalid");
+    return { modelId: payload["modelId"], thinkingLevel: payload["thinkingLevel"] };
   }
 
   async prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void, issuedTurnId?: string): Promise<SdkTextResult> {

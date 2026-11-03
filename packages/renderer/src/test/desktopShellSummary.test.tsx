@@ -57,7 +57,7 @@ const verifiedLifecycle = (taskId: string) => ({ ok: true as const, payload: { l
 async function openRealTask() {
   await screen.findByTestId("desktop-project-overview");
   fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
-  fireEvent.click(await screen.findByRole("button", { name: project.name }));
+  fireEvent.click(await within(screen.getByRole("navigation", { name: "项目导航" })).findByRole("button", { name: project.name }));
   fireEvent.click(await screen.findByRole("button", { name: "进入工作区" }));
   await screen.findByTestId("desktop-conversation");
 }
@@ -166,7 +166,9 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
       <DesktopShell
         view={{ view: "task", taskId: TASK_ID }}
         onNavigate={vi.fn()}
-        projects={[{ id: project.id, name: project.name, description: project.description }]}
+        projects={[{ id: project.id, name: project.name, description: project.description, taskCount: tasks.length }]}
+        projectsInitialized
+        unassignedCount={0}
         tasks={tasks.map((task) => ({ ...task, projectId: project.id }))}
         allTaskCount={tasks.length}
         lifecyclePending={false}
@@ -202,7 +204,9 @@ describe("[UI 对齐 S8a] production bottom summary bar", () => {
       <DesktopShell
         view={{ view: "usage" }}
         onNavigate={vi.fn()}
-        projects={[{ id: project.id, name: project.name, description: project.description }]}
+        projects={[{ id: project.id, name: project.name, description: project.description, taskCount: tasks.length }]}
+        projectsInitialized
+        unassignedCount={0}
         tasks={tasks.map((task) => ({ ...task, projectId: project.id }))}
         allTaskCount={tasks.length}
         lifecyclePending={false}

@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Real git (fetch/worktree add) under a loaded full-suite run.
+vi.setConfig({ testTimeout: 30_000 });
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +12,7 @@ import { ProjectRegistry } from "./project-registry.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { buildLinkName } from "./multi-repo-provision.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 const homes: string[] = [];
 
@@ -41,6 +45,7 @@ async function setupPureDirectoryEnv() {
   });
 
   const roots = new TaskRootIndex(profile, root);
+  saveTestDeliverySettings(profile);
   const storage = new CreationIntentStore(profile);
   let provisionCalls = 0;
   const host = {

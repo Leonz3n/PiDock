@@ -52,7 +52,7 @@ describe("validateProviderProfile", () => {
   });
 
   it("accepts all three protocols but requires the protocol explicitly", () => {
-    for (const protocol of ["anthropic-messages", "openai-responses", "openai-chat-completions"]) {
+    for (const protocol of ["anthropic-messages", "openai-responses", "openai-completions"]) {
       expect(validateProviderProfile({ ...base, protocol }).ok).toBe(true);
     }
     expect(errorOf({ ...base, protocol: undefined }).code).toBe("protocol-required");

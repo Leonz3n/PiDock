@@ -13,6 +13,7 @@ import { TaskRootIndex } from "./task-root-index.js";
 import { createNodePrepScanDeps, createPrepScanAuthority } from "./task-prep-scan.js";
 import { performAppendOperation } from "./project-append-ipc.js";
 import * as fs from "node:fs";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 const homes: string[] = [];
 
@@ -63,6 +64,7 @@ async function setup(options: { lieAboutDirs?: boolean } = {}) {
   });
 
   const roots = new TaskRootIndex(profile, root);
+  saveTestDeliverySettings(profile);
   const storage = new CreationIntentStore(profile);
 
   const taskRootFor = (taskId: string, payload: Record<string, unknown>): string =>

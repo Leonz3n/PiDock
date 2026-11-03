@@ -514,6 +514,13 @@ export type Schedule = {
   configVersion?: number;
   /** Set when the saved config no longer resolves: the schedule needs repair. */
   repairIssue?: string;
+  /**
+   * [Pencil T17] persisted plan: next instant this rule fires in its own
+   * zone. `null` = a consumed one-shot with no further occurrence.
+   */
+  nextRunAt?: string | null;
+  /** Provider installation generation the save was valid against ([#139]). */
+  providerGeneration?: number;
 };
 
 export type ScheduledRun = {
@@ -523,8 +530,16 @@ export type ScheduledRun = {
   /** Absent when the trigger was skipped (no session was created). */
   sessionId?: string;
   at: string;
-  /** `awaiting-approval` is a run still waiting on its confirmation, not a finished one. */
-  result: "completed" | "awaiting-approval" | "skipped" | "failed";
+  /**
+   * `awaiting-approval` is a run still waiting on its confirmation and
+   * `running` is an accepted SDK turn that has not settled yet — neither is a
+   * finished run, and neither is reported as success.
+   */
+  result: "running" | "completed" | "awaiting-approval" | "skipped" | "failed" | "interrupted" | "uncertain";
+  /** [Pencil T17] the model that actually served the run (absent = never started). */
+  actualModel?: string;
+  /** Named failure code (`credential-missing`, `directory-missing`, …). */
+  failureCode?: string;
   /** [PiDock 18] (#20) planned trigger vs 立即运行. */
   trigger?: "due" | "manual";
   /** Skip/failure reason recorded with the trigger. */

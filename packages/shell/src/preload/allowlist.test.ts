@@ -34,6 +34,13 @@ describe("preload invoke whitelist", () => {
     expect(isAllowedInvokeChannel("shell/readTaskDir")).toBe(false);
   });
 
+  it("allows the MCP management channel and no raw mcp/file channel", () => {
+    // [Pencil T15] #150: one exact-key op channel over Pi's native mcp.json.
+    expect(isAllowedInvokeChannel("shell/mcpOp")).toBe(true);
+    expect(isAllowedInvokeChannel("shell/mcpReadFile")).toBe(false);
+    expect(isAllowedInvokeChannel("shell/mcpExec")).toBe(false);
+  });
+
   it("rejects arbitrary IPC channels", () => {
     expect(isAllowedInvokeChannel("arbitrary-channel")).toBe(false);
   });

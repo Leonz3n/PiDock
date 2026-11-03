@@ -59,7 +59,9 @@ it("names a blank schedule field instead of an empty rule, name or table cell", 
   const runRow = within(document.querySelector('[data-schedule-run="run-a"]') as HTMLElement);
   expect(runRow.getByText("Host 未上报开始时间")).toBeInTheDocument();
   // `??` used to miss a real `""`; the em dash is the named absence for this column.
-  expect(runRow.getByText("—")).toBeInTheDocument();
+  // The run table now also names an absent actual model, so "—" appears in
+  // both the model and the detail column; at least one named absence is required.
+  expect(runRow.getAllByText("—").length).toBeGreaterThan(0);
   // The run table's 定时任务 cell names the same blank schedule name instead of
   // rendering a blank cell under a column header (the card above is not the only
   // render path of `parseSchedules.name`).
@@ -291,4 +293,53 @@ it("keeps the stored Provider selectable when the Provider list cannot be read",
   // The stored identity stays the one that is saved: an unreadable list never
   // turns into a silent switch to another Provider.
   await waitFor(() => expect(taskOp).toHaveBeenCalledWith("a", "task/scheduleSave", expect.objectContaining({ providerId: "provider-x", model: "model-x" })));
+});
+
+it("shows an accepted run as 执行中 with its ACTUAL model and opens the original session", async () => {
+  bridge((taskId, op) => ({ ok: true, payload: { workspaceId: "local", taskId, op, payload: op === "task/scheduleList"
+    ? { schedules: [schedule(taskId, true)], templates: [] }
+    : { runs: [
+        { ...run(taskId), runId: "run-live", result: "running", model: "model-x", actualModel: "model-served", sessionId: "s-abcdef12" },
+        { ...run(taskId), runId: "run-bad", result: "failed", model: "model-x", failureCode: "credential-missing", reason: "没有可用凭据" },
+      ] } } }));
+  const onOpenSession = vi.fn();
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} onOpenSession={onOpenSession} />);
+  await waitFor(() => expect(document.querySelector('[data-schedule-run="run-live"]')).not.toBeNull());
+  const live = within(document.querySelector('[data-schedule-run="run-live"]') as HTMLElement);
+  expect(live.getByText("执行中")).toBeInTheDocument();
+  expect(live.getByText("model-served")).toBeInTheDocument();
+  fireEvent.click(live.getByRole("button", { name: "继续对话" }));
+  expect(onOpenSession).toHaveBeenCalledWith("a", "s-abcdef12");
+  const failed = within(document.querySelector('[data-schedule-run="run-bad"]') as HTMLElement);
+  // A pre-flight failure names its code and never shows a fabricated model.
+  expect(failed.getByText("失败")).toBeInTheDocument();
+  expect(failed.getByText(/credential-missing/)).toBeInTheDocument();
+  expect(failed.getByText(/未实际运行/)).toBeInTheDocument();
+});
+
+it("shows an unconfirmed quit and the asleep phase instead of claiming the scheduler is healthy", async () => {
+  bridge((taskId, op) => ({ ok: true, payload: { workspaceId: "local", taskId, op, payload: op === "task/scheduleList"
+    ? { schedules: [schedule(taskId, true)], templates: [] } : { runs: [run(taskId)] } } }));
+  const schedulerState = vi.fn(async () => ({ ok: true, payload: {
+    phase: "asleep",
+    blockedReason: "系统休眠中：不执行定时触发",
+    sleepingSince: "2026-09-29T08:00:00Z",
+    lastQuitUnconfirmed: { at: "2026-09-28T23:00:00Z", hosts: ["task-b"], attempts: 3 },
+  } }));
+  window.pidock = { ...window.pidock, schedulerState } as never;
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(screen.getByTestId("desktop-scheduler-state")).toBeInTheDocument());
+  expect(screen.getByTestId("desktop-scheduler-state")).toHaveTextContent("系统休眠");
+  const quit = screen.getByTestId("desktop-scheduler-quit-unconfirmed");
+  expect(quit).toHaveTextContent("上次退出未确认");
+  expect(quit).toHaveTextContent("task-b");
+});
+
+it("renders a reconciled interrupted run as a named outcome, not a success", async () => {
+  bridge((taskId, op) => ({ ok: true, payload: { workspaceId: "local", taskId, op, payload: op === "task/scheduleList"
+    ? { schedules: [schedule(taskId, true)], templates: [] }
+    : { runs: [{ ...run(taskId), result: "interrupted", reason: "执行已中断：上次进程已不在" }, { ...run(taskId), runId: "run-uncertain", result: "uncertain" }] } } }));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(screen.getAllByText("已中断").length).toBeGreaterThan(0));
+  expect(screen.getAllByText("状态不确定").length).toBeGreaterThan(0);
 });

@@ -174,7 +174,7 @@ describe("[PiDock 16] (#16 盒 1) 桌面输入区附件入口", () => {
     expect(String(sent[0]!.detail)).toContain("随消息提交清单");
     // The local receipt still records only the typed text: no attachment identity
     // is written to disk by the renderer.
-    const receipt = JSON.parse(localStorage.getItem("pidock-sdk-main-pending-v1:task-attach") ?? "{}") as Record<string, unknown>;
+    const receipt = JSON.parse(localStorage.getItem("pidock-sdk-pending-v1:task-attach:main") ?? "{}") as Record<string, unknown>;
     expect(Object.keys(receipt).sort()).toEqual(["requestId", "schema", "sessionId", "taskId", "text"]);
     expect(receipt.text).toBe("请看附件");
   });

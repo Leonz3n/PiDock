@@ -33,6 +33,8 @@
 import type { TaskPathProtection } from "./protected-application-path.js";
 import { execFileSync } from "node:child_process";
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { remoteDigest } from "../main/remote-identity.js";
 import { describeReadFailure } from "../main/service-code-observation.js";
 import {
   MAX_PREVIEW_CHARS,
@@ -42,15 +44,19 @@ import {
   deliveryTarget,
   findWorkspaceRoot,
   resolveWorkspacePath,
+  verifyWorkspaceSource,
   workspaceAttribution,
   workspaceRoots,
+  type ObservedSourceIdentity,
   type WorkspaceAttribution,
   type WorkspaceDeliveryResult,
   type WorkspaceDiffResult,
+  type WorkspaceMode,
   type WorkspaceObservation,
   type WorkspacePreview,
   type WorkspaceRoot,
   type WorkspaceTree,
+  type WorkspaceVerification,
 } from "../main/workspace-files.js";
 import type { TaskDiskRecord } from "./task-store.js";
 import type { TaskStore } from "./task-host.js";
@@ -66,6 +72,20 @@ export interface WorkspaceFileReaders {
    * cannot point the reader at another task's folder or an out-of-task file.
    */
   realPath(path: string): string;
+  /**
+   * Read one path's current identity ([Pencil T02] #137): device/inode of a
+   * real directory, or the named `missing`/`other` answer. A path that is gone
+   * is an observation, never an exception the facts surface would turn into a
+   * blank row.
+   */
+  identity(path: string): { kind: "dir" | "other" | "missing"; realPath?: string; device?: string; inode?: string };
+  /**
+   * Current existence/kind of one path ([Pencil T19] #145): the send-time
+   * re-check asks the Host whether a referenced file is still at its recorded
+   * source path. Missing is an answer, never an exception; an unreadable path
+   * throws so the caller can name the failure instead of guessing.
+   */
+  statFile(path: string): { kind: "file" | "dir" | "other" | "missing"; size?: number; mtimeMs?: number };
 }
 
 /** Read cap: a file bigger than this is refused rather than loaded. */
@@ -206,6 +226,37 @@ export const realWorkspaceFileReaders: WorkspaceFileReaders = {
       return path;
     }
   },
+  identity(path) {
+    let stat;
+    try {
+      stat = lstatSync(path, { bigint: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+      return { kind: "other" };
+    }
+    if (!stat.isDirectory() || stat.dev <= 0n || stat.ino <= 0n) return { kind: "other" };
+    let realPath: string | undefined;
+    try {
+      realPath = realpathSync(path);
+    } catch {
+      realPath = undefined;
+    }
+    return { kind: "dir", ...(realPath !== undefined ? { realPath } : {}), device: String(stat.dev), inode: String(stat.ino) };
+  },
+  statFile(path) {
+    try {
+      const info = statSync(path);
+      const common = { size: info.size, mtimeMs: info.mtimeMs };
+      if (info.isFile()) return { kind: "file", ...common };
+      if (info.isDirectory()) return { kind: "dir" };
+      return { kind: "other", ...common };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+      // A path that exists but cannot be inspected is NOT reported as missing:
+      // the caller must be able to tell "moved away" from "could not read".
+      throw error;
+    }
+  },
 };
 
 export class TaskWorkspaceFiles {
@@ -224,16 +275,32 @@ export class TaskWorkspaceFiles {
   ) {}
 
   /** Browsable roots of this task, derived from its record. */
+  /**
+   * The task's declared workspace mode ([Pencil T02] #137). A record written
+   * before the mode existed is derived from its sources (shared checkouts =>
+   * existing-git, worktree repos => worktree, otherwise plain directories),
+   * never from the UI.
+   */
+  workspaceMode(): WorkspaceMode {
+    const record = this.requireRecord();
+    if (record.workspaceMode !== undefined) return record.workspaceMode;
+    if ((record.sharedRepos?.length ?? 0) > 0) return "existing-git";
+    return record.repos.length > 0 ? "worktree" : "plain-dirs";
+  }
+
   roots(): WorkspaceRoot[] {
     const record = this.requireRecord();
     this.protection?.assert(this.taskDir);
     for (const link of record.dirLinks ?? []) this.protection?.assert(link.sourcePath);
+    for (const shared of record.sharedRepos ?? []) this.protection?.assert(shared.sourcePath);
     const roots = workspaceRoots({
       taskId: this.taskId,
       taskDir: this.taskDir,
       repos: record.repos,
       ...(record.repoSources ? { repoSources: record.repoSources } : {}),
       ...(record.dirLinks ? { dirLinks: record.dirLinks } : {}),
+      ...(record.sharedRepos ? { sharedRepos: record.sharedRepos } : {}),
+      ...(record.workspaceMode !== undefined ? { workspaceMode: record.workspaceMode } : {}),
       baselineBranch: record.remoteBranch,
       // The record's own task branch (`task/<dirId>`) is the DECLARED
       // expectation, kept apart from `record.remoteBranch` (the pinned
@@ -257,6 +324,137 @@ export class TaskWorkspaceFiles {
     return this.roots().map((root) =>
       root.kind === "worktree" ? { ...root, ...this.observeWorktree(root) } : root,
     );
+  }
+
+  /**
+   * The full facts readout the task facts surface renders ([Pencil T02] #137):
+   * every root, its observed branch/HEAD (where the root has Git), and the
+   * per-source result of re-verifying the identity the record holds. Reads the
+   * record and the filesystem; never writes the record back, so a moved source
+   * is reported as `missing`/`mismatch` instead of being silently rewritten.
+   */
+  facts(): WorkspaceRoot[] {
+    const record = this.requireRecord();
+    return this.observedRoots().map((root) => {
+      if (root.kind === "existing-git") {
+        return { ...root, ...this.observeSharedGit(root), ...this.verifyRoot(root, record) };
+      }
+      return { ...root, ...this.verifyRoot(root, record) };
+    });
+  }
+
+  /** Observed branch/HEAD/uncommitted state of one existing checkout in place. */
+  private observeSharedGit(root: WorkspaceRoot): {
+    workingBranch: WorkspaceObservation<string>;
+    headCommit: WorkspaceObservation<string>;
+    dirty: WorkspaceObservation<boolean>;
+  } {
+    const branch = observeBranch(this.readers.runGit(["rev-parse", "--abbrev-ref", "HEAD"], root.path));
+    const head = this.readers.runGit(["rev-parse", "--verify", "HEAD"], root.path);
+    const headCommit: WorkspaceObservation<string> = head.ok && /^[a-f0-9]{40}$/.test(head.stdout.trim())
+      ? { state: "observed", value: head.stdout.trim() }
+      : { state: "unknown", reason: head.ok ? "来源 HEAD 不是完整提交" : head.error };
+    const status = this.readers.runGit(["status", "--porcelain"], root.path);
+    return { workingBranch: branch, headCommit, dirty: observeDirty(status) };
+  }
+
+  /**
+   * Re-verify one root's recorded identity. Recorded fields come from the
+   * record (`repoSources` target identity, `sharedRepos`, `dirLinks`); a record
+   * with no identity is `repair-required`, never assumed ready.
+   */
+  private verifyRoot(root: WorkspaceRoot, record: TaskDiskRecord): { verification: WorkspaceVerification } {
+    if (root.kind === "worktree") {
+      const source = record.repoSources?.find((entry) => entry.repoDir === root.id);
+      const recorded = {
+        path: root.path,
+        ...(source?.targetDevice !== undefined && source.targetInode !== undefined
+          ? { device: source.targetDevice, inode: source.targetInode } : {}),
+        ...(source?.commonDir !== undefined ? { commonDir: source.commonDir } : {}),
+        ...(source?.remoteDigest !== undefined ? { remoteDigest: source.remoteDigest } : {}),
+      };
+      const identity = this.readers.identity(root.path);
+      if (identity.kind !== "dir") return { verification: verifyWorkspaceSource(recorded, identity) };
+      const readGit = source?.commonDir !== undefined || source?.remoteDigest !== undefined;
+      const verification = verifyWorkspaceSource(recorded, {
+        ...identity,
+        ...(readGit ? this.observeGitIdentity(root.path, source?.remote) : {}),
+      });
+      // [Pencil T08] #143: the bound path existing is not enough. A worktree
+      // record written by a creation (`targetBranch` present) also binds the
+      // task branch and the pinned baseline, so a checkout moved onto another
+      // branch, or one whose lineage no longer contains the pinned commit, is a
+      // named repair state — the task is never silently re-created from it.
+      if (verification.state !== "ready" || source?.targetBranch === undefined) return { verification };
+      const bound = this.verifyWorktreeBinding(root);
+      return { verification: bound ?? verification };
+    }
+    if (root.kind === "existing-git") {
+      const source = record.sharedRepos?.find((entry) => entry.rootId === root.id);
+      if (!source) return { verification: { state: "repair-required", reason: "待修复：任务记录缺少该已有 Git 目录的来源身份，无法核验" } };
+      const recorded = {
+        path: source.sourcePath,
+        ...(source.sourceRealPath !== undefined ? { realPath: source.sourceRealPath } : {}),
+        ...(source.sourceDevice !== undefined && source.sourceInode !== undefined
+          ? { device: source.sourceDevice, inode: source.sourceInode } : {}),
+        commonDir: source.commonDir,
+        remoteDigest: source.remoteDigest,
+      };
+      const identity = this.readers.identity(source.sourcePath);
+      if (identity.kind !== "dir") return { verification: verifyWorkspaceSource(recorded, identity) };
+      return { verification: verifyWorkspaceSource(recorded, { ...identity, ...this.observeGitIdentity(source.sourcePath, source.remote) }) };
+    }
+    const link = record.dirLinks?.find((entry) => entry.linkName === root.id);
+    if (!link) return { verification: { state: "repair-required", reason: "待修复：任务记录缺少该普通目录的来源身份，无法核验" } };
+    const recorded = {
+      path: link.sourcePath,
+      ...(link.sourceDevice !== undefined && link.sourceInode !== undefined
+        ? { device: link.sourceDevice, inode: link.sourceInode } : {}),
+    };
+    return { verification: verifyWorkspaceSource(recorded, this.readers.identity(link.sourcePath)) };
+  }
+
+  /**
+   * [Pencil T08] #143: re-prove the worktree's branch and pinned baseline. Uses
+   * the observation already taken for the facts row (and a real `merge-base`
+   * probe for the lineage), and names which binding changed.
+   */
+  private verifyWorktreeBinding(root: WorkspaceRoot): WorkspaceVerification | null {
+    const observedBranch = root.workingBranch;
+    if (root.expectedBranch !== undefined && observedBranch?.state === "observed" && observedBranch.value !== root.expectedBranch) {
+      return { state: "branch-mismatch",
+        reason: `分支不符：工作副本当前在 ${observedBranch.value}，任务绑定分支为 ${root.expectedBranch}；重开需要明确修复，不会自动重建` };
+    }
+    if (root.expectedBranch !== undefined && observedBranch?.state === "unknown") {
+      return { state: "repair-required", reason: `待修复：无法读取工作副本的当前分支（${observedBranch.reason}）` };
+    }
+    if (root.baseCommit !== undefined && root.baseCommit.length > 0) {
+      const ancestor = this.readers.runGit(["merge-base", "--is-ancestor", root.baseCommit, "HEAD"], root.path);
+      if (!ancestor.ok) {
+        return { state: "base-mismatch",
+          reason: `基线不符：固定基线提交 ${root.baseCommit} 已不在工作副本历史中；重开需要明确修复，不会自动重建` };
+      }
+    }
+    return null;
+  }
+
+  /** Current Git common dir + remote digest of one real checkout, or named nulls. */
+  private observeGitIdentity(path: string, remote?: string): Pick<ObservedSourceIdentity, "commonDir" | "remoteDigest"> {
+    let commonDir: string | null = null;
+    const common = this.readers.runGit(["rev-parse", "--git-common-dir"], path);
+    if (common.ok && common.stdout.trim().length > 0) commonDir = this.readers.realPath(resolve(path, common.stdout.trim()));
+    let digest: string | null = null;
+    if (remote !== undefined && remote.length > 0) {
+      const url = this.readers.runGit(["remote", "get-url", remote], path);
+      if (url.ok) {
+        try {
+          digest = remoteDigest(url.stdout.trim());
+        } catch {
+          digest = null;
+        }
+      }
+    }
+    return { commonDir, remoteDigest: digest };
   }
 
   /**
@@ -300,6 +498,29 @@ export class TaskWorkspaceFiles {
       (entry) => this.rootEscapeError(target.root, `${target.root.path}/${entry.path}`) === undefined,
     );
     return { ok: true, tree: { attribution: target.attribution, path: target.relative, entries: inside, truncated: bounded.truncated } };
+  }
+
+  /**
+   * Existence/kind of one path inside one root ([Pencil T19] #145). The send
+   * re-check reads this, so a referenced file that was moved or deleted on disk
+   * is reported as `missing` instead of being accepted because the chip and
+   * the root still look valid.
+   */
+  stat(input: { rootId: unknown; relative?: unknown }): {
+    ok: true;
+    stat: { path: string; kind: "file" | "dir" | "other" | "missing"; exists: boolean; size?: number; mtimeMs?: number };
+  } | { ok: false; error: string } {
+    const target = this.resolve(input, false);
+    if (!target.ok) return { ok: false, error: target.error };
+    const escape = this.rootEscapeError(target.root, target.absolute);
+    if (escape !== undefined) return { ok: false, error: escape };
+    let observed: { kind: "file" | "dir" | "other" | "missing"; size?: number; mtimeMs?: number };
+    try {
+      observed = this.readers.statFile(target.absolute);
+    } catch (error) {
+      return { ok: false, error: `read-failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    return { ok: true, stat: { path: target.relative, exists: observed.kind !== "missing", ...observed } };
   }
 
   /** Bounded, masked preview of one text file inside one root. */
@@ -385,6 +606,19 @@ export class TaskWorkspaceFiles {
     const resolved = this.readers.realPath(absolute);
     const targetReal = comparisonKey(resolved, windowsPaths);
     if (targetReal === rootReal || targetReal.startsWith(`${rootReal}/`)) return undefined;
+    // A path that does not exist cannot be realpath'ed (the reader returns the
+    // input), so a merely-moved/deleted file would look "outside" a root whose
+    // own real path differs only through a system symlink (e.g. /var on macOS).
+    // Resolve the existing parent ONLY for a missing target: an existing link
+    // that resolves outside was already refused above, and a missing final
+    // component under the root is exactly what the send-time stat must report.
+    let missing = false;
+    try { missing = this.readers.statFile(absolute).kind === "missing"; } catch { missing = false; }
+    const parent = dirname(absolute);
+    if (missing && parent !== absolute) {
+      const parentReal = comparisonKey(this.readers.realPath(parent), windowsPaths);
+      if (parentReal === rootReal || parentReal.startsWith(`${rootReal}/`)) return undefined;
+    }
     return `path-out-of-scope: ${root.label} 内的链接指向根之外（${resolved}），已拒绝读取`;
   }
 

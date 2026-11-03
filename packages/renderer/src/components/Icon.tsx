@@ -43,9 +43,15 @@ export const ICON_PATHS = {
   // (also `remoteAccessPage`'s mode picker). Same path data as `app.js:2`.
   refresh: "M20 7a9 9 0 1 0 1 9 M20 2v6h-6",
   shield: "M12 2l9 4v6c0 6-9 10-9 10S3 18 3 12V6Z M8 12l3 3 5-6",
+  // 「未归属任务」 (#136): the S07 tree's inbox glyph for tasks no workspace owns.
+  inbox: "M22 12h-6l-2 3h-4l-2-3H2 M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z",
   // Prototype `paths.code`: the capability row's Extension glyph
   // (`capabilityRow()` picks book/server/archive/code by kind).
   code: "M8 6l-6 6 6 6 M16 6l6 6-6 6 M14 3l-4 18",
+  // [Pencil T14] #149 the two bottom-left destinations of design S06: `grid`
+  // (blocks) is 能力管理 and `sliders` (settings-2) is 设置. Same 24px stroke
+  // vocabulary as the rest of the set so the compact rail stays one weight.
+  sliders: "M4 6h9 M17 6h3 M4 12h3 M11 12h9 M4 18h11 M19 18h1 M13 4v4 M7 10v4 M15 16v4",
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

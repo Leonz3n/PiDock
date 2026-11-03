@@ -24,15 +24,38 @@ export type EditorSettingsRequest =
   | { op: "clear" }
   | { op: "save"; program: string; args?: string[] };
 
+/**
+ * [Pencil T14] #149 the settings surface's one channel. `appearance/save` names
+ * one of light/dark/system; `native/saveKeybinding` names ONE managed Pi action
+ * and its keys. No variant carries a path, a file name or an agent directory:
+ * main resolves both directories itself.
+ */
+export type PreferencesRequest =
+  | { op: "appearance/read" }
+  | { op: "appearance/save"; appearance: "light" | "dark" | "system" }
+  | { op: "native/read" }
+  | { op: "native/saveKeybinding"; action: string; keys: string[] };
+
 export interface PidockBridge {
   getSecurityState?: () => { sandboxed: boolean; contextIsolated: boolean };
   getVersions?: () => Promise<unknown>;
   hostPing?: (workspaceId?: string) => Promise<unknown>;
   listTasks?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   importTaskRoot?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
-  projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * Workspace registry operations. The renderer names a workspace, a task and its
+   * own field values only: main mints every id, validates the input, stats the
+   * source paths itself (`verifySources`) and owns the registry files
+   * (`status`/`recover`).
+   */
+  projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer" | "status" | "recover" | "verifySources" | "blockers" | "variables" | "setVariable" | "removeVariable" | "taskVariables" | "setTaskVariable" | "removeTaskVariable"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string; confirmed?: boolean; key?: string; value?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   serviceCatalogOp?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
-  createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string; confirmed?: boolean }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * Creation operations. #148 adds the pre-creation delivery preview and the
+   * app-private convention/remote document: main reads them from its own
+   * profile, so the page never supplies or guesses a branch or a push target.
+   */
+  createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon" | "status" | "retry" | "deliverySettings" | "saveDeliverySettings" | "deliveryPreview"; input?: unknown; id?: string; confirmed?: boolean; cleanup?: "keep" | "owned"; adoptOrphanBranches?: boolean; branchTemplate?: string; remote?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
    * [PiDock 03] (#6) production append for an existing task. The page names
    * project repository ids, remote names and baseline branches only: main
@@ -50,7 +73,20 @@ export interface PidockBridge {
    * a profile, and profile metadata only: the credential value is resolved in
    * main from the profile's environment reference and never crosses this bridge.
    */
-  providerOp?: (request: { op: "list" | "save" | "remove" | "select" | "clear" | "ensure"; taskId: string; profileId?: string; profile?: unknown }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [PiDock T03] #138 `shell/providerOp`. The renderer names an operation and
+   * the profile/model it concerns; `apiKey` is only present on the one `save`
+   * or `discover`/`probe` call where the user just typed a key. No reply can
+   * carry a key back — main has no field for it.
+   */
+  providerOp?: (request: Record<string, unknown>) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [Pencil T15] issue 150 `shell/mcpOp`: Pi's native `mcp.json` as a bounded
+   * management surface. list/save/remove/enable/disable/test only. The request
+   * names a server or a form draft — never a file, a path, an agent directory
+   * or a credential value; no reply reads a credential value back.
+   */
+  mcpOp?: (request: Record<string, unknown>) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
    * [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The page names a task and one
    * of that task's own file roots — nothing else: main reads the editor program
@@ -67,6 +103,17 @@ export interface PidockBridge {
    * `taskOp`.
    */
   editorSettingsOp?: (request: EditorSettingsRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /** [Pencil T14] #149 PiDock 外观偏好 + Pi 原生 keybindings 的有界投影（一个通道，四个具名 op）。 */
+  preferencesOp?: (request: PreferencesRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [Pencil T16] Pencil T16 local Skills sources: `list` / `add` / `remove` /
+   * `setEnabled` / `open`. The page names a directory, a source id or a row key
+   * only; main owns the app-private document, the real-disk scan and the file an
+   * `open` resolves (launched with the OS default handler, never written).
+   */
+  skillsOp?: (request: Record<string, unknown>) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /** [Pencil T18] 工单 153 scheduler phase + last unconfirmed quit (read-only). */
+  schedulerState?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   sdkTurn?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   onSdkTurnEvent?: (listener: (event: unknown) => void) => () => void;
@@ -138,15 +185,34 @@ export type ShellTaskOp =
   | "task/setSessionModel"
   | "task/setSessionThinking"
   | "task/sessionStates"
+  // [Pencil T04] #139: task-wide session identity and lifecycle.
+  | "task/sessionList"
+  | "task/sessionCreate"
+  | "task/sessionRename"
+  | "task/sessionArchive"
+  | "task/sessionRestore"
+  | "task/sessionDelete"
+  | "task/sessionStop"
+  | "task/sessionActivate"
+  | "task/sessionReadout"
+  | "task/sessionModel"
+  | "task/sessionReasoning"
   | "task/compactSession"
   | "task/usageRecords"
   | "task/clearUsage"
   | "task/fileRoots"
   | "task/serviceImportHints"
   | "task/fileTree"
+  | "task/fileStat"
   | "task/filePreview"
   | "task/fileDiff"
   | "task/deliveryInfo"
+  // [Pencil T13] #148 explicit Git delivery (settings, preview, commit, push).
+  | "task/deliverySettings"
+  | "task/saveDeliverySettings"
+  | "task/deliveryPlan"
+  | "task/deliveryCommit"
+  | "task/deliveryPush"
   | "task/planTerminal"
   | "task/terminalProfiles"
   | "task/terminalControl"
@@ -178,6 +244,47 @@ export type ShellTaskOp =
  * returned (never thrown as rejected invokes): callers branch on `ok` and
  * keep the form with a retry entry instead of crashing.
  */
+/**
+ * [Pencil T18] 工单 153 the scheduler's own phase and the last quit that could not
+ * prove every Host stopped. `null` = not in the shell or the reply is malformed;
+ * the page then shows no banner rather than inventing a state.
+ */
+export async function shellSchedulerState(): Promise<{
+  phase: "active" | "asleep" | "quitting";
+  blockedReason: string | null;
+  sleepingSince?: string;
+  lastQuitUnconfirmed?: { at: string; hosts: string[]; attempts?: number };
+} | null> {
+  const bridge = shellBridge();
+  if (!bridge?.schedulerState) return null;
+  try {
+    const answer = await bridge.schedulerState();
+    if (!answer || answer.ok !== true || !answer.payload || typeof answer.payload !== "object") return null;
+    const payload = answer.payload as Record<string, unknown>;
+    const phase = payload["phase"];
+    if (phase !== "active" && phase !== "asleep" && phase !== "quitting") return null;
+    const report = payload["lastQuitUnconfirmed"];
+    const lastQuitUnconfirmed =
+      report && typeof report === "object" && typeof (report as Record<string, unknown>)["at"] === "string"
+        ? {
+            at: (report as Record<string, unknown>)["at"] as string,
+            hosts: Array.isArray((report as Record<string, unknown>)["hosts"])
+              ? ((report as Record<string, unknown>)["hosts"] as unknown[]).filter((item): item is string => typeof item === "string")
+              : [],
+            ...(typeof (report as Record<string, unknown>)["attempts"] === "number" ? { attempts: (report as Record<string, unknown>)["attempts"] as number } : {}),
+          }
+        : undefined;
+    return {
+      phase,
+      blockedReason: typeof payload["blockedReason"] === "string" ? (payload["blockedReason"] as string) : null,
+      ...(typeof payload["sleepingSince"] === "string" ? { sleepingSince: payload["sleepingSince"] as string } : {}),
+      ...(lastQuitUnconfirmed !== undefined ? { lastQuitUnconfirmed } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function shellTaskOp(
   taskId: string,
   op: ShellTaskOp,
@@ -861,6 +968,40 @@ export async function executionStateThroughShell(input: {
 }
 
 /**
+ * [Pencil T05] ticket 140 本会话真实的确认记录：Host 持久化的 `PiApproval` 行（工具、
+ * 目标、真实际命令、载荷版本、状态、是否已执行）。只读，不改写任何状态；读取
+ * 失败是 `{ok:false}` 信封，页面据此显示具名读取失败而不是「无待确认」。
+ */
+export async function listApprovalsThroughShell(input: {
+  taskId: string;
+  sessionId: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/listApprovals", { sessionId: input.sessionId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [Pencil T05] ticket 140 批准或拒绝一次确认。载荷只有 `{sessionId, approvalId}` 两个键：
+ * Host 的批准路径会重新校验（路径仍在任务内、目标未变、操作未执行）并最多执行一次，
+ * 多带的字段不会被 Host 记录，因此这里不发。
+ */
+export async function resolveApprovalThroughShell(input: {
+  taskId: string;
+  op: "task/approve" | "task/reject";
+  sessionId: string;
+  approvalId: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, input.op, { sessionId: input.sessionId, approvalId: input.approvalId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * [PiDock 17] (#19 box 5) 读取完成清除未读: the Host clears only the unread ids and
  * returns the 待处理 ones it kept.
  */
@@ -924,6 +1065,23 @@ export async function fileTreeThroughShell(input: {
   }
 }
 
+/**
+ * [Pencil T19] #145 the send-time reference re-check: one path's real
+ * existence/kind inside the reference's recorded root (`task/fileStat`).
+ * Read-only and bounded to the path the chip already names.
+ */
+export async function fileStatThroughShell(input: {
+  taskId: string;
+  rootId: string;
+  relative: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/fileStat", { rootId: input.rootId, relative: input.relative });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** [PiDock 10] (#15) one bounded, masked file preview (`task/filePreview`). */
 export async function filePreviewThroughShell(input: {
   taskId: string;
@@ -956,6 +1114,71 @@ export async function fileDiffThroughShell(input: {
 export async function deliveryInfoThroughShell(input: { taskId: string; rootId: string }): Promise<ShellTaskOpResult> {
   try {
     return await shellTaskOp(input.taskId, "task/deliveryInfo", { rootId: input.rootId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 the saved branch convention + target remote (a read). */
+export async function deliverySettingsThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/deliverySettings");
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 save both settings; an invalid pair is named, not coerced. */
+export async function saveDeliverySettingsThroughShell(input: {
+  taskId: string;
+  branchTemplate: string;
+  remote: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/saveDeliverySettings", {
+      branchTemplate: input.branchTemplate,
+      remote: input.remote,
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 the per-repo branch + push target preview (a read). */
+export async function deliveryPlanThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/deliveryPlan");
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 explicit commit, one named repository set at a time. */
+export async function deliveryCommitThroughShell(input: {
+  taskId: string;
+  branch: string;
+  commitMessage: string;
+  repoIds?: string[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { branch: input.branch, commitMessage: input.commitMessage };
+  if (input.repoIds) payload["repoIds"] = input.repoIds;
+  try {
+    return await shellTaskOp(input.taskId, "task/deliveryCommit", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 explicit push; never a force push, never implicit. */
+export async function deliveryPushThroughShell(input: {
+  taskId: string;
+  branch: string;
+  repoIds?: string[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { branch: input.branch };
+  if (input.repoIds) payload["repoIds"] = input.repoIds;
+  try {
+    return await shellTaskOp(input.taskId, "task/deliveryPush", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -1157,9 +1380,12 @@ export async function setTaskArchivedThroughShell(input: {
   taskId: string;
   archived: boolean;
   label?: string;
+  /** [T12] #147 task-level archive choice; archive-only is the Host default. */
+  mode?: "archive-only" | "archive-and-cleanup";
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = {};
   if (input.label !== undefined) payload["label"] = input.label;
+  if (input.mode !== undefined) payload["mode"] = input.mode;
   try {
     return await shellTaskOp(input.taskId, input.archived ? "task/archive" : "task/restore", payload);
   } catch (error) {
@@ -1172,9 +1398,12 @@ export async function cleanupPreviewThroughShell(input: {
   taskId: string;
   selection: { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
   keepRoot?: string;
+  /** [T12] #147 explicit per-repo keep/export/clean choice. */
+  repoScopes?: Readonly<Record<string, "keep" | "export" | "clean">>;
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { selection: input.selection };
   if (input.keepRoot !== undefined) payload["keepRoot"] = input.keepRoot;
+  if (input.repoScopes !== undefined && Object.keys(input.repoScopes).length > 0) payload["repoScopes"] = input.repoScopes;
   try {
     return await shellTaskOp(input.taskId, "task/cleanupPreview", payload);
   } catch (error) {
@@ -1188,10 +1417,13 @@ export async function runCleanupThroughShell(input: {
   selection: { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
   keepRoot?: string;
   label?: string;
+  /** [T12] #147 explicit per-repo keep/export/clean choice. */
+  repoScopes?: Readonly<Record<string, "keep" | "export" | "clean">>;
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { selection: input.selection };
   if (input.keepRoot !== undefined) payload["keepRoot"] = input.keepRoot;
   if (input.label !== undefined) payload["label"] = input.label;
+  if (input.repoScopes !== undefined && Object.keys(input.repoScopes).length > 0) payload["repoScopes"] = input.repoScopes;
   try {
     return await shellTaskOp(input.taskId, "task/runCleanup", payload);
   } catch (error) {

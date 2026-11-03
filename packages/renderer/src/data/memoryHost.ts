@@ -952,7 +952,7 @@ class MemoryHost implements HostAdapter {
     {
       id: "provider-local",
       name: "本地推理",
-      protocol: "openai-chat-completions",
+      protocol: "openai-completions",
       baseUrl: "http://127.0.0.1:11434/v1",
       enabled: true,
       models: [

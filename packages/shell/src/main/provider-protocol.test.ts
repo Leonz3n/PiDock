@@ -16,7 +16,7 @@ const tool = { name: "fs.read", description: "读取文件", inputSchema: { type
 
 describe("provider protocol descriptors", () => {
   it("declares exactly the three supported protocols", () => {
-    expect([...PROVIDER_PROTOCOLS]).toEqual(["anthropic-messages", "openai-responses", "openai-chat-completions"]);
+    expect([...PROVIDER_PROTOCOLS]).toEqual(["anthropic-messages", "openai-responses", "openai-completions"]);
     expect(listProtocolDescriptors().map((item) => item.id)).toEqual([...PROVIDER_PROTOCOLS]);
   });
 
@@ -32,9 +32,9 @@ describe("provider protocol descriptors", () => {
         message: expect.stringContaining("不按供应商名或地址猜测协议"),
       },
     });
-    expect(resolveProtocol({ protocol: "openai-chat-completions", vendorName: "Anthropic" })).toEqual({
+    expect(resolveProtocol({ protocol: "openai-completions", vendorName: "Anthropic" })).toEqual({
       ok: true,
-      protocol: "openai-chat-completions",
+      protocol: "openai-completions",
     });
     expect(resolveProtocol({ protocol: "nope" })).toEqual({
       ok: false,
@@ -86,7 +86,7 @@ describe("protocol request shapes", () => {
   });
 
   it("builds an OpenAI Chat Completions request (system as first message, function.parameters)", () => {
-    const body = buildProtocolRequest("openai-chat-completions", {
+    const body = buildProtocolRequest("openai-completions", {
       model: "qwen3-coder",
       system: "你是助手",
       turns,
@@ -122,12 +122,12 @@ describe("protocol request shapes", () => {
     ).toBeUndefined();
 
     expect(buildProtocolRequest("openai-responses", { model: "gpt-5", turns, reasoning: { tier: "low" } })["reasoning"]).toEqual({ effort: "low" });
-    expect(buildProtocolRequest("openai-chat-completions", { model: "qwen3-coder", turns, reasoning: { tier: "high" } })["reasoning_effort"]).toBe("high");
+    expect(buildProtocolRequest("openai-completions", { model: "qwen3-coder", turns, reasoning: { tier: "high" } })["reasoning_effort"]).toBe("high");
     // Undeclared tier: no parameter is written for any protocol.
     expect(buildProtocolRequest("openai-responses", { model: "gpt-5", turns, reasoning: { tier: "turbo" } })["reasoning"]).toBeUndefined();
-    expect(buildProtocolRequest("openai-chat-completions", { model: "qwen3-coder", turns, reasoning: { tier: "turbo" } })["reasoning_effort"]).toBeUndefined();
+    expect(buildProtocolRequest("openai-completions", { model: "qwen3-coder", turns, reasoning: { tier: "turbo" } })["reasoning_effort"]).toBeUndefined();
     // No reasoning input -> no reasoning field, for every protocol.
-    for (const protocol of ["anthropic-messages", "openai-responses", "openai-chat-completions"]) {
+    for (const protocol of ["anthropic-messages", "openai-responses", "openai-completions"]) {
       const body = buildProtocolRequest(protocol, { model: "m", turns });
       expect(body["thinking"]).toBeUndefined();
       expect(body["reasoning"]).toBeUndefined();
@@ -165,26 +165,26 @@ describe("protocol stream frames", () => {
   });
 
   it("reads OpenAI Chat Completions text, tool and done frames", () => {
-    expect(readProtocolTextFrame("openai-chat-completions", { choices: [{ delta: { content: "你好" } }] })).toBe("你好");
+    expect(readProtocolTextFrame("openai-completions", { choices: [{ delta: { content: "你好" } }] })).toBe("你好");
     expect(
-      readProtocolToolFrame("openai-chat-completions", {
+      readProtocolToolFrame("openai-completions", {
         choices: [{ delta: { tool_calls: [{ id: "call_1", function: { name: "fs.read", arguments: "{}" } }] } }],
       }),
     ).toEqual({ id: "call_1", name: "fs.read", arguments: "{}" });
-    expect(isProtocolDoneFrame("openai-chat-completions", { choices: [{ finish_reason: "stop" }] })).toBe(true);
-    expect(isProtocolDoneFrame("openai-chat-completions", { choices: [{ delta: { content: "x" } }] })).toBe(false);
+    expect(isProtocolDoneFrame("openai-completions", { choices: [{ finish_reason: "stop" }] })).toBe(true);
+    expect(isProtocolDoneFrame("openai-completions", { choices: [{ delta: { content: "x" } }] })).toBe(false);
     expect(
-      readProtocolUsage("openai-chat-completions", { usage: { prompt_tokens: 9, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 1 } } }),
+      readProtocolUsage("openai-completions", { usage: { prompt_tokens: 9, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 1 } } }),
     ).toEqual({ input: 9, output: 2, cacheRead: 1 });
   });
 
   it("reports no usage instead of a fabricated zero when the frame omits it", () => {
     expect(readProtocolUsage("anthropic-messages", { type: "message_stop" })).toBeNull();
-    expect(readProtocolUsage("openai-chat-completions", { choices: [] })).toBeNull();
+    expect(readProtocolUsage("openai-completions", { choices: [] })).toBeNull();
   });
 
   it("normalizes a recorded frame into the shared vocabulary", () => {
-    expect(normalizeProtocolFrame("openai-chat-completions", { choices: [{ delta: { content: "片段" }, finish_reason: null }] })).toEqual({ text: "片段" });
+    expect(normalizeProtocolFrame("openai-completions", { choices: [{ delta: { content: "片段" }, finish_reason: null }] })).toEqual({ text: "片段" });
     expect(normalizeProtocolFrame("anthropic-messages", { type: "message_stop", usage: { input_tokens: 1, output_tokens: 1 } })).toEqual({
       usage: { input: 1, output: 1, cacheRead: 0 },
       done: true,

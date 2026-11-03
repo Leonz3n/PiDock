@@ -53,6 +53,14 @@ export interface SdkAgentToolSpec {
   /** One-line snippet for the prompt. */
   summary: string;
   description: string;
+  /**
+   * Plain JSON Schema (draft-style keywords only: `type`/`required`/
+   * `properties`/`additionalProperties`/`minimum`/`maximum`). No TypeBox and no
+   * `@earendil-works/pi-schema` builder: this package does not import
+   * `pi-schema` directly — pi-ai 1.5 depends on it and compiles exactly this
+   * literal at the SDK boundary, which is what turns a model's arguments into
+   * the values `execute` receives (see `asToolDefinition`).
+   */
   parameters: Record<string, unknown>;
 }
 
@@ -215,11 +223,29 @@ export function sdkAgentToolSpec(name: string): SdkAgentToolSpec | undefined {
   return SDK_AGENT_TOOL_SPECS.find((spec) => spec.name === name);
 }
 
-/** One tool invocation: the Host broker re-validates `args` from scratch. */
-export interface SdkAgentToolRequest {
-  tool: SdkAgentToolName;
-  args: unknown;
+/**
+ * [Pencil T15] #150 the one internal (never model-declared) request that routes
+ * an MCP tool call through the SAME Host permission/approval path as a task
+ * tool. The worker's MCP extension owns the server connection and executes the
+ * call itself; this request is the decision only, sent from its `tool_call`
+ * hook before the extension runs. It is absent from `SDK_AGENT_TOOL_SPECS`, so
+ * the model never sees it and `noTools`/the tool allowlist never list it.
+ */
+export const MCP_TOOL_GATE = "mcp.gate";
+
+export interface SdkMcpGateArgs {
+  /** `mcp__<server>__<tool>` exactly as Pi registered it. */
+  name: string;
+  /** The tool's MCP `readOnlyHint`; the gate decides `read` vs `command` from it. */
+  readOnly: boolean;
+  /** The model's arguments, used for the approval payload version and display. */
+  args: Record<string, unknown>;
 }
+
+/** One tool invocation: the Host broker re-validates `args` from scratch. */
+export type SdkAgentToolRequest =
+  | { tool: SdkAgentToolName; args: unknown }
+  | { tool: typeof MCP_TOOL_GATE; args: SdkMcpGateArgs };
 
 /** What the model reads: a result, or a named refusal it must work around. */
 export interface SdkAgentToolOutcome {
@@ -237,27 +263,62 @@ export interface SdkAgentToolOutcome {
 export type SdkAgentToolCaller = (sessionId: string, request: SdkAgentToolRequest) => Promise<SdkAgentToolOutcome>;
 
 /**
+ * One plain JSON Schema tool as the coding-agent extension type (Pi 1.5).
+ *
+ * Why the two assertions are still needed, and why they hide no argument
+ * semantics (verified against the installed 1.5.0 declarations, not against a
+ * loader's compatibility export):
+ *
+ * - pi-ai 1.5 widened its own tool type to `Tool<TParameters extends object>` and
+ *   validates with `@earendil-works/pi-schema` `compile(schema, {coerce:
+ *   true}).parse(...)`, so the plain JSON Schema literal below is a REAL pi-ai
+ *   tool (`Tool.parameters: object`) and is not converted anywhere;
+ * - pi-agent-core 1.5 widened `AgentTool<TParameters extends object>` the same
+ *   way, so a plain JSON Schema is a real agent tool too;
+ * - `pi-coding-agent` 1.5 still declares the extension boundary as
+ *   `ToolDefinition<TParams extends TSchema = TSchema>` (`core/extensions/types.d.ts:13,472`)
+ *   where `TSchema` is TypeBox's. Only that *type* is narrower than the runtime:
+ *   `createAgentSession({customTools})` reads `name`/`label`/`description`/
+ *   `parameters`/`execute` and never asks TypeBox to compile anything, so the
+ *   object is accepted as written.
+ *
+ * `execute` receives pi-schema's validated, coerced output (pi-agent-core
+ * `prepareToolCall` -> `validateToolArguments` -> `executePreparedToolCall`), not
+ * the raw model arguments, which is why it takes `unknown` and why the Host
+ * re-validates it from scratch (`sdk-agent-tool-broker.ts`). The assertions are
+ * therefore a type-level adapter for an upstream type that has not been widened;
+ * nothing is rewritten at runtime, and no schema is synthesized behind the Host's
+ * back.
+ */
+function asToolDefinition(spec: SdkAgentToolSpec, execute: (toolCallId: string, params: unknown) => Promise<{ content: { type: "text"; text: string }[]; details: undefined }>): ToolDefinition {
+  return ({
+    name: spec.name,
+    label: spec.name,
+    description: spec.description,
+    promptSnippet: spec.summary,
+    // Cast #1 of 2: `Record<string, unknown>` (the plain JSON Schema literal this
+    // module owns) -> the coding-agent `TSchema`-typed field. The value is passed
+    // through unchanged; see the comment above.
+    parameters: spec.parameters as ToolDefinition["parameters"],
+    // A mutating tool must not interleave with another one; reads may run
+    // alongside each other (the agent default is parallel).
+    executionMode: spec.kind === "read" ? "parallel" : "sequential",
+    execute,
+    // Cast #2 of 2: the whole declaration, same reason (the upstream generic).
+  }) as unknown as ToolDefinition;
+}
+
+/**
  * Build the pi tool definitions one AgentSession declares. `sessionId` is the
  * session whose JSONL this AgentSession owns: the kernel builds its tools per
  * session, so the request always names the session the gate must decide for.
  */
 export function buildSdkAgentToolDefinitions(sessionId: string, call: SdkAgentToolCaller): ToolDefinition[] {
-  return SDK_AGENT_TOOL_SPECS.map(
-    (spec) =>
-      ({
-        name: spec.name,
-        label: spec.name,
-        description: spec.description,
-        promptSnippet: spec.summary,
-        parameters: spec.parameters as ToolDefinition["parameters"],
-        // A mutating tool must not interleave with another one; reads may run
-        // alongside each other (the agent default is parallel).
-        executionMode: spec.kind === "read" ? "parallel" : "sequential",
-        async execute(_toolCallId: string, params: unknown) {
-          const outcome = await call(sessionId, { tool: spec.name, args: params });
-          return { content: [{ type: "text" as const, text: outcome.text }], details: undefined };
-        },
-      }) as unknown as ToolDefinition,
+  return SDK_AGENT_TOOL_SPECS.map((spec) =>
+    asToolDefinition(spec, async (_toolCallId: string, params: unknown) => {
+      const outcome = await call(sessionId, { tool: spec.name, args: params });
+      return { content: [{ type: "text" as const, text: outcome.text }], details: undefined };
+    }),
   );
 }
 
@@ -273,9 +334,9 @@ export function sdkAgentSystemPrompt(input: { taskDir: string; worktrees: readon
     `Task folder: ${input.taskDir}`,
     "Worktrees you may write to:",
     worktrees,
-    "You may read files anywhere inside the task folder (the Host's own `.pidock-*` state and `task.json` are not task content). Every path and command working directory must stay inside this task; a path that escapes (an absolute path outside, `..`, a symlink pointing outside, an original checkout, another task or an application-private path) is refused before it takes effect.",
+    "You may read files anywhere inside the task folder (the Host's own `.pidock-*` state and `task.json` are not task content). Every path and command working directory must stay inside this task; a path that escapes (an absolute path outside, `..`, a symlink pointing outside, an original checkout, another task or an application-private path) is refused before it takes effect. The one read-only exception is `fs.read` of a skill's advertised absolute `SKILL.md` location and the relative files it references, when that skill comes from an enabled local Skills source; that exception never allows a write, a command or a directory listing outside the task.",
     "Available tools:",
-    "- fs.read: read a file (args: path, optional offset/limit)",
+    "- fs.read: read a file (args: path, optional offset/limit); an advertised skill `SKILL.md` stays readable wherever its enabled source is",
     "- fs.search: list a directory or search files by pattern (args: path, optional pattern)",
     "- fs.write: create or overwrite a file in a worktree (args: path, content)",
     "- exec.run: run a shell command in a worktree (args: command, optional cwd)",

@@ -3,7 +3,7 @@
  * readers (no filesystem, no git) and secret masking at the boundary.
  */
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TaskDiskRecord } from "./task-store.js";
@@ -51,6 +51,8 @@ function readers(overrides: Partial<WorkspaceFileReaders> = {}): WorkspaceFileRe
     runGit: () => ({ ok: true, stdout: "" }),
     // Tests that do not care about symlinks: every path is its own real path.
     realPath: (path) => path,
+    identity: (path) => ({ kind: "dir", realPath: path, device: "1", inode: "1" }),
+    statFile: () => ({ kind: "file", size: 0, mtimeMs: 0 }),
     ...overrides,
   };
 }
@@ -199,6 +201,39 @@ describe("TaskWorkspaceFiles", () => {
     if (preview.ok) return;
     expect(preview.error).toContain("path-out-of-scope");
     expect(files.preview({ rootId: "repo", relative: "api.ts" }).ok).toBe(true);
+  });
+
+  // [Pencil T19] #145 B2: the send-time re-check must observe the FILE on disk.
+  // This test moves a real temp file and asks the real reader again: the root
+  // still exists, the chip's own path does not.
+  it("reports a real temp file as present, then missing after it is moved on disk", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pidock-files-stat-"));
+    try {
+      const root = join(dir, "repo");
+      mkdirSync(root);
+      writeFileSync(join(root, "plan.md"), "the plan\n");
+      const disk = memoryTaskStore();
+      disk.writeTask(dir, { ...record(), taskDir: dir, root: dir, repos: ["repo"], repoSources: [] });
+      const files = new TaskWorkspaceFiles("task-aaaaaaaa", dir, disk, realWorkspaceFileReaders);
+
+      expect(files.stat({ rootId: "repo", relative: "plan.md" })).toMatchObject({
+        ok: true, stat: { path: "plan.md", kind: "file", exists: true },
+      });
+      // A real move on disk: the original source path is gone, the file is not.
+      renameSync(join(root, "plan.md"), join(root, "plan.md.moved"));
+      const moved = files.stat({ rootId: "repo", relative: "plan.md" });
+      expect(moved).toMatchObject({ ok: true, stat: { path: "plan.md", kind: "missing", exists: false } });
+      expect(files.stat({ rootId: "repo", relative: "plan.md.moved" })).toMatchObject({
+        ok: true, stat: { path: "plan.md.moved", kind: "file", exists: true },
+      });
+      // The root is still valid and the new name is visible: nothing was
+      // silently repaired back to a same-named file under another root.
+      expect(files.stat({ rootId: "repo", relative: "plan.md.moved" }).ok).toBe(true);
+      expect(files.stat({ rootId: "repo", relative: "../outside.md" }).ok).toBe(false);
+      expect(files.stat({ rootId: "unknown", relative: "plan.md" }).ok).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it.skipIf(process.platform === "win32")("refuses real POSIX sibling links with literal backslashes in tree, preview and diff", () => {

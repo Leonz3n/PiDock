@@ -14,27 +14,6 @@ import { renderApp } from "./helpers";
  * match the store, and that the filters really narrow the view.
  */
 describe("management pages alignment ([UI 对齐 09] #33)", () => {
-  it("shows the provider page head, the symbol block and the per-model chips", async () => {
-    renderApp("/providers");
-    const page = await screen.findByTestId("providers-page");
-
-    expect(within(page).getByText("MODELS")).toBeInTheDocument();
-    expect(within(page).getByRole("heading", { name: "模型与 Provider" })).toBeInTheDocument();
-    expect(within(page).getByRole("button", { name: "添加 Provider" })).toBeInTheDocument();
-
-    const providers = useHostStore.getState().workspace?.providers ?? [];
-    expect(within(page).getAllByText(/^[✳◎↗]$/)).toHaveLength(providers.length);
-    for (const provider of providers) {
-      const card = page.querySelector(`[data-testid="provider-card-${provider.id}"]`) as HTMLElement;
-      expect(card).not.toBeNull();
-      // The chip is `模型 · 窗口 · 图片`, and the credential line is the
-      // prototype's wording with this app's truth (a reference, not a secret).
-      expect(within(card).getByTestId(`provider-models-${provider.id}`).textContent).toContain(`${provider.models[0]!.contextWindow}k`);
-      expect(within(card).getByTestId(`provider-credentials-${provider.id}`).textContent).toContain(`${provider.models.length} 个模型`);
-      expect(within(card).getByTestId(`provider-endpoint-${provider.id}`).textContent).toBe(provider.baseUrl);
-    }
-  });
-
   it("derives every usage number from the store instead of the prototype's sample", async () => {
     renderApp("/usage");
     const page = await screen.findByTestId("usage-page");

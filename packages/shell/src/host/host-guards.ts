@@ -20,8 +20,17 @@ import { isExternalResourceKind } from "../main/service-runs.js";
 import { checkReferencePayload } from "../main/composer-references.js";
 import { REMOTE_ENTRY_MODES } from "../main/remote-rules.js";
 import { MAX_EDITOR_ARGS, MAX_EDITOR_ARG_CHARS } from "../main/external-editor.js";
+import { variableNameRefusal } from "../main/workspace-variables.js";
+import { SKILL_CONFIG_FILE } from "./skill-sources.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
+
+/** The SDK's own thinking levels (Pi 1.5.0); anything else never reaches the context. */
+export const MODEL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+export function isModelThinkingLevel(value: unknown): value is (typeof MODEL_THINKING_LEVELS)[number] {
+  return typeof value === "string" && (MODEL_THINKING_LEVELS as readonly string[]).includes(value);
+}
 
 export type HostTaskRouteResult = "routable" | "task-workspace-mismatch" | "invalid-params";
 
@@ -363,6 +372,12 @@ export function buildHostEnv(
   protectedProfile?: string,
   defaultRoot?: string,
   platform: NodeJS.Platform = process.platform,
+  /**
+   * [Pencil T09] #144 effective workspace/task variables for this task. They are
+   * applied after the Host's own bindings; a reserved/credential-shaped name or
+   * an invalid value fails the fork by name instead of being silently dropped.
+   */
+  variables?: Record<string, string>,
 ): Record<string, string> {
   if (typeof workspaceId !== "string" || workspaceId.length === 0 || workspaceId.includes("\0")) {
     throw new Error("invalid-payload: workspaceId must be a non-empty string");
@@ -380,6 +395,10 @@ export function buildHostEnv(
       throw new Error("invalid-payload: protected profile must be absolute");
     }
     env["PIDOCK_PROTECTED_PROFILE"] = protectedProfile;
+    // [#151] The app-private Skills source document is derived from the same
+    // protected profile, never from a payload: a renderer can name a directory
+    // to add, but not the config file the Host reads.
+    env["PIDOCK_SKILL_SOURCES_FILE"] = `${protectedProfile.replace(/[\\/]+$/, "")}/${SKILL_CONFIG_FILE}`;
   }
   if (task !== undefined) {
     if (typeof task.taskId !== "string" || task.taskId.length === 0 || task.taskId.includes("\0")) {
@@ -390,6 +409,21 @@ export function buildHostEnv(
     }
     env["PIDOCK_TASK_ID"] = task.taskId;
     env["PIDOCK_TASK_DIR"] = task.taskDir;
+  }
+  if (variables !== undefined) {
+    for (const [key, value] of Object.entries(variables)) {
+      const refusal = variableNameRefusal(key);
+      if (refusal !== null) throw new Error(`host-env-invalid: ${key}`);
+      if (typeof value !== "string" || value.length > 4096 || value.includes("\0") || /[\r\n]/.test(value)) {
+        throw new Error(`host-env-invalid: ${key}`);
+      }
+      // Windows environment names are case-insensitive; the reserved list already
+      // covers the OS inputs, so this is only a defence against a future alias.
+      for (const inherited of Object.keys(env)) {
+        if (inherited !== key && inherited.toUpperCase() === key.toUpperCase()) delete env[inherited];
+      }
+      env[key] = value;
+    }
   }
   return env;
 }
@@ -448,8 +482,17 @@ export function validateHostTaskOp(
     if (keys.length !== 1 || keys[0] !== "provider") return { ok: false, error: "invalid-sdk-payload: extra key" };
     const provider = payload["provider"];
     if (provider === null) return { ok: true };
-    if (!isRecord(provider) || Object.keys(provider).sort().join(",") !== "config,credential" || !isRecord(provider["config"])) {
+    // `thinkingLevel` is the level the user chose (main resolved it against the
+    // model's declared capability). Main sends it, so the envelope must accept
+    // it — otherwise every real install fails as an invalid payload.
+    if (!isRecord(provider)) return { ok: false, error: "invalid-sdk-provider" };
+    const providerShape = Object.keys(provider).sort().join(",");
+    if (providerShape !== "config,credential" && providerShape !== "config,credential,thinkingLevel") {
       return { ok: false, error: "invalid-sdk-provider" };
+    }
+    if (!isRecord(provider["config"])) return { ok: false, error: "invalid-sdk-provider" };
+    if (provider["thinkingLevel"] !== undefined && !isModelThinkingLevel(provider["thinkingLevel"])) {
+      return { ok: false, error: "invalid-sdk-provider-thinking-level" };
     }
     const credential = provider["credential"];
     // Same floor as the isolated context itself, so a value that cannot work is
@@ -486,6 +529,38 @@ export function validateHostTaskOp(
         ok: false,
         error: "invalid-payload: task/provision requires a payload object",
       };
+    // [Pencil T02] #137 workspace mode + existing-Git-dir sources. Optional
+    // shapes; semantic consistency (mode vs selected sources) is enforced in
+    // `TaskWorkspaceHost.provision`/main. Unknown shapes fail closed.
+    if (payload["workspaceMode"] !== undefined &&
+        payload["workspaceMode"] !== "worktree" && payload["workspaceMode"] !== "existing-git" && payload["workspaceMode"] !== "plain-dirs") {
+      return { ok: false, error: "invalid-payload: task/provision.workspaceMode must be a known mode" };
+    }
+    if (payload["sharedRepos"] !== undefined) {
+      const value = payload["sharedRepos"];
+      if (!Array.isArray(value) || !value.every((entry) =>
+        typeof entry === "object" && entry !== null && !Array.isArray(entry) &&
+        typeof (entry as Record<string, unknown>)["rootId"] === "string" &&
+        typeof (entry as Record<string, unknown>)["sourcePath"] === "string" &&
+        typeof (entry as Record<string, unknown>)["remote"] === "string" &&
+        typeof (entry as Record<string, unknown>)["remoteBranch"] === "string" &&
+        typeof (entry as Record<string, unknown>)["headCommit"] === "string" &&
+        typeof (entry as Record<string, unknown>)["commonDir"] === "string" &&
+        typeof (entry as Record<string, unknown>)["remoteDigest"] === "string")) {
+        return { ok: false, error: "invalid-payload: task/provision.sharedRepos must be an array of {rootId, sourcePath, remote, remoteBranch, headCommit, commonDir, remoteDigest}" };
+      }
+    }
+    if (payload["repoIdentities"] !== undefined) {
+      const value = payload["repoIdentities"];
+      if (
+        typeof value !== "object" || value === null || Array.isArray(value) ||
+        !Object.values(value as Record<string, unknown>).every((entry) =>
+          typeof entry === "object" && entry !== null && !Array.isArray(entry) &&
+          typeof (entry as Record<string, unknown>)["sourcePath"] === "string")
+      ) {
+        return { ok: false, error: "invalid-payload: task/provision.repoIdentities must map repo names to identity objects" };
+      }
+    }
     // #6 multi-repo + plain-dir fields (all optional, shape-checked here;
     // semantic validation — per-repo pin gates, link snapshots — runs in
     // `TaskWorkspaceHost.provision`). Unknown shapes fail closed.
@@ -555,9 +630,25 @@ export function validateHostTaskOp(
       }
       return { ok: true };
     }
+    // [Pencil T13] #148 `branch` is the task branch main already created from
+    // the saved convention; it lands in the record and in git argv, so it is
+    // shape-checked here (safety rules shared with the append path).
+    //
+    // [Pencil T19] #137/#142 regression: only a WORKTREE task owns a task
+    // branch. Main writes `branch: ""` for `plain-dirs` and `existing-git`
+    // (they create no branch at all), so an empty value is accepted EXACTLY for
+    // those two modes; a worktree task with an empty branch is still refused.
+    const branch = payload["branch"];
+    if (branch !== undefined) {
+      const branchlessMode = payload["workspaceMode"] === "plain-dirs" || payload["workspaceMode"] === "existing-git";
+      if (!(branchlessMode && branch === "") && !isSafeTaskBranchRef(branch)) {
+        return { ok: false, error: "invalid-payload: task/provision.branch must be a safe task branch ref" };
+      }
+    }
     const hasRepos = (Array.isArray(payload["repoSelections"]) && payload["repoSelections"].length > 0) ||
       (Array.isArray(payload["repos"]) && payload["repos"].length > 0);
     const hasPlainDirs = Array.isArray(payload["plainDirs"]) && payload["plainDirs"].length > 0;
+    const hasSharedRepos = Array.isArray(payload["sharedRepos"]) && payload["sharedRepos"].length > 0;
     const name = payload["name"];
     if (typeof name !== "string" || name.trim().length === 0) {
       return {
@@ -565,7 +656,8 @@ export function validateHostTaskOp(
         error: "invalid-payload: task/provision.name must be a non-empty string",
       };
     }
-    if (hasRepos || !hasPlainDirs) {
+    // Existing-Git-dir mode pins no remote commit: it uses the checkout as-is.
+    if (payload["workspaceMode"] !== "existing-git" && (hasRepos || (!hasPlainDirs && !hasSharedRepos))) {
       for (const key of ["remoteBranch", "fetchedCommit"] as const) {
         const value = payload[key];
         if (typeof value !== "string" || value.trim().length === 0) {
@@ -1266,6 +1358,68 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [Pencil T04] #139 task-wide session identity. Envelope shape only: which
+  // sessions exist, which one is active, whether the target model is declared by
+  // the installed Provider and whether the stored context fits it are decided
+  // Host-side (`host.ts` `applySessionBinding`, `session-index.ts`).
+  if (op === "task/sessionList") {
+    if (payload !== undefined && !isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionList takes no fields" };
+    return { ok: true };
+  }
+  if (op === "task/sessionCreate") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionCreate requires a payload object" };
+    const name = payload["name"];
+    if (name !== undefined && (typeof name !== "string" || name.trim().length === 0 || name.length > 40)) {
+      return { ok: false, error: "invalid-payload: task/sessionCreate.name must be 1-40 characters" };
+    }
+    const permission = payload["permission"];
+    if (permission !== undefined && permission !== "read" && permission !== "default" && permission !== "auto") {
+      return { ok: false, error: "invalid-payload: task/sessionCreate.permission must be read/default/auto" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/sessionRename") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionRename requires a payload object" };
+    if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionRename.sessionId must be a non-empty string" };
+    }
+    if (typeof payload["name"] !== "string" || payload["name"].trim().length === 0 || payload["name"].length > 40) {
+      return { ok: false, error: "invalid-payload: task/sessionRename.name must be 1-40 characters" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/sessionArchive" || op === "task/sessionRestore" || op === "task/sessionDelete" ||
+      op === "task/sessionStop" || op === "task/sessionActivate" || op === "task/sessionReadout") {
+    if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
+      return { ok: false, error: `invalid-payload: ${op}.sessionId must be a non-empty string` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/sessionModel") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionModel requires a payload object" };
+    if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionModel.sessionId must be a non-empty string" };
+    }
+    if (typeof payload["modelId"] !== "string" || payload["modelId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionModel.modelId must be a non-empty string" };
+    }
+    const level = payload["thinkingLevel"];
+    if (level !== undefined && level !== null && typeof level !== "string") {
+      return { ok: false, error: "invalid-payload: task/sessionModel.thinkingLevel must be a string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/sessionReasoning") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionReasoning requires a payload object" };
+    if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionReasoning.sessionId must be a non-empty string" };
+    }
+    if (typeof payload["level"] !== "string" || payload["level"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionReasoning.level must be a non-empty string" };
+    }
+    return { ok: true };
+  }
   if (op === "task/setSessionModel") {
     if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/setSessionModel requires a payload object" };
     for (const key of ["sessionId", "providerId", "model"] as const) {
@@ -1319,7 +1473,7 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
-  if (op === "task/fileTree" || op === "task/filePreview" || op === "task/fileDiff" || op === "task/deliveryInfo") {
+  if (op === "task/fileTree" || op === "task/fileStat" || op === "task/filePreview" || op === "task/fileDiff" || op === "task/deliveryInfo") {
     if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
     const rootId = payload["rootId"];
     if (typeof rootId !== "string" || rootId.trim().length === 0) {
@@ -1329,9 +1483,51 @@ export function validateHostTaskOp(
     if (relative !== undefined && typeof relative !== "string") {
       return { ok: false, error: `invalid-payload: ${op}.relative must be a string` };
     }
-    // A preview reads one file: an explicit relative path is required.
-    if (op === "task/filePreview" && (typeof relative !== "string" || relative.trim().length === 0)) {
-      return { ok: false, error: "invalid-payload: task/filePreview.relative must be a non-empty string" };
+    // A preview/stat reads one path: an explicit relative path is required.
+    if ((op === "task/filePreview" || op === "task/fileStat") && (typeof relative !== "string" || relative.trim().length === 0)) {
+      return { ok: false, error: `invalid-payload: ${op}.relative must be a non-empty string` };
+    }
+    return { ok: true };
+  }
+  // [Pencil T13] #148 explicit Git delivery. Shape only here: which roots a
+  // task has, which branch a checkout is on, and whether the remote resolves
+  // are decided Host-side from real git reads, never from the page.
+  if (op === "task/deliverySettings" || op === "task/deliveryPlan") {
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: `invalid-payload: ${op} payload must be an object` };
+    }
+    if (isRecord(payload) && Object.keys(payload).length > 0) {
+      return { ok: false, error: `invalid-payload: ${op} accepts no keys; the Host reads its own settings and repositories` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/saveDeliverySettings") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/saveDeliverySettings requires a payload object" };
+    const keys = Object.keys(payload).sort().join(",");
+    if (keys !== "branchTemplate,remote") {
+      return { ok: false, error: "invalid-payload: task/saveDeliverySettings requires exactly branchTemplate and remote" };
+    }
+    if (typeof payload["branchTemplate"] !== "string" || typeof payload["remote"] !== "string" ||
+        payload["branchTemplate"].length > 200 || payload["remote"].length > 100) {
+      return { ok: false, error: "invalid-payload: task/saveDeliverySettings values must be bounded strings" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/deliveryCommit" || op === "task/deliveryPush") {
+    if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    const allowed = op === "task/deliveryCommit" ? ["branch", "commitMessage", "repoIds"] : ["branch", "repoIds"];
+    const extra = Object.keys(payload).filter((key) => !allowed.includes(key));
+    if (extra.length > 0) return { ok: false, error: `invalid-payload: ${op} 不接受 ${extra.sort().join(",")}` };
+    if (!isSafeTaskBranchRef(payload["branch"])) {
+      return { ok: false, error: `invalid-payload: ${op}.branch must be a safe branch name` };
+    }
+    if (op === "task/deliveryCommit" && (typeof payload["commitMessage"] !== "string" || payload["commitMessage"].trim().length === 0 || payload["commitMessage"].length > 5000)) {
+      return { ok: false, error: "invalid-payload: task/deliveryCommit.commitMessage must be a bounded non-empty string" };
+    }
+    const repoIds = payload["repoIds"];
+    if (repoIds !== undefined && (!Array.isArray(repoIds) || repoIds.length > 30 ||
+        !repoIds.every((id) => typeof id === "string" && id.trim().length > 0 && id.length <= 200))) {
+      return { ok: false, error: `invalid-payload: ${op}.repoIds must be a bounded array of repository ids` };
     }
     return { ok: true };
   }
@@ -1652,6 +1848,18 @@ export function validateHostTaskOp(
     if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
     if (typeof payload["scheduleId"] !== "string" || payload["scheduleId"].length === 0) {
       return { ok: false, error: `invalid-payload: ${op}.scheduleId must be a non-empty string` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/scheduleWake") {
+    // [Pencil T18] #153: main supplies the resume instant; it is a timestamp,
+    // never a path or a task target.
+    if (payload !== undefined && !isRecord(payload)) {
+      return { ok: false, error: "invalid-payload: task/scheduleWake payload must be an object" };
+    }
+    const at = payload === undefined ? undefined : payload["at"];
+    if (at !== undefined && (typeof at !== "string" || at.length === 0 || Number.isNaN(Date.parse(at)))) {
+      return { ok: false, error: "invalid-payload: task/scheduleWake.at must be an ISO timestamp" };
     }
     return { ok: true };
   }

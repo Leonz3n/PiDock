@@ -5,7 +5,6 @@ export type Route =
   | { view: "project"; projectId: string }
   | { view: "task"; projectId: string; taskId: string; sessionId: string }
   | { view: "env" }
-  | { view: "providers" }
   | { view: "usage" }
   | { view: "schedules" }
   | { view: "capabilities" }
@@ -22,7 +21,6 @@ export const ROUTE_LABELS: Record<Route["view"], string> = {
   project: "项目总览",
   task: "任务工作区",
   env: "环境与服务",
-  providers: "模型与 Provider",
   usage: "Token 用量",
   schedules: "定时任务",
   capabilities: "能力管理",
@@ -31,7 +29,7 @@ export const ROUTE_LABELS: Record<Route["view"], string> = {
   settings: "本机设置",
 };
 
-const simpleViews = ["env", "providers", "usage", "schedules", "capabilities", "remote", "archive", "attention", "settings"] as const;
+const simpleViews = ["env", "usage", "schedules", "capabilities", "remote", "archive", "attention", "settings"] as const;
 
 type SimpleView = (typeof simpleViews)[number];
 

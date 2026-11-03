@@ -272,24 +272,6 @@ describe("capability sources, versions and MCP ([PiDock 16] #18)", () => {
   });
 });
 
-describe("provider editing", () => {
-  it("edits and removes a provider profile", async () => {
-    const user = userEvent.setup();
-    renderApp("/providers");
-    await screen.findByRole("heading", { name: "模型与 Provider" });
-
-    await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    const dialog = await screen.findByRole("dialog", { name: "编辑 Provider" });
-    const name = within(dialog).getByLabelText("显示名称");
-    await user.clear(name);
-    await user.type(name, "Anthropic 官方 2");
-    await user.click(within(dialog).getByRole("button", { name: "保存" }));
-
-    expect(await screen.findByText("已保存 Provider 配置；凭据只保存引用，不写入共享模板与日志")).toBeInTheDocument();
-    expect(await screen.findByText("Anthropic 官方 2")).toBeInTheDocument();
-  });
-});
-
 describe("session permission picker", () => {
   it("switches the tier and preserves the composer draft", async () => {
     const user = userEvent.setup();

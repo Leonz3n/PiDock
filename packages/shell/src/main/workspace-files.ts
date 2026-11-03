@@ -34,8 +34,38 @@ import { scrubSecretText } from "./browser-rules.js";
 export const WORKSPACE_ROOT_KIND_WORKTREE = "worktree";
 /** A plain-directory link: a shared view of its original target. */
 export const WORKSPACE_ROOT_KIND_SHARED_DIR = "shared-dir";
+/** An existing registered Git checkout used in place (shared original, no copy). */
+export const WORKSPACE_ROOT_KIND_EXISTING_GIT = "existing-git";
 
-export type WorkspaceRootKind = "worktree" | "shared-dir";
+export type WorkspaceRootKind = "worktree" | "shared-dir" | "existing-git";
+
+/**
+ * How one task treats its Git sources ([Pencil T02] #137): an independent
+ * worktree per repo (the default), an existing registered checkout used in
+ * place, or no Git source at all (plain directories only). Plain-directory
+ * sources share their original files in every mode.
+ */
+export type WorkspaceMode = "worktree" | "existing-git" | "plain-dirs";
+
+/**
+ * Per-source reopen verification ([Pencil T02] #137).
+ * - `missing` / `mismatch` name a source that moved, disappeared or was replaced;
+ * - `repair-required` names a record that cannot be verified at all (its
+ *   identity is not stored);
+ * - `branch-mismatch` / `base-mismatch` ([Pencil T08] #143) name a worktree
+ *   whose PATH still exists but whose branch or pinned baseline no longer
+ *   matches the task binding: the checkout was moved onto another branch or its
+ *   lineage was replaced, so reopening requires an explicit repair instead of a
+ *   silent re-creation.
+ * Never a silent rewrite: the record is the record, this is a reading of it.
+ */
+export type WorkspaceVerificationState = "ready" | "missing" | "mismatch" | "repair-required" | "branch-mismatch" | "base-mismatch";
+
+export interface WorkspaceVerification {
+  state: WorkspaceVerificationState;
+  /** Named reason the state is not `ready` (or the confirmation when it is). */
+  reason: string;
+}
 
 /** Max roots one task file panel lists; a bounded list, never unbounded growth. */
 export const MAX_WORKSPACE_ROOTS = 32;
@@ -95,6 +125,27 @@ export interface WorkspaceRoot {
   dirty?: WorkspaceObservation<boolean>;
   /** Worktree only: pinned baseline commit the diff compares against. */
   baseCommit?: string;
+  /**
+   * Worktree only, RECORDED: the registered source checkout the worktree came
+   * from, as its resolved real path ([Pencil T07] #142, #137 leftover). The
+   * worktree path alone cannot tell WHICH original repository this task reads
+   * and writes around, so the facts surface shows both.
+   */
+  sourceRealPath?: string;
+  /**
+   * Existing-git only: this root is the original checkout itself, not a copy.
+   * Writes modify the original files and there is no task baseline to diff or
+   * deliver against.
+   */
+  sharedOriginal?: boolean;
+  /** Existing-git only, OBSERVED: the checkout's real HEAD commit at read time. */
+  headCommit?: WorkspaceObservation<string>;
+  /**
+   * Every source: the per-source result of re-verifying the recorded identity
+   * on open. Absent only on a payload that carries no verification at all. A
+   * missing/mismatched source is a named state, never an empty list.
+   */
+  verification?: WorkspaceVerification;
 }
 
 /**
@@ -107,9 +158,19 @@ export interface WorkspaceRootsInput {
   /** Worktree folder names inside the task folder (single-repo tasks: one). */
   repos: readonly string[];
   /** Per-repo baselines ([PiDock 03] #6); absent on pre-#6 records. */
-  repoSources?: readonly { repoDir: string; remoteBranch: string; baseCommit?: string }[];
+  repoSources?: readonly { repoDir: string; remoteBranch: string; baseCommit?: string; sourceRealPath?: string }[];
   /** Plain-directory links ([PiDock 03] #6). */
   dirLinks?: readonly { linkName: string; directoryId: string; sourcePath: string }[];
+  /** Existing-Git-dir sources ([Pencil T02] #137): the registered checkout in place. */
+  sharedRepos?: readonly {
+    rootId: string;
+    sourcePath: string;
+    remote: string;
+    remoteBranch: string;
+    headCommit: string;
+  }[];
+  /** Recorded task workspace mode; absent on pre-#137 records. */
+  workspaceMode?: WorkspaceMode;
   /** Pinned baseline branch of the task when no per-repo source exists. */
   baselineBranch?: string;
   /** The task's own declared branch (record `branch`); same for every worktree. */
@@ -133,12 +194,14 @@ export function workspaceRoots(input: WorkspaceRootsInput): WorkspaceRoot[] {
   const roots: WorkspaceRoot[] = [];
   const branchByRepo = new Map((input.repoSources ?? []).map((source) => [source.repoDir, source.remoteBranch] as const));
   const baseByRepo = new Map((input.repoSources ?? []).map((source) => [source.repoDir, source.baseCommit] as const));
+  const sourceRealPathByRepo = new Map((input.repoSources ?? []).map((source) => [source.repoDir, source.sourceRealPath] as const));
   const seen = new Set<string>();
   for (const repoDir of input.repos) {
     const id = repoDir.trim();
     if (id.length === 0 || seen.has(id)) continue;
     seen.add(id);
     const baseCommit = baseByRepo.get(id) ?? input.baseCommit;
+    const sourceRealPath = sourceRealPathByRepo.get(id);
     roots.push({
       id,
       kind: "worktree",
@@ -148,6 +211,25 @@ export function workspaceRoots(input: WorkspaceRootsInput): WorkspaceRoot[] {
       baselineBranch: branchByRepo.get(id) ?? input.baselineBranch ?? "",
       ...(input.taskBranch !== undefined && input.taskBranch.length > 0 ? { expectedBranch: input.taskBranch } : {}),
       ...(baseCommit !== undefined && baseCommit.length > 0 ? { baseCommit } : {}),
+      ...(sourceRealPath !== undefined && sourceRealPath.length > 0 ? { sourceRealPath } : {}),
+    });
+  }
+  // Existing-Git-dir sources ([Pencil T02] #137): the root IS the registered
+  // checkout, so its path is the source path — never a task-folder child. The
+  // task folder holds only the record, so a shared checkout cannot be mistaken
+  // for an independent copy.
+  for (const repo of input.sharedRepos ?? []) {
+    const id = repo.rootId.trim();
+    if (id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    roots.push({
+      id,
+      kind: "existing-git",
+      label: repo.sourcePath.split(/[\\/]/).filter((part) => part.length > 0).pop() ?? id,
+      path: repo.sourcePath,
+      repoDir: id,
+      baselineBranch: repo.remoteBranch,
+      sharedOriginal: true,
     });
   }
   for (const link of input.dirLinks ?? []) {
@@ -190,6 +272,18 @@ export interface WorkspaceAttribution {
 }
 
 export function workspaceAttribution(root: WorkspaceRoot, taskId: string, taskDir: string): WorkspaceAttribution {
+  if (root.kind === "existing-git") {
+    return {
+      taskId,
+      rootId: root.id,
+      rootKind: root.kind,
+      rootLabel: root.label,
+      repo: root.repoDir ?? root.id,
+      piWorkDir: taskDir,
+      sourcePath: root.path,
+      sharedNote: "已有 Git 目录：直接使用原检出，修改影响原文件，不提供任务基线差异与交付",
+    };
+  }
   if (root.kind === "shared-dir") {
     return {
       taskId,
@@ -396,6 +490,12 @@ export function boundDiff(input: {
   diff: string;
   secrets?: readonly string[];
 }): WorkspaceDiffResult {
+  if (input.root.kind === "existing-git") {
+    return {
+      ok: false,
+      error: `shared-checkout-no-diff: ${input.root.label} 是已有 Git 目录（共享原检出），没有任务基线可比较；请到原目录用 Git 工具查看`,
+    };
+  }
   if (input.root.kind !== "worktree") {
     return {
       ok: false,
@@ -439,6 +539,12 @@ export function deliveryTarget(input: {
   taskId: string;
   taskDir: string;
 }): WorkspaceDeliveryResult {
+  if (input.root.kind === "existing-git") {
+    return {
+      ok: false,
+      error: `shared-checkout-no-delivery: ${input.root.label} 是已有 Git 目录（共享原检出），没有任务分支可交付；请到原目录处理`,
+    };
+  }
   if (input.root.kind !== "worktree") {
     return {
       ok: false,
@@ -458,4 +564,94 @@ export function deliveryTarget(input: {
       autoMerge: false,
     },
   };
+}
+
+/**
+ * Recorded identity of one source ([Pencil T02] #137): what the task record
+ * says the source is. Every field but `path` is optional because older records
+ * did not store it; an unverifiable record is `repair-required`, never a
+ * silent pass.
+ */
+export interface RecordedSourceIdentity {
+  /** The path recorded for the source (checkout, link target or worktree). */
+  path: string;
+  /** Real path observed when the source was recorded. */
+  realPath?: string;
+  /** Device/inode observed when the source was recorded. */
+  device?: string;
+  inode?: string;
+  /** Git common dir observed when the source was recorded. */
+  commonDir?: string;
+  /** Remote URL digest observed when the source was recorded. */
+  remoteDigest?: string;
+}
+
+/**
+ * What the filesystem really answered for one source now. `missing` and
+ * `other` are answers, not errors: a path that is gone or no longer a
+ * directory is exactly the named state the facts surface must show.
+ */
+export interface ObservedSourceIdentity {
+  kind: "dir" | "other" | "missing";
+  realPath?: string;
+  device?: string;
+  inode?: string;
+  /** Current Git common dir; `null` when it could not be read. */
+  commonDir?: string | null;
+  /** Current remote URL digest; `null` when it could not be read. */
+  remoteDigest?: string | null;
+}
+
+/**
+ * Re-verify one source's recorded identity ([Pencil T02] #137 bullet 4).
+ *
+ * Rules:
+ * - a missing path is `missing`; a non-directory is `mismatch`;
+ * - a different real path or device/inode is `mismatch` (the directory was
+ *   moved or replaced at the same path);
+ * - a record without device/inode cannot be verified at all and is
+ *   `repair-required` — it is never treated as verified by default;
+ * - a recorded Git common dir / remote digest that differs is `mismatch`;
+ *   one that cannot be read is `repair-required`.
+ *
+ * The reason is always a named sentence, so the facts surface never shows a
+ * bare "error" and never guesses a replacement path.
+ */
+export function verifyWorkspaceSource(
+  recorded: RecordedSourceIdentity,
+  observed: ObservedSourceIdentity,
+): WorkspaceVerification {
+  if (observed.kind === "missing") {
+    return { state: "missing", reason: `来源缺失：${recorded.path} 不存在或不可读` };
+  }
+  if (observed.kind !== "dir") {
+    return { state: "mismatch", reason: `身份不符：${recorded.path} 已不是目录` };
+  }
+  if (recorded.realPath !== undefined && observed.realPath !== undefined && recorded.realPath !== observed.realPath) {
+    return { state: "mismatch", reason: `身份不符：来源真实路径已改变（记录 ${recorded.realPath}，实际 ${observed.realPath}）` };
+  }
+  const identified = recorded.device !== undefined && recorded.inode !== undefined;
+  if (identified && (recorded.device !== observed.device || recorded.inode !== observed.inode)) {
+    return { state: "mismatch", reason: "身份不符：来源目录已被替换（设备/索引节点与记录不一致）" };
+  }
+  if (!identified) {
+    return { state: "repair-required", reason: "待修复：任务记录缺少来源身份（设备/索引节点），无法核验" };
+  }
+  if (recorded.commonDir !== undefined) {
+    if (observed.commonDir === undefined || observed.commonDir === null) {
+      return { state: "repair-required", reason: "待修复：无法读取来源的 Git 公共目录" };
+    }
+    if (observed.commonDir !== recorded.commonDir) {
+      return { state: "mismatch", reason: "身份不符：来源的 Git 公共目录已改变" };
+    }
+  }
+  if (recorded.remoteDigest !== undefined) {
+    if (observed.remoteDigest === undefined || observed.remoteDigest === null) {
+      return { state: "repair-required", reason: "待修复：无法读取来源的 Git 远程地址" };
+    }
+    if (observed.remoteDigest !== recorded.remoteDigest) {
+      return { state: "mismatch", reason: "身份不符：来源的 Git 远程地址已改变" };
+    }
+  }
+  return { state: "ready", reason: "已核验：来源身份与记录一致" };
 }

@@ -2,28 +2,90 @@ import type { PidockBridge } from "./shellBridge";
 
 export const CREATION_RETENTION_NOTICE = "磁盘上的任务目录、工作区、链接与会话都会保留（不会替你删除）";
 
+/** How the task treats its Git sources ([Pencil T02] #137). */
+export type WorkspaceModeView = "worktree" | "existing-git" | "plain-dirs";
+export const WORKSPACE_MODE_LABELS: Record<WorkspaceModeView, string> = {
+  worktree: "独立 Worktree（默认）",
+  "existing-git": "已有 Git 目录",
+  "plain-dirs": "仅普通目录",
+};
 export interface CreationIntentView {
   id: string; taskId: string; name: string; projectId: string; taskDir: string; root: string; branch: string;
   state: "pending" | "complete";
-  repos: { id: string; name: string; remote: string; remoteBranch: string; commit: string; repoDir: string }[];
+  workspaceMode: WorkspaceModeView;
+  kind?: "normal" | "scheduled";
+  /** [Pencil T17] ticket 152 the definition a dedicated scheduled task carries. */
+  schedule?: CreationScheduleInput;
+  repos: { id: string; name: string; remote: string; remoteBranch: string; commit: string; repoDir: string; path?: string }[];
   directories: { id: string; name: string; linkName: string; path: string }[];
+}
+/** [Pencil T17] the definition saved with a dedicated scheduled task. */
+export interface CreationScheduleInput {
+  name: string;
+  ruleText: string;
+  timezone: string;
+  prompt: string;
+  providerId: string;
+  model: string;
+  permission: "read" | "default" | "auto";
+  enabled?: boolean;
 }
 export interface CreationInput {
   projectId: string; name: string;
   repositories: { sourceId: string; remote: string; remoteBranch: string }[];
   directoryIds: string[]; sharedWriteConfirmed: boolean; override: boolean;
+  workspaceMode: WorkspaceModeView;
+  /** [Pencil T17]: omitted = ordinary task; `scheduled` requires a definition. */
+  kind?: "normal" | "scheduled";
+  schedule?: CreationScheduleInput;
+}
+function parseSchedule(value: unknown): CreationScheduleInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("定时任务创建意图的规则定义异常");
+  const row = value as Record<string, unknown>;
+  for (const key of ["name", "ruleText", "timezone", "prompt", "providerId", "model"])
+    if (typeof row[key] !== "string") throw new Error("定时任务创建意图的规则定义异常");
+  if (row.permission !== "read" && row.permission !== "default" && row.permission !== "auto") {
+    throw new Error("定时任务创建意图的规则定义异常");
+  }
+  if (row.enabled !== undefined && typeof row.enabled !== "boolean") throw new Error("定时任务创建意图的规则定义异常");
+  return {
+    name: row.name as string, ruleText: row.ruleText as string, timezone: row.timezone as string,
+    prompt: row.prompt as string, providerId: row.providerId as string, model: row.model as string,
+    permission: row.permission, ...(row.enabled === undefined ? {} : { enabled: row.enabled }),
+  };
 }
 function parse(value: unknown): CreationIntentView {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("本机任务创建意图返回异常");
   const row = value as Record<string, unknown>;
-  for (const key of ["id", "taskId", "name", "projectId", "taskDir", "root", "branch"])
+  // `branch` is always a string, but only a worktree creation names a branch;
+  // `existing-git`/`plain-dirs` (and a scheduled task on plain directories)
+  // truthfully report "". Requiring it non-empty rejected every such intent
+  // with the generic wording, so a real scheduled preview never produced one.
+  for (const key of ["id", "taskId", "name", "projectId", "taskDir", "root"])
     if (typeof row[key] !== "string" || !row[key]) throw new Error("本机任务创建意图返回异常");
+  if (typeof row.branch !== "string") throw new Error("本机任务创建意图返回异常");
   if ((row.state !== "pending" && row.state !== "complete") || !Array.isArray(row.repos) || !Array.isArray(row.directories) ||
-      !row.repos.every((repo) => repo && typeof repo === "object" && typeof repo.commit === "string" && typeof repo.repoDir === "string" && typeof repo.name === "string") ||
+      !row.repos.every((repo) => repo && typeof repo === "object" && typeof repo.commit === "string" && typeof repo.repoDir === "string" && typeof repo.name === "string" &&
+        (repo.path === undefined || typeof repo.path === "string")) ||
       !row.directories.every((dir) => dir && typeof dir === "object" && typeof dir.linkName === "string" && typeof dir.path === "string" && typeof dir.name === "string")) {
     throw new Error("本机任务创建意图返回异常");
   }
-  return value as CreationIntentView;
+  // A legacy intent written before the mode existed is migrated by main; a
+  // payload that still has no mode is named by its sources, never guessed from
+  // the UI. An unknown mode is a broken answer, not a default.
+  const mode = row.workspaceMode === undefined
+    ? ((row.repos as unknown[]).length > 0 ? "worktree" : "plain-dirs")
+    : row.workspaceMode;
+  if (mode !== "worktree" && mode !== "existing-git" && mode !== "plain-dirs") throw new Error("本机任务创建意图返回异常");
+  if (mode === "worktree" && !row.branch) throw new Error("本机任务创建意图缺少任务分支");
+  const kind = row.kind === undefined ? "normal" : row.kind;
+  if (kind !== "normal" && kind !== "scheduled") throw new Error("本机任务创建意图返回异常");
+  // [Pencil T17] ticket 152: a scheduled intent is only usable with the definition
+  // it will be created from; a normal intent carrying one is a contradiction.
+  const schedule = row.schedule === undefined ? undefined : parseSchedule(row.schedule);
+  if (kind === "scheduled" && schedule === undefined) throw new Error("定时任务创建意图缺少规则定义");
+  if (kind !== "scheduled" && schedule !== undefined) throw new Error("普通任务创建意图不能携带定时规则");
+  return { ...(value as CreationIntentView), workspaceMode: mode, kind, ...(schedule ? { schedule } : {}) };
 }
 async function request(bridge: PidockBridge, input: Parameters<NonNullable<PidockBridge["createTask"]>>[0]): Promise<unknown> {
   if (typeof bridge.createTask !== "function") throw new Error("桌面壳真实任务创建接口不可用，请重启应用");
@@ -48,8 +110,16 @@ export async function prepareCreation(bridge: PidockBridge, input: CreationInput
  * and sessions stay). The caller shows that sentence: the user has to know the
  * half-made workspace is still there before creating a replacement.
  */
-export async function abandonCreation(bridge: PidockBridge, id: string): Promise<string> {
-  const value = await request(bridge, { op: "abandon", id, confirmed: true });
+/**
+ * [Pencil T08]: which resources an abandon touches. `keep` is the
+ * historical behaviour (nothing is deleted); `owned` removes only resources
+ * whose ownership and identity main confirms and never the user's source.
+ */
+export type AbandonCleanupView = "keep" | "owned";
+export async function abandonCreation(bridge: PidockBridge, id: string, cleanup: AbandonCleanupView = "keep"): Promise<string> {
+  // `cleanup` is sent only when it changes the default: a keep abandon keeps
+  // the exact request surface it always had.
+  const value = await request(bridge, { op: "abandon", id, confirmed: true, ...(cleanup === "owned" ? { cleanup } : {}) });
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("放弃创建结果返回异常，请重读确认");
   const row = value as Record<string, unknown>;
   if (row.abandoned !== true || typeof row.message !== "string" || !row.message) throw new Error("放弃创建结果返回异常，请重读确认");
@@ -59,4 +129,223 @@ export async function commitCreation(bridge: PidockBridge, id: string): Promise<
   const value = await request(bridge, { op: "commit", id });
   if (!value || typeof value !== "object" || !("taskId" in value) || typeof value.taskId !== "string") throw new Error("本机任务创建结果返回异常，请重读确认");
   return value.taskId;
+}
+
+/** [Pencil T08]: one repository's real provisioning state. */
+export type RepoPhaseView = "pending" | "created" | "failed";
+export interface CreationRepoStatusView {
+  repoDir: string;
+  phase: RepoPhaseView;
+  label: string;
+  branch: string;
+  baseCommit: string;
+  worktreePath: string;
+  managed: boolean;
+  createdByPidock: boolean;
+  failure?: { code: string; detail: string };
+  previousFailure?: { code: string; detail: string };
+  orphan?: { commit: string; adoptable: boolean };
+}
+export interface CreationStatusView {
+  intent: { id: string; taskId: string; name: string; taskDir: string; root: string; branch: string;
+    state: "pending" | "complete" | "abandoned"; workspaceMode: WorkspaceModeView } | null;
+  repos: CreationRepoStatusView[];
+  directories: { id: string; name: string; path: string; linkName: string; linkPresent: boolean }[];
+  canRetry: boolean;
+  canAdoptOrphans: boolean;
+  createdRepos: number;
+  message: string;
+}
+function repoStatus(value: unknown): CreationRepoStatusView {
+  const row = value as Record<string, unknown>;
+  if (!row || typeof row !== "object" || typeof row.repoDir !== "string" || !row.repoDir ||
+      (row.phase !== "pending" && row.phase !== "created" && row.phase !== "failed") ||
+      typeof row.branch !== "string" || typeof row.worktreePath !== "string" || typeof row.baseCommit !== "string" ||
+      typeof row.managed !== "boolean" || typeof row.createdByPidock !== "boolean") {
+    throw new Error("任务准备状态返回异常");
+  }
+  // A failed row MUST carry its named code: an unnamed failure is a broken
+  // payload, never a bare "失败" the surface would have to guess about.
+  const failure = row.phase === "failed" ? failureView(row.failure) : undefined;
+  if (row.phase === "failed" && !failure) throw new Error("任务准备状态返回异常");
+  return {
+    repoDir: row.repoDir as string, phase: row.phase as RepoPhaseView,
+    label: typeof row.label === "string" && row.label ? row.label : row.phase,
+    branch: row.branch as string, baseCommit: row.baseCommit as string, worktreePath: row.worktreePath as string,
+    managed: row.managed as boolean, createdByPidock: row.createdByPidock as boolean,
+    ...(failure ? { failure } : {}),
+    ...(failureView(row.previousFailure) ? { previousFailure: failureView(row.previousFailure)! } : {}),
+    ...(orphanView(row.orphan) ? { orphan: orphanView(row.orphan)! } : {}),
+  };
+}
+function failureView(value: unknown): { code: string; detail: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.code !== "string" || !row.code || typeof row.detail !== "string" || !row.detail) return undefined;
+  return { code: row.code, detail: row.detail };
+}
+function orphanView(value: unknown): { commit: string; adoptable: boolean } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.commit !== "string" || typeof row.adoptable !== "boolean") return undefined;
+  return { commit: row.commit, adoptable: row.adoptable };
+}
+/** Read-only per-repository recovery state; never derived from the page. */
+export async function creationStatus(bridge: PidockBridge): Promise<CreationStatusView> {
+  const value = await request(bridge, { op: "status" });
+  const row = value as Record<string, unknown> | null;
+  if (!row || typeof row !== "object" || Array.isArray(row) || !Array.isArray(row.repos) ||
+      typeof row.canRetry !== "boolean" || typeof row.canAdoptOrphans !== "boolean" ||
+      typeof row.createdRepos !== "number" || typeof row.message !== "string" || row.message.length === 0) {
+    throw new Error("任务准备状态返回异常");
+  }
+  const intent = row.intent === null ? null : row.intent as Record<string, unknown>;
+  if (intent !== null && (typeof intent !== "object" || typeof intent.taskId !== "string" || typeof intent.taskDir !== "string")) {
+    throw new Error("任务准备状态返回异常");
+  }
+  return {
+    intent: intent === null ? null : { id: String(intent.id), taskId: String(intent.taskId), name: String(intent.name),
+      taskDir: String(intent.taskDir), root: String(intent.root), branch: String(intent.branch),
+      state: (intent.state === "complete" || intent.state === "abandoned" ? intent.state : "pending"),
+      workspaceMode: (intent.workspaceMode === "existing-git" || intent.workspaceMode === "plain-dirs" ? intent.workspaceMode : "worktree") },
+    repos: row.repos.map((entry) => repoStatus(entry)),
+    directories: Array.isArray(row.directories) ? row.directories.map((entry) => {
+      const dir = entry as Record<string, unknown>;
+      return { id: String(dir.id), name: String(dir.name), path: String(dir.path), linkName: String(dir.linkName), linkPresent: dir.linkPresent === true };
+    }) : [],
+    canRetry: row.canRetry, canAdoptOrphans: row.canAdoptOrphans, createdRepos: row.createdRepos, message: row.message,
+  };
+}
+/**
+ * Retry ONLY the failing repositories (main proves the set from the disk).
+ * `adoptOrphanBranches` is the explicit adopt choice for a task branch that
+ * exists without a worktree; main never adopts one on its own.
+ */
+export async function retryCreation(bridge: PidockBridge, id: string, adoptOrphanBranches = false): Promise<{ taskId: string; retried: string[] }> {
+  const value = await request(bridge, { op: "retry", id, adoptOrphanBranches });
+  const row = value as Record<string, unknown>;
+  if (!row || typeof row !== "object" || typeof row.taskId !== "string" || !Array.isArray(row.retried)) {
+    throw new Error("任务准备恢复结果返回异常，请重读确认");
+  }
+  return { taskId: row.taskId, retried: row.retried.filter((entry): entry is string => typeof entry === "string") };
+}
+
+/* -------------------------------------------------------------------------- */
+/* [Pencil T13] #148 pre-creation branch/push-target preview                   */
+/* -------------------------------------------------------------------------- */
+
+/** The one sentence a mode with no Git delivery shows (mirrors main's constant). */
+export const NO_GIT_DELIVERY = "无 Git 交付";
+
+export interface DeliverySettingsView {
+  branchTemplate: string;
+  remote: string;
+  savedAt: string | null;
+}
+
+/** One repository row of the pre-creation preview, exactly as main planned it. */
+export interface CreationPreviewRowView {
+  repoId: string;
+  name: string;
+  repoPath: string;
+  localBranch: string;
+  remote: string;
+  pushTarget: string;
+  remoteUrl: string | null;
+  currentBranch: string;
+  problem: { code: string; message: string } | null;
+}
+
+export interface CreationDeliveryPreviewView {
+  taskId: string;
+  taskTitle: string;
+  workspaceMode: WorkspaceModeView;
+  branchTemplate: string;
+  remote: string;
+  gitDelivery: "branch" | "existing" | "none";
+  ready: boolean;
+  rows: CreationPreviewRowView[];
+  problem: { code: string; message: string } | null;
+  message: string;
+}
+
+function settingsView(value: unknown): DeliverySettingsView {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("交付设置返回异常");
+  const row = value as Record<string, unknown>;
+  if (typeof row.branchTemplate !== "string" || typeof row.remote !== "string" ||
+      (row.savedAt !== null && row.savedAt !== undefined && typeof row.savedAt !== "string")) {
+    throw new Error("交付设置返回异常");
+  }
+  return { branchTemplate: row.branchTemplate, remote: row.remote, savedAt: typeof row.savedAt === "string" ? row.savedAt : null };
+}
+
+function problemView(value: unknown): { code: string; message: string } | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("创建前预览返回异常");
+  const row = value as Record<string, unknown>;
+  if (typeof row.code !== "string" || !row.code || typeof row.message !== "string" || !row.message) {
+    throw new Error("创建前预览返回异常");
+  }
+  return { code: row.code, message: row.message };
+}
+
+function previewRow(value: unknown): CreationPreviewRowView {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("创建前预览返回异常");
+  const row = value as Record<string, unknown>;
+  for (const key of ["repoId", "name", "repoPath", "localBranch", "remote", "pushTarget", "currentBranch"]) {
+    if (typeof row[key] !== "string") throw new Error("创建前预览返回异常");
+  }
+  if (row.remoteUrl !== null && typeof row.remoteUrl !== "string") throw new Error("创建前预览返回异常");
+  return {
+    repoId: String(row.repoId), name: String(row.name), repoPath: String(row.repoPath),
+    localBranch: String(row.localBranch), remote: String(row.remote), pushTarget: String(row.pushTarget),
+    remoteUrl: typeof row.remoteUrl === "string" ? row.remoteUrl : null,
+    currentBranch: String(row.currentBranch), problem: problemView(row.problem),
+  };
+}
+
+function previewView(value: unknown): CreationDeliveryPreviewView {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("创建前预览返回异常");
+  const row = value as Record<string, unknown>;
+  for (const key of ["taskId", "taskTitle", "branchTemplate", "remote", "message"]) {
+    if (typeof row[key] !== "string") throw new Error("创建前预览返回异常");
+  }
+  if (typeof row.ready !== "boolean" || !Array.isArray(row.rows)) throw new Error("创建前预览返回异常");
+  if (row.workspaceMode !== "worktree" && row.workspaceMode !== "existing-git" && row.workspaceMode !== "plain-dirs") {
+    throw new Error("创建前预览返回异常");
+  }
+  if (row.gitDelivery !== "branch" && row.gitDelivery !== "existing" && row.gitDelivery !== "none") {
+    throw new Error("创建前预览返回异常");
+  }
+  return {
+    taskId: String(row.taskId), taskTitle: String(row.taskTitle), workspaceMode: row.workspaceMode,
+    branchTemplate: String(row.branchTemplate), remote: String(row.remote), gitDelivery: row.gitDelivery,
+    ready: row.ready, rows: row.rows.map((entry) => previewRow(entry)),
+    problem: problemView(row.problem), message: String(row.message),
+  };
+}
+
+/** The saved convention/remote the create form shows and edits (main-read). */
+export async function creationDeliverySettings(bridge: PidockBridge): Promise<DeliverySettingsView> {
+  const value = await request(bridge, { op: "deliverySettings" });
+  if (!value || typeof value !== "object" || !("settings" in value)) throw new Error("交付设置返回异常");
+  return settingsView((value as { settings?: unknown }).settings);
+}
+
+/** Save both; main validates and NAMES an invalid pair instead of defaulting. */
+export async function saveCreationDeliverySettings(
+  bridge: PidockBridge, input: { branchTemplate: string; remote: string },
+): Promise<DeliverySettingsView> {
+  const value = await request(bridge, { op: "saveDeliverySettings", branchTemplate: input.branchTemplate, remote: input.remote });
+  if (!value || typeof value !== "object" || !("settings" in value)) throw new Error("交付设置返回异常");
+  return settingsView((value as { settings?: unknown }).settings);
+}
+
+/**
+ * Read the pre-creation preview from main. The page sends the same creation
+ * input it will submit; every branch/target in the answer comes from main's
+ * read of the saved settings + the real checkouts, never from the page.
+ */
+export async function previewCreationDelivery(bridge: PidockBridge, input: CreationInput): Promise<CreationDeliveryPreviewView> {
+  return previewView(await request(bridge, { op: "deliveryPreview", input }));
 }

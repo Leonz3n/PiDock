@@ -5,7 +5,6 @@ import { ArchivePage } from "../pages/ArchivePage";
 import { CapabilitiesPage } from "../pages/CapabilitiesPage";
 import { EnvPage } from "../pages/EnvPage";
 import { ProjectPage } from "../pages/ProjectPage";
-import { ProvidersPage } from "../pages/ProvidersPage";
 import { RemotePage } from "../pages/RemotePage";
 import { SchedulesPage } from "../pages/SchedulesPage";
 import { SettingsPage } from "../pages/SettingsPage";
@@ -50,7 +49,6 @@ export function Shell() {
           {route.view === "attention" ? <AttentionPage /> : null}
           {route.view === "project" ? <ProjectPage projectId={route.projectId} /> : null}
           {route.view === "env" ? <EnvPage /> : null}
-          {route.view === "providers" ? <ProvidersPage /> : null}
           {route.view === "usage" ? <UsagePage /> : null}
           {route.view === "schedules" ? <SchedulesPage /> : null}
           {route.view === "capabilities" ? <CapabilitiesPage /> : null}

@@ -13,7 +13,9 @@
  * every model-bearing operation happens here.
  */
 
+import { isAbsolute } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { assertSdkContextEnv, type SdkContextTaskBinding } from "./sdk-context-env.js";
 import { createExplicitTextRuntime, validateExplicitTextProvider, type ExplicitTextProvider } from "./explicit-text-provider.js";
 import { PiSdkTextKernel, type SdkTextEvent } from "./sdk-text-kernel.js";
@@ -31,10 +33,34 @@ export interface SdkContextInput {
    * cannot honor is a tool surface that outlives its decision point.
    */
   toolsEnabled: boolean;
+  /** Reasoning level selected for the bound model; absent = `off`. */
+  thinkingLevel?: ModelThinkingLevel;
+  /**
+   * [Pencil T15] issue 150: the exact native `mcp.json` this session loads when
+   * it starts. Absent means no MCP surface. Absolute; validated here again.
+   */
+  mcpConfigPath?: string;
+  /** [#151] App-private Skills source document; read at each session creation. */
+  skillSourcesFile?: string;
+}
+
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+function mcpConfigPath(value: unknown): string {
+  if (typeof value !== "string" || !isAbsolute(value) || value.includes("\0") || value.length > 4096) throw new Error("sdk-context-input-invalid");
+  return value;
+}
+
+function thinkingLevel(value: unknown): ModelThinkingLevel | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !(THINKING_LEVELS as readonly string[]).includes(value)) throw new Error("sdk-context-input-invalid");
+  return value as ModelThinkingLevel;
 }
 
 export type SdkContextRequestPayload =
   | { op: "open"; sessionId: string }
+  /** [#139] Bind one session to another declared model of this profile. */
+  | { op: "bind"; sessionId: string; modelId: string; thinkingLevel?: ModelThinkingLevel }
   | { op: "prompt"; sessionId: string; text: string; issuedTurnId?: string }
   | { op: "cancel"; sessionId: string }
   | { op: "dispose" };
@@ -110,6 +136,11 @@ function request(value: unknown): SdkContextRequest {
   if (op === "dispose") return { id, op };
   if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-request");
   if (op === "open") return { id, op, sessionId };
+  if (op === "bind") {
+    const modelId = record["modelId"];
+    if (typeof modelId !== "string" || !/^[a-zA-Z0-9._:/-]{1,100}$/.test(modelId)) throw new Error("invalid-request");
+    return { id, op, sessionId, modelId, ...(record["thinkingLevel"] === undefined ? {} : { thinkingLevel: thinkingLevel(record["thinkingLevel"]) }) };
+  }
   if (op === "cancel") return { id, op, sessionId };
   if (op === "prompt") {
     const text = record["text"];
@@ -136,7 +167,16 @@ function input(value: unknown): SdkContextInput {
     // Anything but an explicit `true` disables tools: a missing marker is a
     // context nobody wired a broker to, and must not advertise one.
     toolsEnabled: record["toolsEnabled"] === true,
+    ...(record["thinkingLevel"] === undefined ? {} : { thinkingLevel: thinkingLevel(record["thinkingLevel"]) }),
+    ...(record["mcpConfigPath"] === undefined ? {} : { mcpConfigPath: mcpConfigPath(record["mcpConfigPath"]) }),
+    ...(record["skillSourcesFile"] === undefined ? {} : { skillSourcesFile: skillSourcesFile(record["skillSourcesFile"]) }),
   };
+}
+
+/** Main hands an absolute file path; anything else is a refused payload, not a guess. */
+function skillSourcesFile(value: unknown): string {
+  if (typeof value !== "string" || value.length > 4096 || value.includes("\u0000") || !isAbsolute(value)) throw new Error("sdk-context-input-invalid");
+  return value;
 }
 
 async function main(): Promise<void> {
@@ -157,8 +197,14 @@ async function main(): Promise<void> {
   const kernel = new PiSdkTextKernel(parsed.task.taskId, parsed.task.taskDir, {
     model,
     modelRuntime: runtime,
+    // [#139] another model of the SAME registered profile, by id: one endpoint,
+    // one credential, one declared model list, several per-session bindings.
+    modelById: (modelId) => runtime.getModel(`pidock-${parsed.config.profileId}`, modelId),
     bindingIdentity,
+    ...(parsed.thinkingLevel === undefined ? {} : { thinkingLevel: parsed.thinkingLevel }),
     ...(tools ? { callTool: (sessionId, request) => tools.callTool(sessionId, request) } : {}),
+    ...(parsed.mcpConfigPath === undefined ? {} : { mcpConfigPath: parsed.mcpConfigPath }),
+    ...(parsed.skillSourcesFile === undefined ? {} : { skillSourcesFile: parsed.skillSourcesFile }),
   });
   const send = (message: SdkContextMessage) => port.postMessage(message);
   let closing = false;
@@ -172,6 +218,14 @@ async function main(): Promise<void> {
         if (closing && message.op !== "dispose") throw new Error("sdk-context-closing");
         if (message.op === "open") {
           send({ id, kind: "reply", ok: true, payload: { ...(await kernel.open(message.sessionId)) } });
+          return;
+        }
+        if (message.op === "bind") {
+          const bound = await kernel.bindSession(message.sessionId, {
+            modelId: message.modelId,
+            ...(message.thinkingLevel === undefined ? {} : { thinkingLevel: message.thinkingLevel }),
+          });
+          send({ id, kind: "reply", ok: true, payload: { ...bound } });
           return;
         }
         if (message.op === "prompt") {

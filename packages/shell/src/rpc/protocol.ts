@@ -66,6 +66,18 @@ export type HostTaskOp =
   | "task/listApprovals"
   | "task/getApproval"
   | "task/sessionStates"
+  // [Pencil T04] #139: task-wide session identity and lifecycle.
+  | "task/sessionList"
+  | "task/sessionCreate"
+  | "task/sessionRename"
+  | "task/sessionArchive"
+  | "task/sessionRestore"
+  | "task/sessionDelete"
+  | "task/sessionStop"
+  | "task/sessionActivate"
+  | "task/sessionReadout"
+  | "task/sessionModel"
+  | "task/sessionReasoning"
   | "task/registerService"
   | "task/planServiceStart"
   | "task/controlService"
@@ -88,9 +100,17 @@ export type HostTaskOp =
   | "task/fileRoots"
   | "task/serviceImportHints"
   | "task/fileTree"
+  | "task/fileStat"
   | "task/filePreview"
   | "task/fileDiff"
   | "task/deliveryInfo"
+  // [Pencil T13] #148 explicit Git delivery: saved convention/remote, the
+  // per-repo preview, and the two explicit user actions (commit/push).
+  | "task/deliverySettings"
+  | "task/saveDeliverySettings"
+  | "task/deliveryPlan"
+  | "task/deliveryCommit"
+  | "task/deliveryPush"
   | "task/openEditor"
   | "task/planTerminal"
   | "task/terminalProfiles"
@@ -118,6 +138,8 @@ export type HostTaskOp =
   | "task/scheduleRunNow"
   | "task/scheduleRuns"
   | "task/scheduleEvaluate"
+  // [Pencil T18] #153 sleep/wake: main asks a running Host to plan forward.
+  | "task/scheduleWake"
   | "task/remoteState"
   | "task/remoteEntryMode"
   | "task/remotePairMint"
@@ -263,14 +285,33 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/setSessionThinking",
   "task/compactSession",
   "task/sessionStates",
+  // [Pencil T04] #139: task-wide session identity and lifecycle.
+  "task/sessionList",
+  "task/sessionCreate",
+  "task/sessionRename",
+  "task/sessionArchive",
+  "task/sessionRestore",
+  "task/sessionDelete",
+  "task/sessionStop",
+  "task/sessionActivate",
+  "task/sessionReadout",
+  "task/sessionModel",
+  "task/sessionReasoning",
   "task/usageRecords",
   "task/clearUsage",
   "task/fileRoots",
   "task/serviceImportHints",
   "task/fileTree",
+  "task/fileStat",
   "task/filePreview",
   "task/fileDiff",
   "task/deliveryInfo",
+  // [Pencil T13] #148 explicit Git delivery ops.
+  "task/deliverySettings",
+  "task/saveDeliverySettings",
+  "task/deliveryPlan",
+  "task/deliveryCommit",
+  "task/deliveryPush",
   // [PiDock 10] (#15 box 28) external editor launch. Main-only entry
   // (`shell/openTaskEditor`): the renderer op set never names it and
   // `shell/taskOp` refuses it by name, so the program and the attested human
@@ -303,6 +344,7 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/scheduleRunNow",
   "task/scheduleRuns",
   "task/scheduleEvaluate",
+  "task/scheduleWake",
   "task/remoteState",
   "task/remoteEntryMode",
   "task/remotePairMint",

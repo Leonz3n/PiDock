@@ -32,7 +32,22 @@ export const ALLOWED_INVOKE_CHANNELS = [
   // added to the renderer task-op set — so this write can never travel on
   // `shell/taskOp`.
   "shell/editorSettingsOp",
+  // [Pencil T14] #149 the settings surface: PiDock's appearance document plus
+  // Pi's native keybindings as a bounded projection. Four named ops; the page
+  // names no path, no file and no unverified Pi action.
+  "shell/preferencesOp",
   "shell/providerOp",
+  // [Pencil T15] issue 150 the MCP management surface over Pi's native
+  // mcp.json: list/save/remove/enable/disable/test only. The page names a
+  // server (or a form draft), never a file, a path or a credential value.
+  "shell/mcpOp",
+  // [Pencil T16] #151 local Skills sources: one channel, four named ops. The
+  // page names a directory or a source id; main owns the app-private document
+  // and the real-disk scan.
+  "shell/skillsOp",
+  // [Pencil T18] #153 the scheduler phase (active / asleep / quitting) plus the
+  // last unconfirmed quit. Read-only and main-owned; the page names no field.
+  "shell/schedulerState",
   "shell/taskOp",
   "shell/sdkTurn",
 ] as const;

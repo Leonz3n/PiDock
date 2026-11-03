@@ -10,7 +10,7 @@ import type { SdkTextResult } from "./sdk-text-kernel.js";
 
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
-const config = { profileId: "p-11111111-2222-3333-4444-555555555555", baseUrl: "https://models.example.test/v1", modelId: "gpt-5-mini", contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1 };
+const config = { profileId: "p-11111111-2222-3333-4444-555555555555", baseUrl: "https://models.example.test/v1", modelId: "gpt-5-mini", contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "gpt-5-mini", name: "gpt-5-mini", contextWindow: 128000, maxTokens: 8192, reasoning: false }]};
 const at = "2026-09-22T10:00:00.000Z";
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; }
 async function fixture(taskId = "task-a", now: () => string = () => at) {
@@ -129,7 +129,9 @@ it.each(["returned", "thrown"])("keeps %s private SDK error text out of executio
 it("rejects invalid sessions, missing/invalid turn identities and reused turn identities before dispatch", async () => {
   const f = await fixture(); const router = f.host.sdkTextKernel();
   const uuid = "11111111-2222-4333-8444-555555555555";
-  for (const [session, identity] of [["legacy", uuid], ["main", undefined], ["main", "bad-id"]] as const) await expect(router.prompt(session, "hello", undefined, identity)).rejects.toThrow("invalid-sdk-turn-identity");
+  // [#139] Every safe session id of this task is a valid turn owner (`legacy`
+  // included); only a missing/invalid turn identity is refused before dispatch.
+  for (const [session, identity] of [["main", undefined], ["main", "bad-id"]] as const) await expect(router.prompt(session, "hello", undefined, identity)).rejects.toThrow("invalid-sdk-turn-identity");
   expect(f.host.executionState("main").executions).toEqual([]); expect(f.client.prompt).not.toHaveBeenCalled();
   const prompting = router.prompt("main", "hello", undefined, uuid);
   await expect(router.prompt("main", "hello", undefined, uuid)).rejects.toThrow("sdk-turn-already-recorded");

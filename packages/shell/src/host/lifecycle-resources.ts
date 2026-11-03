@@ -12,13 +12,14 @@
  */
 
 import { dirname, join, basename } from "node:path";
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, lstatSync, readlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, lstatSync, readlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createNodeRepoProbe, observeRecordedRepo, type RepoProbe } from "./repo-identity.js";
 import type { TaskWorkspaceHost } from "./task-host.js";
 import type { LifecycleSession, LifecycleWorktree, TaskLifecycleResources } from "./task-lifecycle.js";
 import type { TaskServiceTopology } from "./service-topology.js";
 import type { TaskTerminalRegistry } from "../main/terminal-config.js";
-import type { CleanupSelection, LiveProcessObservation } from "../main/task-lifecycle.js";
+import type { CleanupSelection, LiveProcessObservation, RepoDeliveryObservation } from "../main/task-lifecycle.js";
 
 export interface LifecycleResourceInput {
   host: TaskWorkspaceHost;
@@ -111,19 +112,77 @@ function otherTaskDirs(input: LifecycleResourceInput): string[] {
   }
 }
 
-function deliveryOf(input: LifecycleResourceInput): { uncommitted: boolean; undelivered: boolean } {
-  const { execFileSync } = process.getBuiltinModule("node:child_process") as typeof import("node:child_process");
-  const record = recordOf(input);
-  const repoDir = worktreesOf(input)[0]?.repoDir;
-  if (!record || repoDir === undefined) return { uncommitted: false, undelivered: false };
+/**
+ * [T12] #147: read every repository of this task with real git, index-neutrally.
+ * `GIT_OPTIONAL_LOCKS=0` keeps `status --porcelain` from refreshing/rewriting the
+ * user's index (and from colliding with the user's own git on `index.lock`);
+ * `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` are cleared so a read can only
+ * answer about this repo. A failed read is `null` (unknown), never "clean".
+ */
+function readRepoDelivery(repoDir: string): RepoDeliveryObservation {
+  const git = (args: readonly string[]): { ok: true; stdout: string } | { ok: false; code?: unknown } => {
+    try {
+      const stdout = execFileSync("git", ["-C", repoDir, ...args], {
+        encoding: "utf8",
+        timeout: 5_000,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return { ok: true, stdout };
+    } catch (error) {
+      return { ok: false, code: (error as { code?: unknown }).code };
+    }
+  };
   try {
-    const status = execFileSync("git", ["-C", repoDir, "status", "--porcelain"], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] });
-    // `undelivered` needs a delivery ledger this ticket does not own: cleanup
-    // keeps the worktree either way, so the flag stays false rather than
-    // guessing. The uncommitted state is read from the real working tree.
-    return { uncommitted: status.trim().length > 0, undelivered: false };
+    if (!lstatSync(repoDir).isDirectory()) return { repoDir, uncommitted: null, delivered: null, reason: "工作副本路径不可读" };
+    const status = git(["--no-optional-locks", "status", "--porcelain"]);
+    if (!status.ok) {
+      return { repoDir, uncommitted: null, delivered: null, reason: status.code === "ENOENT" ? "本机没有可用的 Git 命令" : "Git 状态读取失败" };
+    }
+    // [Pencil T13] #148 read, not a success ledger: a commit that no
+    // remote-tracking ref contains is undelivered (`rev-list HEAD --not
+    // --remotes`). When that read fails the delivery stays `null` = unknown,
+    // which cleanup does NOT treat as delivered.
+    const ahead = git(["rev-list", "--count", "HEAD", "--not", "--remotes"]);
+    const delivered = ahead.ok ? Number.parseInt(ahead.stdout.trim(), 10) === 0 : null;
+    return { repoDir, uncommitted: status.stdout.trim().length > 0, delivered };
   } catch {
-    return { uncommitted: false, undelivered: false };
+    return { repoDir, uncommitted: null, delivered: null, reason: "Git 状态读取失败" };
+  }
+}
+
+/** One row per recorded repository, each read on its own (never one repo for all). */
+function repoDeliveryOf(input: LifecycleResourceInput): RepoDeliveryObservation[] {
+  return worktreesOf(input).map((worktree) => readRepoDelivery(worktree.repoDir));
+}
+
+function deliveryOf(input: LifecycleResourceInput): { uncommitted: boolean; undelivered: boolean } {
+  // Aggregate view kept for the older single-`code` preview: unknown counts as
+  // a change (conservative), so a failed read never reads as "safe to delete".
+  const rows = repoDeliveryOf(input);
+  if (rows.length === 0) return { uncommitted: false, undelivered: false };
+  return {
+    uncommitted: rows.some((row) => row.uncommitted !== false),
+    undelivered: rows.some((row) => row.delivered !== true),
+  };
+}
+
+/** Bounded wait for this task's in-flight turns and held write rights. */
+async function waitForIdle(input: LifecycleResourceInput): Promise<string[]> {
+  const waited: string[] = [];
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const busy = readSessions(input.host).filter((session) => session.runState === "running" || session.runState === "approval");
+    const write = input.host.writeState().write;
+    const ownedLock = write.owner !== null && write.owner.length > 0;
+    if (busy.length === 0 && !ownedLock) return waited;
+    if (Date.now() > deadline) {
+      throw new Error(`cleanup-wait-timeout: 仍在等待 ${[...busy.map((session) => `会话 ${session.sessionId}`), ...(ownedLock ? [`写入权 ${String(write.owner)}`] : [])].join("、")}`);
+    }
+    for (const session of busy) waited.push(`turn:${session.sessionId}`);
+    if (ownedLock) waited.push(`lock:${String(write.owner)}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
 }
 
@@ -264,6 +323,39 @@ export function createLifecycleResources(input: LifecycleResourceInput): TaskLif
     },
     otherTaskDirs: () => otherTaskDirs(input),
     delivery: () => deliveryOf(input),
+    repoDelivery: () => repoDeliveryOf(input),
+    heldLocks: () => {
+      const owner = input.host.writeState().write.owner;
+      return owner === null || owner.length === 0 ? [] : [{ resourceId: input.host.taskDir, owner: input.host.taskId }];
+    },
+    waitForIdle: () => {
+      const waited: string[] = [];
+      return waitForIdle(input).then((entries) => {
+        waited.push(...entries);
+        return [...new Set(waited)];
+      });
+    },
+    // `git worktree remove` removes only the registered worktree's own admin
+    // entry + directory; the source repository, its branches and commits stay.
+    // Called only after `verifyGitResourceIdentity` matched this task's record.
+    removeManagedWorktree: (repoDir) => {
+      const record = recordOf(input);
+      if (!record) return { ok: false, reason: "任务记录缺失，拒绝移除工作副本" };
+      const registered = worktreesOf(input).some((worktree) => worktree.repoDir === repoDir);
+      if (!registered) return { ok: false, reason: `${repoDir} 不在本任务登记的工作副本中，拒绝移除` };
+      try {
+        execFileSync("git", ["-C", record.root, "worktree", "remove", "--force", repoDir], {
+          encoding: "utf8",
+          timeout: 20_000,
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+      } catch (error) {
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      }
+      if (existsSync(repoDir)) return { ok: false, reason: `${repoDir} 移除后仍然存在，保留恢复入口` };
+      return { ok: true, reason: `已移除受管工作副本 ${repoDir}，原仓库 ${record.root} 保留` };
+    },
     // [#117 第 5 项] No `browserPages` probe: the persistent partition is
     // main's, so page/retention facts reach the lifecycle state machine as an
     // injected observation (`TaskBrowserObservation`) on the calls that need

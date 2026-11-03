@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
 import { DesktopConversation } from "../components/DesktopConversation";
 import type { PidockBridge } from "../data/shellBridge";
@@ -42,7 +42,7 @@ async function openWorkspace(taskRows: Array<Record<string, unknown>>) {
   window.pidock = host;
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "项目管理" }));
-  fireEvent.click(await screen.findByRole("button", { name: "真实项目" }));
+  fireEvent.click(await within(screen.getByRole("navigation", { name: "项目导航" })).findByRole("button", { name: "真实项目" }));
   fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
   await screen.findByText(/尚未开始/);
   return host;

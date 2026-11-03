@@ -52,6 +52,7 @@ import {
   WorktreeMetadataLock,
   sourceRepoLockKeys,
 } from "./worktree-metadata-lock.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 /** Real repositories and real processes: a loaded machine must not look like a failure. */
 const EVIDENCE_TEST_TIMEOUT_MS = 90_000;
@@ -184,6 +185,7 @@ async function setup() {
     directories: [],
   });
   const roots = new TaskRootIndex(profile, root);
+  saveTestDeliverySettings(profile);
   const storage = new CreationIntentStore(profile);
   const creation = new ProjectTaskCreation(storage, projects, roots, createHost(root), root, undefined, new WorktreeMetadataLock(profile));
   const selection = (fixture: RepoFixture) => ({
@@ -293,7 +295,6 @@ registerHooks({
  */
 const holderSource = (modulePath: string): string => `
 import { WorktreeMetadataLock } from ${JSON.stringify(pathToFileURL(modulePath).href)};
-
 const [userData, source, taskId, label] = process.argv.slice(2);
 const lock = new WorktreeMetadataLock(userData);
 const acquisition = lock.acquireFor([source], { taskId, label });

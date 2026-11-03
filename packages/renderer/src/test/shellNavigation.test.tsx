@@ -47,7 +47,6 @@ describe("shell sidebar groups", () => {
       "能力管理",
       "远程访问",
       "本机设置",
-      "模型与 Provider",
     ]);
     // Only the running tasks of the selected workspace: the archived task
     // `legacy-auth` stays out, like prototype A does.
@@ -129,9 +128,11 @@ describe("shell sidebar groups", () => {
 describe("shell wording, highlight and keyboard reach", () => {
   it("replaces the old view wording in the shell, the breadcrumb and the page", async () => {
     const user = userEvent.setup();
-    renderApp("/providers");
-    expect(await screen.findByRole("heading", { name: "模型与 Provider" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "模型与 Provider" })).toHaveAttribute("aria-current", "page");
+    renderApp("/capabilities");
+    expect(await screen.findByRole("heading", { name: "能力管理" })).toBeInTheDocument();
+    // 能力管理 is the single Provider entry: the old duplicate route is gone.
+    expect(screen.getByRole("button", { name: "能力管理" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("button", { name: "模型与 Provider" })).toBeNull();
     expect(screen.queryByText("Provider 与上下文")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "已归档" }));

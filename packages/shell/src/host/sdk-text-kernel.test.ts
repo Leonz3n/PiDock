@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, afterAll, expect, it, vi } from "vitest";
@@ -52,12 +52,13 @@ const model: Model<"pidock-local-test"> = {
 const usage = { input: 4, output: 2, cacheRead: 1, cacheWrite: 0, totalTokens: 7,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
-async function kernel(dir: string, onPrompt?: (texts: string[]) => string, selectedModel: Model<"pidock-local-test"> = model) {
+async function kernel(dir: string, onPrompt?: (texts: string[]) => string, selectedModel: Model<"pidock-local-test"> = model,
+  extraModels: Model<"pidock-local-test">[] = []) {
   const runtime = await ModelRuntime.create({ authPath: join(dir, ".private-auth.json"), modelsPath: join(dir, ".private-models.json"), refreshOnCreate: false });
   const seen: string[][] = [];
   const provider: Provider<"pidock-local-test"> = {
     id: model.provider, name: "Isolated local test", auth: { apiKey: { name: "Local", resolve: async () => ({ auth: {} }) } },
-    getModels: () => [model],
+    getModels: () => [selectedModel, ...extraModels],
     stream: (_model, context, options) => provider.streamSimple(_model, context, options),
     streamSimple: (_model, context, options) => {
       const messages = context.messages.map((message) => message.role === "user" ?
@@ -65,7 +66,7 @@ async function kernel(dir: string, onPrompt?: (texts: string[]) => string, selec
       seen.push(messages);
       const stream = createAssistantMessageEventStream();
       const response = onPrompt?.(messages) ?? "hello";
-      const partial: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id,
+      const partial: AssistantMessage = { role: "assistant", api: _model.api, provider: _model.provider, model: _model.id,
         content: [], usage, stopReason: "pending", timestamp: Date.now() };
       queueMicrotask(() => {
         stream.push({ type: "start", partial });
@@ -96,7 +97,12 @@ async function kernel(dir: string, onPrompt?: (texts: string[]) => string, selec
     },
   };
   runtime.registerNativeProvider(provider);
-  return { instance: new PiSdkTextKernel(JSON.parse(readFileSync(join(dir, "task.json"), "utf8")).taskId, dir, { model: selectedModel, modelRuntime: runtime }), seen };
+  const catalog = [selectedModel, ...extraModels];
+  return { instance: new PiSdkTextKernel(JSON.parse(readFileSync(join(dir, "task.json"), "utf8")).taskId, dir, {
+    model: selectedModel,
+    modelRuntime: runtime,
+    modelById: (modelId) => catalog.find((entry) => entry.id === modelId),
+  }), seen };
 }
 
 it("distinguishes a live pending SDK user entry from a cold interrupted entry", async () => {
@@ -372,8 +378,10 @@ it("fails closed on copied session bindings, missing JSONL, empty and provider e
   await first.instance.prompt("main", "seed");
   const firstFile = (await first.instance.open("main")).file;
   await first.instance.dispose();
+  // [#139] The session records its own model: a profile that no longer declares
+  // it refuses by THAT name (still fail-closed, no silent re-bind).
   const changed = await kernel(a, undefined, { ...model, id: "other-model" });
-  await expect(changed.instance.open("main")).rejects.toThrow("sdk-configuration-mismatch");
+  await expect(changed.instance.open("main")).rejects.toThrow("sdk-model-unknown");
   await changed.instance.dispose();
   const bKernel = await kernel(b);
   mkdirSync(join(b, ".pidock-sdk-sessions", "main"), { recursive: true });
@@ -439,6 +447,12 @@ it("refuses disk-backed scripted sends while keeping legacy snapshots readable",
 it("records production scheduled triggers as failed without a synthetic session", async () => {
   const dir = task("task-a");
   const host = new TaskWorkspaceHost("task-a", dir);
+  // [#152] a schedule only lives in a task created as its own dedicated task.
+  host.store.writeTask(dir, buildTaskDiskRecord({
+    taskId: "task-a", name: "Check", dirId: "task-a", branch: "task/task-a", root: dir,
+    taskDir: dir, remoteBranch: "", baseCommit: "", repos: [], kind: "scheduled",
+    now: "2026-09-23T02:00:00.000Z",
+  }));
   host.setProviderCatalog([{ id: "local-test", name: "Local test", protocol: "anthropic-messages", baseUrl: "http://127.0.0.1", enabled: true,
     models: [{ id: "fixture", name: "Fixture", contextWindow: 2048 }] }]);
   const saved = host.saveSchedule({ name: "Check", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "hello",
@@ -449,6 +463,27 @@ it("records production scheduled triggers as failed without a synthetic session"
   expect(run).toMatchObject({ result: "failed" });
   expect(host.sessionIds()).toEqual([]);
   await host.dispose();
+});
+
+it("refuses a SECOND session's turn with the named task-wide busy state instead of queueing it", async () => {
+  // [#139] One task runs one turn at a time: a session is not a separate
+  // scheduler. The second session's prompt is refused by name (`task-locked`) —
+  // it is never queued, never merged into the running turn and never silently
+  // dropped.
+  const dir = task("task-a");
+  const pending = await kernel(dir, () => "wait");
+  await pending.instance.open("main");
+  // The second session exists and has its own SDK dir before the collision.
+  expect((await pending.instance.open("s-1a2b3c4d")).file).toContain("s-1a2b3c4d");
+  const running = pending.instance.prompt("main", "wait");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await expect(pending.instance.prompt("s-1a2b3c4d", "second")).rejects.toThrow("task-locked");
+  await pending.instance.cancel("main");
+  expect((await running).state).toBe("cancelled");
+  // The refused session kept its own (empty) history: nothing was appended to it.
+  const digest = await pending.instance.digest("s-1a2b3c4d");
+  expect(digest).toMatchObject({ sessionId: "s-1a2b3c4d", turns: 0, usage: null });
+  await pending.instance.dispose();
 });
 
 it("offers no tools even when a local provider emits a write tool call", async () => {
@@ -490,7 +525,7 @@ it("aborts a pending SDK stream, guards concurrent task prompts and surfaces cal
 });
 
 it("refuses invalid explicit endpoints and missing keys despite ambient Provider credentials", async () => {
-  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }]};
   vi.stubEnv("OPENAI_API_KEY", "SYNTHETIC_AMBIENT_KEY");
   try {
     await expect(createExplicitTextRuntime(base, "")).rejects.toThrow("provider-not-configured");
@@ -505,7 +540,7 @@ it("refuses invalid explicit endpoints and missing keys despite ambient Provider
 });
 
 it("refuses an explicit SDK runtime without the trusted isolation opt-in", async () => {
-  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const base = { profileId: "explicit", baseUrl: "https://api.example.com/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }]};
   const saved = process.env["PIDOCK_SDK_ISOLATED"];
   delete process.env["PIDOCK_SDK_ISOLATED"];
   try {
@@ -518,7 +553,7 @@ it("refuses an explicit SDK runtime without the trusted isolation opt-in", async
 
 it("rejects a same-name endpoint or credential reference change in a bound SDK session", async () => {
   const dir = task("task-explicit-identity");
-  const base = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const base = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }]};
   const first = await createExplicitTextRuntime(base, "synthetic");
   const original = new PiSdkTextKernel("task-explicit-identity", dir, { model: first.model, modelRuntime: first.runtime, bindingIdentity: first.bindingIdentity });
   const file = (await original.open("main")).file;
@@ -539,7 +574,7 @@ it("rejects a same-name endpoint or credential reference change in a bound SDK s
 it("normalizes explicit Provider errors before the SDK writes JSONL", async () => {
   const dir = task("task-explicit-error");
   const secret = "SYNTHETIC_CREDENTIAL_46_DO_NOT_USE";
-  const config = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+  const config = { profileId: "explicit", baseUrl: "http://127.0.0.1:8888/v1", modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }]};
   const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime(config, secret);
   const provider: Provider = {
     id: selected.provider, name: "Synthetic error", auth: { apiKey: { name: "Synthetic", resolve: async () => ({ auth: {} }) } },
@@ -583,6 +618,8 @@ it("keeps real OpenAI-compatible SDK text and usage with the guarded runtime", a
     const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime({
       profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`,
       modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+      protocol: "openai-completions", credentialSource: "env",
+      models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }],
     }, secret);
     const instance = new PiSdkTextKernel("task-explicit-success", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
     const file = (await instance.open("main")).file;
@@ -611,6 +648,8 @@ it("keeps explicit OpenAI-compatible auth on the original origin across redirect
     const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime({
       profileId: "explicit", baseUrl: `http://127.0.0.1:${(primary.address() as { port: number }).port}/v1`,
       modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+      protocol: "openai-completions", credentialSource: "env",
+      models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }],
     }, secret);
     const instance = new PiSdkTextKernel("task-explicit-redirect", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
     const file = (await instance.open("main")).file;
@@ -666,7 +705,12 @@ it("normalizes loopback non-2xx and mid-stream failures before JSONL, projection
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
-    const config = { profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+    const config = {
+      profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture",
+      contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+      protocol: "openai-completions" as const, credentialSource: "env" as const,
+      models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }],
+    };
     const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime(config, secret);
     const instance = new PiSdkTextKernel("task-explicit-error-paths", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
     const file = (await instance.open("main")).file;
@@ -711,7 +755,12 @@ it("keeps a cancelled loopback stream free of the credential and raw error text"
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
-    const config = { profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture", contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1 };
+    const config = {
+      profileId: "explicit", baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, modelId: "fixture",
+      contextWindow: 2048, maxTokens: 128, authRef: "PIDOCK_PROVIDER_TEST", generation: 1,
+      protocol: "openai-completions" as const, credentialSource: "env" as const,
+      models: [{ id: "fixture", name: "fixture", contextWindow: 2048, maxTokens: 128, reasoning: false }],
+    };
     const { runtime, model: selected, bindingIdentity } = await createExplicitTextRuntime(config, secret);
     const instance = new PiSdkTextKernel("task-explicit-cancel", dir, { model: selected, modelRuntime: runtime, bindingIdentity });
     const file = (await instance.open("main")).file;
@@ -740,4 +789,186 @@ it("keeps a cancelled loopback stream free of the credential and raw error text"
     expect(JSON.stringify(reopened.projection("main"))).not.toContain(secret);
     await reopened.dispose();
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+/**
+ * Pi 1.5 `SessionManager` contract this kernel relies on (#11460): an entry the
+ * session file REFUSED must not stay on the in-memory parent chain. Without the
+ * rollback, the next entry is written with a `parentId` that exists in memory but
+ * not in the file - a dangling parent that cold recovery cannot walk.
+ *
+ * Pi 1.4 evidence for this area was "new version writes, then recovers"; this is
+ * the 1.5 write-failure evidence, measured on the real `SessionManager`.
+ *
+ * Root can append to a 0400 file, so the refusal this test needs cannot be
+ * produced there: it is SKIPPED there rather than returning early inside the
+ * body, because a body that silently asserts nothing is not evidence.
+ */
+it.skipIf(process.getuid?.() === 0)("keeps memory and disk in one parent chain when the SDK session write fails", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pidock-sdk-session-write-"));
+  roots.push(dir);
+  const file = join(dir, "session.jsonl");
+  writeFileSync(file, "");
+  const manager = SessionManager.open(file, dir, dir);
+  const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: Date.now() });
+  expect(manager.getLeafId()).toBe(firstId);
+  const written = readFileSync(file, "utf8");
+  const lines = written.trim().split("\n");
+  expect(JSON.parse(lines.at(-1)!)).toMatchObject({ type: "message", id: firstId, parentId: null });
+
+  chmodSync(file, 0o400);
+  let failure: unknown;
+  try {
+    manager.appendMessage({ role: "user", content: "never written", timestamp: Date.now() });
+  } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(Error);
+
+  // Memory: the refused entry is gone, and the leaf is the last entry the file
+  // really holds (not the one it refused).
+  expect(manager.getLeafId()).toBe(firstId);
+  expect(manager.getBranch().map((entry) => entry.id)).toEqual([firstId]);
+  // Disk: byte-identical. No half-written line and no entry chained to a parent
+  // that was never written.
+  expect(readFileSync(file, "utf8")).toBe(written);
+  // The next entry chains to the real leaf, so disk and memory agree again.
+  chmodSync(file, 0o600);
+  const secondId = manager.appendMessage({ role: "user", content: "second", timestamp: Date.now() });
+  const reopened = SessionManager.open(file, dir, dir);
+  expect(reopened.getBranch().map((entry) => entry.id)).toEqual([firstId, secondId]);
+  expect(reopened.getEntry(secondId)?.parentId).toBe(firstId);
+});
+
+// Same guard as above: as root the refused write never happens, so this case is
+// reported as skipped instead of passing without asserting anything.
+it.skipIf(process.getuid?.() === 0)("fails a turn whose JSONL write is refused and reopens without a dangling parent or a replayed prompt", async () => {
+  const dir = task("task-sdk-write-failure");
+  const fake = await kernel(dir, (texts) => `reply-${texts.filter((x) => x !== "assistant").length}`);
+  const opened = await fake.instance.open("main");
+  expect((await fake.instance.prompt("main", "first")).state).toBe("done");
+  const committed = readFileSync(opened.file, "utf8");
+
+  chmodSync(opened.file, 0o400);
+  const failed = await fake.instance.prompt("main", "never-committed");
+  expect(failed.state).toBe("failed");
+  // Nothing was appended while the write was refused.
+  expect(readFileSync(opened.file, "utf8")).toBe(committed);
+  chmodSync(opened.file, 0o600);
+  await fake.instance.dispose();
+
+  const reopened = await kernel(dir, () => "after-recovery");
+  const reopenedOpened = await reopened.instance.open("main");
+  expect(reopenedOpened.file).toBe(opened.file);
+  // Disk == memory: every entry's parent is an entry the file really holds.
+  const manager = SessionManager.open(reopenedOpened.file, join(dir, ".pidock-sdk-sessions", "main"), dir);
+  const ids = new Set(manager.getBranch().map((entry) => entry.id));
+  expect(manager.getBranch().length).toBeGreaterThan(0);
+  for (const entry of manager.getBranch()) if (entry.parentId !== null) expect(ids.has(entry.parentId)).toBe(true);
+  // Cold recovery neither replays the refused prompt nor loses the committed one.
+  expect(reopened.instance.projection("main").messages.some((message) => message.text.includes("never-committed"))).toBe(false);
+  expect((await reopened.instance.prompt("main", "next")).state).toBe("done");
+  expect(reopened.seen.at(-1)!.join("\n")).toContain("first");
+  expect(reopened.seen.at(-1)!.join("\n")).not.toContain("never-committed");
+  await reopened.instance.dispose();
+});
+
+// ---- [Pencil T04] #139: several sessions in one task ----------------------
+
+const secondModel: Model<"pidock-local-test"> = { ...model, id: "fixture-2", name: "Fixture 2", contextWindow: 4096 };
+
+it("keeps two sessions in one task on independent JSONL transcripts with no message bleed", async () => {
+  const dir = task("task-multi-session");
+  const fake = await kernel(dir, (texts) => `reply:${texts.at(-1)}`);
+  const main = await fake.instance.open("main");
+  const second = await fake.instance.open("s-0badc0de");
+  // Different SDK ids and different files: the second session is a fresh context.
+  expect(second.sdkId).not.toBe(main.sdkId);
+  expect(second.file).not.toBe(main.file);
+  expect(second.file.startsWith(join(dir, ".pidock-sdk-sessions", "s-0badc0de"))).toBe(true);
+  expect(await fake.instance.prompt("main", "first session question")).toMatchObject({ state: "done" });
+  expect(await fake.instance.prompt("s-0badc0de", "second session question")).toMatchObject({ state: "done" });
+
+  const mainProjection = fake.instance.projection("main");
+  const secondProjection = fake.instance.projection("s-0badc0de");
+  expect(mainProjection.messages.map((message) => message.text)).toEqual(["first session question", "reply:first session question"]);
+  expect(secondProjection.messages.map((message) => message.text)).toEqual(["second session question", "reply:second session question"]);
+  // Neither transcript may contain the other session's message.
+  expect(readFileSync(main.file, "utf8")).not.toContain("second session question");
+  expect(readFileSync(second.file, "utf8")).not.toContain("first session question");
+  // Both sessions run in the task's own working directory, never a per-session copy.
+  expect(JSON.parse(readFileSync(main.file, "utf8").split("\n", 1)[0]!).cwd).toBe(dir);
+  expect(JSON.parse(readFileSync(second.file, "utf8").split("\n", 1)[0]!).cwd).toBe(dir);
+  await fake.instance.dispose();
+
+  // Restart continuity: a cold kernel reads both transcripts back, ids intact.
+  const cold = await kernel(dir, () => "again");
+  expect(cold.instance.projection("main").messages).toHaveLength(2);
+  expect(cold.instance.projection("s-0badc0de").messages).toHaveLength(2);
+  expect(await cold.instance.prompt("s-0badc0de", "continue")).toMatchObject({ state: "done" });
+  expect(cold.instance.projection("s-0badc0de").messages.map((message) => message.text))
+    .toEqual(["second session question", "reply:second session question", "continue", "again"]);
+  await cold.instance.dispose();
+});
+
+it("switches one session's model, keeps its history and refuses while a turn runs", async () => {
+  const dir = task("task-session-model");
+  const fake = await kernel(dir, () => "answer", model, [secondModel]);
+  await fake.instance.prompt("main", "before the switch");
+  const before = fake.instance.digest("main");
+  expect(before.model).toMatchObject({ modelId: model.id });
+  expect(before.turns).toBe(1);
+
+  // A different model of the same profile: the session keeps its transcript.
+  const bound = await fake.instance.bindSession("main", { modelId: secondModel.id });
+  expect(bound).toMatchObject({ modelId: secondModel.id, thinkingLevel: "off" });
+  expect(fake.instance.projection("main").messages.map((message) => message.text)).toEqual(["before the switch", "answer"]);
+  await fake.instance.prompt("main", "after the switch");
+  const after = fake.instance.digest("main");
+  expect(after.turns).toBe(2);
+  expect(after.model).toMatchObject({ modelId: secondModel.id });
+  // The earlier messages are still the whole context of the second turn.
+  // (The fixture's projection maps a non-user role to "assistant", so the
+  // leading entry is the transcript's own system message.)
+  expect(fake.seen.at(-1)?.slice(1)).toEqual(["before the switch", "assistant", "after the switch"]);
+  const binding = JSON.parse(readFileSync(join(dir, ".pidock-sdk-sessions", "main", "binding.json"), "utf8"));
+  expect(binding).toMatchObject({ modelId: secondModel.id, thinkingLevel: "off" });
+  // The transcript itself records that the model changed.
+  expect(fake.instance.projection("main").messages).toHaveLength(4);
+  await fake.instance.dispose();
+
+  // The binding survives a restart: the same session continues on the new model.
+  const cold = await kernel(dir, () => "third", model, [secondModel]);
+  const reopened = await cold.instance.open("main");
+  expect(reopened).toMatchObject({ modelId: secondModel.id });
+  await cold.instance.dispose();
+
+  const busy = await kernel(dir, () => "wait", model, [secondModel]);
+  const running = busy.instance.prompt("main", "still running");
+  await vi.waitFor(() => expect(busy.instance.projection("main").messages.length).toBeGreaterThan(3));
+  await expect(busy.instance.bindSession("main", { modelId: model.id })).rejects.toThrow("sdk-session-busy");
+  await busy.instance.cancel("main");
+  await running;
+  await expect(busy.instance.bindSession("main", { modelId: "not-declared" })).rejects.toThrow("sdk-model-unknown");
+  await busy.instance.dispose();
+});
+
+it("reads context occupancy and cumulative usage from the session's own transcript (unknown is never 0)", async () => {
+  const dir = task("task-session-digest");
+  const fake = await kernel(dir, () => "answer");
+  // No transcript yet: every number is unknown, not zero.
+  expect(fake.instance.digest("main")).toMatchObject({ turns: 0, contextUsed: null, usage: null, model: null, interrupted: false });
+  await fake.instance.prompt("main", "one");
+  const first = fake.instance.digest("main");
+  // `usage` in this fixture is input 4 / output 2 / cacheRead 1 / cacheWrite 0.
+  expect(first.contextUsed).toBe(5);
+  expect(first.usage).toEqual({ input: 4, output: 2, cacheRead: 1, cacheWrite: 0 });
+  expect(first.turns).toBe(1);
+  // Reading again (a replay, a restart, a second page) does not accumulate.
+  expect(fake.instance.digest("main").usage).toEqual(first.usage);
+  await fake.instance.prompt("main", "two");
+  expect(fake.instance.digest("main")).toMatchObject({
+    turns: 2, contextUsed: 5, usage: { input: 8, output: 4, cacheRead: 2, cacheWrite: 0 },
+  });
+  // A session with no binding reports nothing rather than the task's defaults.
+  expect(fake.instance.digest("s-0badc0de")).toMatchObject({ turns: 0, contextUsed: null, usage: null });
+  await fake.instance.dispose();
 });

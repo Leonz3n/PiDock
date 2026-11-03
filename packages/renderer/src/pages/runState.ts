@@ -16,7 +16,7 @@ export function runStateLabel(state: RunState) {
 }
 
 export function scheduledRunResultLabel(result: ScheduledRun["result"]) {
-  return { completed: "完成", "awaiting-approval": "待确认", skipped: "跳过", failed: "失败" }[result];
+  return { running: "执行中", completed: "完成", "awaiting-approval": "待确认", skipped: "跳过", failed: "失败", interrupted: "已中断", uncertain: "状态不确定" }[result];
 }
 
 export function attentionKindLabel(kind: AttentionItem["kind"]) {

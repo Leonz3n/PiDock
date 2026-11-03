@@ -58,6 +58,10 @@ function setup(read: () => HostRead) {
   const taskOp = vi.fn(async (_taskId: string, op: string) => {
     if (op === "task/executionState") return read();
     if (op === "task/sessionContext") return { ok: false as const, error: "session-context-not-wired" };
+    // [#139] The composer's session identity reads are named here too, so the
+    // op set below pins every read this page issues.
+    if (op === "task/sessionList") return { ok: true as const, payload: { activeSessionId: "main", sessions: [{ id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: null }], provider: null } };
+    if (op === "task/sessionReadout") return { ok: true as const, payload: { session: { id: "main", name: "主会话", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: null }, active: true, model: null, reasoningLevels: [], context: { used: null, window: null, source: "unknown" }, usage: null, turns: 0, transcriptModel: null, pending: false, interrupted: false } };
     return { ok: false as const, error: `unexpected ${op}` };
   });
   const bridge: PidockBridge = {
@@ -180,7 +184,7 @@ describe("#24 desktop task page execution state", () => {
     // [#117 第 7 项] The composer's draft now also lives in the Host, so the
     // allowed read set grew by exactly one member: `task/readDraft`. No write op
     // may appear here, which is what this line is for.
-    expect(ops.every((op) => ["task/executionState", "task/sessionContext", "task/readDraft", "task/saveDraft"].includes(op))).toBe(true);
+    expect(ops.every((op) => ["task/executionState", "task/listApprovals", "task/sessionList", "task/sessionReadout", "task/readDraft", "task/saveDraft"].includes(op))).toBe(true);
     // Typing is what makes a draft write; nothing here clears, sends or stops
     // anything behind the user's back.
     expect(ops).toContain("task/saveDraft");

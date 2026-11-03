@@ -21,6 +21,11 @@ export interface ScheduleDriverPorts {
   evaluate(taskId: string): Promise<void>;
   /** Report a failure without stopping the loop. */
   onError?(error: unknown, taskId: string): void;
+  /**
+   * [Pencil T18] #153: a named reason the loop must not evaluate anything now
+   * (the app is quitting or the machine is asleep). `null` = allowed.
+   */
+  blockedReason?(): string | null;
 }
 
 export interface ScheduleTickResult {
@@ -29,6 +34,8 @@ export interface ScheduleTickResult {
   /** Tasks skipped because the previous tick is still running. */
   skipped: string[];
   failures: { taskId: string; error: string }[];
+  /** Set when this tick was refused as a whole (quitting / asleep). */
+  blocked?: string;
 }
 
 export interface ScheduleDriverOptions {
@@ -61,6 +68,9 @@ export class ScheduleDriver {
   /** Evaluate every running Host's due triggers once. */
   async tick(): Promise<ScheduleTickResult> {
     const taskIds = [...this.ports.hostTaskIds()];
+    // 退出／休眠期间不执行：the whole tick is refused by name, not silently.
+    const blocked = this.ports.blockedReason?.() ?? null;
+    if (blocked !== null) return { evaluated: [], skipped: taskIds, failures: [], blocked };
     if (this.ticking) return { evaluated: [], skipped: taskIds, failures: [] };
     this.ticking = true;
     const evaluated: string[] = [];

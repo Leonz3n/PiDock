@@ -35,6 +35,7 @@ import { TaskWorkspaceFiles, realWorkspaceFileReaders } from "../host/workspace-
 import { ProjectRegistry } from "./project-registry.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 /** Every test here builds real repositories; a loaded machine must not look like a failure. */
 const ISOLATION_TEST_TIMEOUT_MS = 60_000;
@@ -85,6 +86,7 @@ async function setup() {
     directories: [{ name: "shared", path: shared }],
   });
   const roots = new TaskRootIndex(profile, root);
+  saveTestDeliverySettings(profile);
   const storage = new CreationIntentStore(profile);
   const host = {
     routeTaskOp: async ({ taskId, payload }: { taskId: string; op: "task/provision"; payload: Record<string, unknown> }) => {

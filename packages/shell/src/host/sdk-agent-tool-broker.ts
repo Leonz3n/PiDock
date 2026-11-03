@@ -17,6 +17,13 @@
  *    application-private path and anything outside the task folder are refused
  *    by name before any read or write; a write must additionally land inside one
  *    of this task's own worktrees;
+ * 2b. [#151] the ONE read-only exception: `fs.read` may read a `SKILL.md` (or a
+ *    relative file it references) of an explicitly added, enabled local Skills
+ *    source. It is decided per call from the app-private source document and on
+ *    real paths only (`skill-resource-access.ts`), it never applies to a write,
+ *    a command or a directory listing, and the task-scoped gate is not used for
+ *    it (the gate's own rule is "inside the task", which would deny the very
+ *    file the skill prompt advertised);
  * 3. the **existing permission gate** (`main/pi-session.ts` semantics) decides:
  *    `read` denies every non-read tool, `default` asks for command tools, `auto`
  *    allows inside the task;
@@ -50,11 +57,12 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import type { PiApproval, PiApprovalScope, PiGateDecision, PiPermission } from "../main/pi-session.js";
-import { AGENT_TOOL_SCOPE, SERVICE_CONTROL_SCOPE } from "../main/pi-session.js";
+import { AGENT_TOOL_SCOPE, SERVICE_CONTROL_SCOPE, isMcpGatedToolName } from "../main/pi-session.js";
 import { SERVICE_VALUE_MASK } from "../main/service-config.js";
 import type { ControlExecutionPort } from "./execution-ledger.js";
 import { isCredentialEnvName } from "./explicit-text-provider.js";
 import { normalizeScopePath } from "./path-coordination.js";
+import { decideSkillResourceRead, type SkillResourceDecision, type SkillResourceTarget } from "./skill-resource-access.js";
 import { runAgentServiceControl, type ServiceExecutionDriver } from "./service-control.js";
 import { probeServiceHealth, type ServiceHealthObservation } from "./service-health-probe.js";
 import { SERVICE_CONTROL_TOOL, type ServiceRecord, type TaskServiceRuntime } from "./service-runtime.js";
@@ -62,6 +70,7 @@ import type { ServiceTemplateEditContent, ServiceTemplateEditPort, ServiceTempla
 import { isServiceTemplateEdit } from "../rpc/service-template-request.js";
 import { writeClaimError, type WriteCoordinatorPort } from "./write-coordination.js";
 import {
+  MCP_TOOL_GATE,
   SERVICE_TEMPLATE_TOOL,
   sdkAgentToolSpec,
   type SdkAgentToolName,
@@ -155,8 +164,9 @@ export interface SdkAgentServiceHost {
 /** The gate surface of one session channel (structural `PiSessionChannel`). */
 export interface SdkAgentToolChannel {
   readonly currentPermission: PiPermission;
-  previewGate(toolName: string, target: string): PiGateDecision;
-  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope, operation?: string): PiGateDecision;
+  /** `mcpKind` is supplied only for an `mcp__…` name; every fixed tool ignores it. */
+  previewGate(toolName: string, target: string, mcpKind?: "read" | "write" | "command"): PiGateDecision;
+  gate(toolName: string, target: string, contentVersion: string, currentCallId?: string, scope?: PiApprovalScope, operation?: string, mcpKind?: "read" | "write" | "command"): PiGateDecision;
   consumeApproval(approvalId: string): boolean;
   reject(approvalId: string): void;
   snapshot(): { approvals: PiApproval[] };
@@ -193,8 +203,27 @@ export interface SdkAgentToolBrokerOptions {
   templates?: () => ServiceTemplateEditPort | undefined;
   /** Real path: `realpath` of the deepest existing ancestor + the rest. */
   resolveRealPath(path: string): string;
+  /**
+   * [#151] The app-private Skills source document (`skill-sources.json` under
+   * `userData`). When present, `fs.read` may read a `SKILL.md` (or a relative
+   * file it references) of an explicitly added, enabled source even though the
+   * source lives outside the task. Nothing else is widened: the grant is
+   * read-only, decided per call from the current document and real paths, and
+   * `fs.search`/`fs.write`/`exec.run` keep the task-only rules. Absent (a Host
+   * main did not wire, or a pre-#151 wiring) means no grant at all.
+   */
+  skillSourcesFile?: () => string | undefined;
   /** True while the Host is closing (no new effect may start). */
   closing(): boolean;
+  /**
+   * [Pencil T06] #141 cross-process shared real-path claim. A mutating path tool
+   * takes the SAME real-path keys a turn tool takes (in-process table + the
+   * app-private lock), so two real Host processes writing one shared directory
+   * mutually exclude. Absent means this Host has no shared-path layer (a
+   * standalone Host with no shared directory).
+   */
+  sharedPaths?: (input: { sessionId: string; label: string; realPath: string }) =>
+    { ok: true; release: () => void } | { ok: false; reason: string };
   approvalTimeoutMs?: number;
   /** Process boundary for `exec.run`; injected so tests drive their own. */
   runCommand?: (input: { command: string; cwd: string; timeoutMs: number }) => Promise<SdkAgentCommandResult>;
@@ -545,8 +574,13 @@ function templateReviewText(review: ServiceTemplateReview): string {
   ].join("\n");
 }
 
-/** The child environment: the Host's own, minus every credential-shaped name. */
-function commandEnvironment(): Record<string, string> {
+/**
+ * The child environment: the Host's own, minus every credential-shaped name.
+ * Exported so a test can prove the real `exec.run` boundary carries the task
+ * variables main put on this Host's process environment (#144), rather than
+ * rebuilding a second copy of the rule.
+ */
+export function commandEnvironment(): Record<string, string> {
   const env: Record<string, string> = { TERM: "dumb" };
   for (const [name, value] of Object.entries(process.env)) {
     if (value === undefined || isCredentialEnvName(name)) continue;
@@ -569,7 +603,8 @@ function commandEnvironment(): Record<string, string> {
  */
 const EXEC_UNSUPPORTED_PLATFORM = "tool-refused:exec-unsupported-platform";
 
-function defaultRunCommand(input: { command: string; cwd: string; timeoutMs: number }): Promise<SdkAgentCommandResult> {
+/** Exported for the #144 real-command test: this is the function `exec.run` uses. */
+export function defaultRunCommand(input: { command: string; cwd: string; timeoutMs: number }): Promise<SdkAgentCommandResult> {
   return new Promise((settle) => {
     const child = spawn("/bin/sh", ["-c", input.command], {
       cwd: input.cwd,
@@ -831,7 +866,35 @@ export function derivedPrimaryCheckouts(worktrees: readonly string[]): string[] 
   return [...checkouts].sort();
 }
 
-/** Parsed, strictly validated arguments of one tool call. */
+/**
+ * The arguments of one tool call, as the Host is allowed to read them (Pi 1.5):
+ * parsed and strictly validated here, converted by the SDK before `execute`.
+ *
+ * These are the values pi-ai's `validateToolArguments` produced with
+ * `@earendil-works/pi-schema` `compile(schema, {coerce: true}).parse(...)`, NOT
+ * the raw model arguments: pi-agent-core validates (and coerces) BEFORE it calls
+ * `execute`, and the transcript keeps the raw tool call while this function only
+ * ever sees the converted copy. The converted value is what the approval shows,
+ * what the payload fingerprint (`versionOf` below) binds and what the effect
+ * executes - all three read `ParsedArguments` - so a confirmation can never
+ * authorize one shape while another shape runs.
+ *
+ * What that means for the strict checks here is deliberate, not implied:
+ * - a required string the model sent as `null` arrives as the literal `"null"`
+ *   (1.4 produced `""`, which this function refused); it is accepted as the
+ *   name it literally spells, and the confinement checks below still decide
+ *   whether that name is inside the task;
+ * - `"3.5"`/`3.5` for an integer arrives as `3` (1.4 refused it). The bounds
+ *   below are applied AFTER the conversion, so `0.5` (-> 0) and `-1` are still
+ *   refused rather than quietly becoming a valid line number;
+ * - a single value for an array arrives as a one-item array (1.4 refused it).
+ *   Each row is still validated key-exactly by `isServiceTemplateEdit`, and the
+ *   review shows the rows before anything is written;
+ * - optional properties sent as `null` are dropped upstream, exactly as in 1.4.
+ * The Host's own key allowlist, type/range checks, path confinement and gate are
+ * unchanged: this module is not a second coercion layer, it is the strict
+ * semantic layer over whatever pi-schema produced.
+ */
 interface ParsedArguments {
   ok: true;
   values: { path?: string; pattern?: string; content?: string; command?: string; cwd?: string; offset?: number; limit?: number; serviceId?: string; templateEdit?: ServiceTemplateEditContent };
@@ -853,6 +916,13 @@ function parseArguments(tool: SdkAgentToolName, args: Record<string, unknown>): 
     // unknown key here and a named refusal, never a hint main would honour.
     [SERVICE_TEMPLATE_TOOL]: ["serviceId", "descriptor", "shared", "dependencies"],
   };
+  // In a real SDK turn this branch is not the one that answers: every schema here
+  // is closed (`additionalProperties: false`), so pi-schema 1.5 refuses an unknown
+  // field with `- <field>: unknown field` BEFORE `execute` runs (1.4 used TypeBox's
+  // `schema is false` wording; nothing asserts either wording). It is kept - and
+  // covered - because a direct broker caller (an older worker, a Host-driven
+  // retry) is not the SDK, and the Host must never rely on the worker's validator
+  // for its own key-exactness.
   const unknown = Object.keys(args).filter((key) => !allowed[tool].includes(key));
   if (unknown.length > 0) return { ok: false, outcome: refuse("tool-refused:invalid-arguments", `未知参数：${unknown.join("、")}`) };
   const string = (key: string, max: number): string | ArgumentsRefusal => {
@@ -1014,6 +1084,14 @@ export class SdkAgentToolBroker {
     if (this.closed || this.options.closing()) return refuse("tool-refused:task-host-closing", "任务宿主正在关闭，不接受新的工具执行");
     if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) return refuse("tool-refused:unknown-session", "工具请求未命名本任务的会话");
     const tool = typeof request?.tool === "string" ? request.tool : "";
+    // [Pencil T15] #150: an MCP call is decided here, before the worker's MCP
+    // extension executes it. Same session, gate, approval scope, write right and
+    // one-shot re-check as every task tool; only the effect stays in the worker
+    // because that is where the server connection lives.
+    if (tool === MCP_TOOL_GATE) {
+      if (!this.options.sessionKnown(sessionId)) return refuse("tool-refused:unknown-session", `会话 ${sessionId} 不属于本任务`);
+      return await this.gateMcpTool(sessionId, request.args);
+    }
     const spec = sdkAgentToolSpec(tool);
     if (!spec) return refuse("tool-refused:unknown-tool", `工具未接入门禁：${tool}`);
     const args = request.args;
@@ -1059,6 +1137,7 @@ export class SdkAgentToolBroker {
       return await this.runWithGate({
         sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: cwdPath.absolute,
         operation: parsed.values.command,
+        realPath: cwdPath.real,
         version: versionOf([spec.name, spec.kind, cwdPath.real, parsed.values.command, base]),
         effect: () => this.executeCommand(parsed.values.command!, cwdPath.real),
       });
@@ -1066,7 +1145,16 @@ export class SdkAgentToolBroker {
     const resolved = resolveSdkAgentToolPath({
       scope, resolveRealPath: this.options.resolveRealPath, requested: parsed.values.path!, base: scope.taskDir, mode: spec.kind === "read" ? "read" : "write",
     });
-    if (!resolved.ok) return refuse(resolved.code, resolved.reason);
+    if (!resolved.ok) {
+      // [#151] The advertised `SKILL.md` of an explicitly added source is a
+      // legitimate read even though it is outside the task: the Skills grant
+      // is consulted only after the task rule refused, only for `fs.read`, and
+      // it can never reach a write, a command or a directory listing.
+      const grant = spec.name === "fs.read" ? this.skillResourceGrant(scope, parsed.values.path!) : null;
+      if (grant === null) return refuse(resolved.code, resolved.reason);
+      if (grant.kind === "refused") return refuse(grant.code, grant.reason);
+      return await this.executeSkillRead(scope, parsed.values.path!, parsed.values);
+    }
     if (spec.name === "fs.write") {
       const fingerprint = fileFingerprint(resolved.real);
       if (fingerprint.startsWith("not-a-file") || fingerprint.startsWith("too-large")) {
@@ -1074,6 +1162,7 @@ export class SdkAgentToolBroker {
       }
       return await this.runWithGate({
         sessionId, channel: this.options.channel(sessionId), name: spec.name, kind: spec.kind, target: resolved.absolute,
+        realPath: resolved.real,
         version: versionOf([spec.name, spec.kind, resolved.real, fingerprint, createHash("sha256").update(parsed.values.content!).digest("hex")]),
         effect: () => this.executeWrite(resolved.real, parsed.values.content!),
       });
@@ -1401,14 +1490,59 @@ export class SdkAgentToolBroker {
    * effect will use: the existing gate compares lexically against its own task
    * folder, and confinement on the real path has already run before this point.
    */
+  /**
+   * [Pencil T15] #150: the permission half of one MCP call. The worker's MCP
+   * `tool_call` hook sends the registered tool name, its `readOnlyHint` and the
+   * model's arguments; this method binds them to the task and runs the same
+   * `runWithGate` path as `fs.*`/`exec.run` — preview tier, write right for a
+   * non-read tool, approval, one-shot re-check. The extension performs the call
+   * only after an `ok` outcome, so a refusal never opens a connection or invokes
+   * a server tool.
+   */
+  private async gateMcpTool(sessionId: string, raw: unknown): Promise<SdkAgentToolOutcome> {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return refuse("tool-refused:invalid-arguments", "MCP 调用参数必须是一个对象");
+    const values = raw as Record<string, unknown>;
+    const name = values["name"];
+    if (typeof name !== "string" || !isMcpGatedToolName(name)) return refuse("tool-refused:unknown-tool", "MCP 工具名称不受支持");
+    const readOnly = values["readOnly"];
+    if (typeof readOnly !== "boolean") return refuse("tool-refused:invalid-arguments", "MCP 工具缺少 readOnly 标记");
+    const toolArgs = values["args"];
+    if (typeof toolArgs !== "object" || toolArgs === null || Array.isArray(toolArgs)) return refuse("tool-refused:invalid-arguments", "MCP 工具参数必须是一个对象");
+    let serialized: string;
+    try { serialized = JSON.stringify(toolArgs); }
+    catch { return refuse("tool-refused:invalid-arguments", "MCP 工具参数无法序列化"); }
+    if (Buffer.byteLength(serialized, "utf8") > MAX_COMMAND_BYTES) return refuse("tool-refused:too-large", "MCP 工具参数超过上限");
+    const match = /^mcp__(.+)__(.+)$/.exec(name);
+    if (!match) return refuse("tool-refused:unknown-tool", "MCP 工具名称不受支持");
+    const [, server, tool] = match as unknown as [string, string, string];
+    const scope = this.options.scope();
+    // The target is a lexical identity inside the task, never a filesystem path
+    // the MCP server receives: `targetInTask` is what proves the gate can decide
+    // it, and the approval names the same server/tool the model called.
+    const target = `${scope.taskDir.replace(/[\\/]+$/, "")}/mcp/${server}/${tool}`;
+    const kind = readOnly ? "read" : "command";
+    return await this.runWithGate({
+      sessionId,
+      channel: this.options.channel(sessionId),
+      name,
+      kind,
+      target,
+      operation: `${server}/${tool} ${serialized}`.slice(0, MAX_COMMAND_CHARS),
+      version: versionOf([MCP_TOOL_GATE, name, kind, serialized]),
+      effect: async () => ({ outcome: "ok", text: "已通过权限门禁，MCP 扩展将继续执行本次调用" }),
+    });
+  }
+
   private async runWithGate(input: {
     sessionId: string;
     channel: SdkAgentToolChannel;
-    name: SdkAgentToolName;
+    name: string;
     kind: "read" | "write" | "command";
     target: string;
     /** What the confirmation shows when `target` alone cannot state the real operation (an `exec.run` command). */
     operation?: string;
+    /** The real path this call writes ([Pencil T06] #141 shared-path claim). */
+    realPath?: string;
     version: string;
     effect: () => Promise<SdkAgentToolOutcome>;
   }): Promise<SdkAgentToolOutcome> {
@@ -1416,7 +1550,7 @@ export class SdkAgentToolBroker {
     // The gate is previewed before the write right is claimed: a tier denial is
     // then reported by the permission gate itself (the same component the turn
     // flow uses), not by the write coordinator, and no claim is taken at all.
-    const preview = input.channel.previewGate(input.name, input.target);
+    const preview = input.channel.previewGate(input.name, input.target, input.kind);
     if (preview.verdict === "deny") return refuse("tool-refused:gate-denied", preview.reason);
     let claimId: string | undefined;
     if (mutating) {
@@ -1427,10 +1561,26 @@ export class SdkAgentToolBroker {
       if (!claim.ok) return refuse("tool-refused:write-lock", writeClaimError(claim));
       claimId = claim.claimId;
     }
+    // [Pencil T06] #141: a shared plain-directory target is also claimed on its
+    // REAL path, in-process and across Host processes. A refused claim releases
+    // the task write right and performs no effect.
+    let releasePath: (() => void) | undefined;
+    if (mutating && input.realPath !== undefined && this.options.sharedPaths !== undefined) {
+      const pathClaim = this.options.sharedPaths({
+        sessionId: input.sessionId,
+        label: `Agent 工具 ${input.name}`,
+        realPath: input.realPath,
+      });
+      if (!pathClaim.ok) {
+        if (claimId !== undefined) this.options.write.releaseWrite(claimId);
+        return refuse("tool-refused:shared-path-locked", pathClaim.reason);
+      }
+      releasePath = pathClaim.release;
+    }
     try {
       if (preview.verdict === "ask") {
         const tier = input.channel.currentPermission;
-        const gate = input.channel.gate(input.name, input.target, input.version, undefined, AGENT_TOOL_SCOPE, input.operation);
+        const gate = input.channel.gate(input.name, input.target, input.version, undefined, AGENT_TOOL_SCOPE, input.operation, input.kind);
         if (gate.verdict !== "ask") return refuse("tool-refused:gate-denied", "确认请求未能创建，执行已拒绝");
         this.options.persist(input.sessionId);
         const verdict = await this.awaitApproval(gate.approvalId, input.sessionId);
@@ -1446,6 +1596,7 @@ export class SdkAgentToolBroker {
       if (this.closed || this.options.closing()) return refuse("tool-refused:task-host-closing", "任务宿主正在关闭，执行已取消");
       return await input.effect();
     } finally {
+      releasePath?.();
       if (claimId !== undefined) this.options.write.releaseWrite(claimId);
     }
   }
@@ -1461,7 +1612,8 @@ export class SdkAgentToolBroker {
   private recheckApproval(input: {
     sessionId: string;
     channel: SdkAgentToolChannel;
-    name: SdkAgentToolName;
+    name: string;
+    kind: "read" | "write" | "command";
     target: string;
     version: string;
     approvalId: string;
@@ -1485,7 +1637,7 @@ export class SdkAgentToolBroker {
     if (approval.permissionAtRequest !== input.tier || approval.contentVersion !== input.version) {
       return { ok: false, code: "tool-refused:stale-approval", reason: "确认请求的请求权限或内容版本已变化，请重新发起调用" };
     }
-    if (input.channel.previewGate(input.name, input.target).verdict === "deny") {
+    if (input.channel.previewGate(input.name, input.target, input.kind).verdict === "deny") {
       return { ok: false, code: "tool-refused:gate-denied", reason: "当前权限已拒绝该目标" };
     }
     if (!input.channel.consumeApproval(input.approvalId)) {
@@ -1514,6 +1666,66 @@ export class SdkAgentToolBroker {
         finish("closed");
       }
     });
+  }
+
+  /**
+   * [#151] The lexical + real spelling of one requested read. `null` when the
+   * request cannot be resolved (then the task refusal stays the answer).
+   */
+  private skillResourceTarget(scope: SdkAgentToolScope, requested: string): SkillResourceTarget | null {
+    if (this.options.skillSourcesFile === undefined) return null;
+    const lexical = resolve(scope.taskDir, requested);
+    try {
+      return { lexical, real: resolveLinkChain(lexical, this.options.resolveRealPath) };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * [#151] The Skills grant for one request, or `null` when the path is not a
+   * resource of a registered source (the caller then keeps the task refusal).
+   * `assertProtected` still wins: an application-private file is not readable
+   * just because a user added its folder as a source.
+   */
+  private skillResourceGrant(scope: SdkAgentToolScope, requested: string): SkillResourceDecision | null {
+    const target = this.skillResourceTarget(scope, requested);
+    if (target === null) return null;
+    const decision = decideSkillResourceRead(this.options.skillSourcesFile?.(), target);
+    if (decision === null) return null;
+    try {
+      scope.assertProtected(target.lexical);
+      scope.assertProtected(target.real);
+    } catch {
+      return null;
+    }
+    return decision;
+  }
+
+  /**
+   * [#151] Read one file of an enabled Skills source.
+   *
+   * The grant is re-decided right before the effect: the source document is read
+   * again and the real path resolved again, so a source switched off, removed or
+   * made unreadable since the request - or a symlink swapped in after it - loses
+   * the capability instead of being served. The file itself goes through the
+   * same bounded, regular-file-only reader as an in-task read; a directory is
+   * refused, never listed.
+   */
+  private async executeSkillRead(
+    scope: SdkAgentToolScope,
+    requested: string,
+    values: { pattern?: string; offset?: number; limit?: number },
+  ): Promise<SdkAgentToolOutcome> {
+    if (this.closed || this.options.closing()) return refuse("tool-refused:task-host-closing", "任务宿主正在关闭，执行已取消");
+    const grant = this.skillResourceGrant(scope, requested);
+    if (grant === null) return refuse("tool-refused:skill-source-unknown", "目标不再属于已启用且注册的 Skills 来源，读取已拒绝");
+    if (grant.kind === "refused") return refuse(grant.code, grant.reason);
+    try {
+      return await this.executeRead("fs.read", grant.real, values);
+    } catch {
+      return refuse("tool-refused:skill-source-unreadable", `技能资源不可读取：${grant.real}`);
+    }
   }
 
   private async executeRead(

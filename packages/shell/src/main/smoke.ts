@@ -40,13 +40,21 @@ export const SHELL_BRIDGE_SURFACE = [
   "hostPing",
   "importTaskRoot",
   "listTasks",
+  // [Pencil T15] #150 the MCP management surface.
+  "mcpOp",
   "onHostStatus",
   "onSdkTurnEvent",
   "openTaskEditor",
+  // [Pencil T14] #149 the settings surface (appearance + native keybindings).
+  "preferencesOp",
   "projectOp",
   "providerOp",
+  // [Pencil T18] 工单 153 scheduler phase + last unconfirmed quit (read-only).
+  "schedulerState",
   "sdkTurn",
   "serviceCatalogOp",
+  // [Pencil T16] local Skills sources (list / add / remove / setEnabled).
+  "skillsOp",
   "taskOp",
 ] as const;
 

@@ -36,6 +36,7 @@
  * this is a Host observation and NOT a real pi/model verification.
  */
 import { useEffect, useRef, useState } from "react";
+import { SHARED_DIR_MANAGED_PROTECTION } from "../data/sharedDirProtection";
 import { fileDiffThroughShell, fileRootsThroughShell, probeLinkThroughShell } from "../data/shellBridge";
 import { shellFailure } from "../data/taskServices";
 import {
@@ -265,7 +266,7 @@ function RootGroup({ rootId, rows, changes, links }: { rootId: string; rows: rea
   return (
     <div className="mt-3" data-testid={root.kind === "shared-dir" ? "shared-dir-group" : "worktree-group"} data-root={rootId}>
       <h3 className="text-[12px] font-semibold text-ink">
-        {root.kind === "shared-dir" ? "普通目录链接" : "仓库"} <span className="font-mono">{hostText(rootId, "Host 未上报根标识")}</span>
+        {root.kind === "shared-dir" ? "普通目录链接" : root.kind === "existing-git" ? "已有 Git 目录（共享原检出）" : "仓库"} <span className="font-mono">{hostText(rootId, "Host 未上报根标识")}</span>
       </h3>
       {shared && root.kind === "worktree" && (
         <p className="mt-1 text-[11px] text-muted" data-testid={`worktree-group-note-${rootId}`}>
@@ -273,9 +274,15 @@ function RootGroup({ rootId, rows, changes, links }: { rootId: string; rows: rea
         </p>
       )}
       {shared && root.kind === "shared-dir" && (
-        <p className="mt-1 text-[11px] text-[#9a6032]" data-testid={`shared-dir-group-note-${rootId}`}>
-          本项目 {rows.length} 个任务指向同一原目录：共享原目录，文件未隔离，写入会互相影响。
-        </p>
+        <div className="mt-1" data-testid={`shared-dir-group-note-${rootId}`}>
+          <p className="text-[11px] text-[#9a6032]">
+            本项目 {rows.length} 个任务指向同一原目录：共享原目录，文件未隔离，写入会互相影响。
+          </p>
+          {/* [Pencil T06] ticket 141: 只有真实接线完成后才能说「受管保护」，并同时说出外部编辑器豁免。 */}
+          <p className="mt-0.5 text-[11px] text-muted" data-testid={`shared-dir-managed-protection-${rootId}`}>
+            {SHARED_DIR_MANAGED_PROTECTION}
+          </p>
+        </div>
       )}
       {rows.map((row) =>
         root.kind === "shared-dir" ? (

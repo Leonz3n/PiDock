@@ -1,4 +1,5 @@
-import { app } from "electron";
+import { homedir } from "node:os";
+import { app, powerMonitor, safeStorage } from "electron";
 import { resolveShellCommand } from "./command.js";
 import {
   DEFAULT_WORKSPACE_ID,
@@ -21,13 +22,19 @@ import {
 } from "./runtime.js";
 import { registerApplicationLifecycle } from "./application-lifecycle.js";
 import { ScheduleDriver } from "./schedule-driver.js";
+import { QuitReportStore, SchedulerGate } from "./schedule-supervision.js";
 import { runSmoke } from "./smoke.js";
 import { defaultTasksRoot } from "./task-resolver.js";
 import { initializeDefaultTaskRoot } from "./default-root-init.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
+import { resolveTaskVariables, TaskVariableStore, variableEnvironment } from "./workspace-variables.js";
 import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { ProviderProfileStore } from "./provider-profile-store.js";
+import { ProviderSecretStore } from "./provider-secret-store.js";
+import { NativeModelsFile, resolveAgentDir } from "./native-models-config.js";
+import { NativeMcpFile, resolveMcpAgentDir } from "./native-mcp-config.js";
+import { McpWiring } from "./mcp-ipc.js";
 import { ProviderWiring } from "./provider-ipc.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import { createNodeAppendGit, ProjectTaskAppend } from "./task-append.js";
@@ -170,12 +177,41 @@ async function run(): Promise<void> {
     console.error(`[main] 默认任务根保持待修复状态（${defaultRootInit.reason}）：${defaultRootInit.root}`);
   }
   const taskRoots = new TaskRootIndex(userData, defaultRoot);
+  // [Pencil T09] #144: workspace variables (registry) + task overrides (this
+  // store) are resolved once per Host fork. The resolver is read at fork time,
+  // so a variable edit never rewrites a running Host's environment or turn.
+  const taskVariables = new TaskVariableStore(userData);
+  const taskEnvironment = (taskId: string): Record<string, string> => {
+    try {
+      const association = projects.association(taskId, taskRoots);
+      const project = association.projectId === null ? undefined : projects.get(association.projectId);
+      const resolved = resolveTaskVariables(project?.environment ?? [], taskVariables.list(taskId));
+      if (resolved.refused.length > 0) {
+        // Keys only: a value never reaches a log, even when a legacy row is refused.
+        console.error(`[main] task ${taskId} workspace variables refused: ${resolved.refused.map((row) => row.key).join(", ")}`);
+      }
+      return variableEnvironment(resolved.rows);
+    } catch (error) {
+      console.error(`[main] task ${taskId} variables unavailable: ${errorMessage(error)}`);
+      return {};
+    }
+  };
+  // [Pencil T15] #150: Pi's native `mcp.json` in the SAME agent directory
+  // `models.json` lives in. The manager writes only the `pidock-mcp-<uuid>`
+  // namespace; the exact file path is also what every task Host receives, so a
+  // session loads the file the manager edits instead of a second copy.
+  const nativeMcp = new NativeMcpFile(resolveMcpAgentDir(process.env, homedir()));
+  const mcp = new McpWiring(nativeMcp, process.env);
   const tasks = new PerTaskHostRegistry(
     workspaceId,
-    (ws, task) => createHost(ws, true, task),
+    // A task Host gets the exact MCP config path; each SDK session binds the MCP
+    // extension against it only when it starts, so a save never mutates a
+    // session that is already open.
+    (ws, task, variables) => createHost(ws, true, task, variables, nativeMcp.path),
     (taskId) => taskRoots.resolve(taskId),
     browsers.registry,
     taskRoots,
+    taskEnvironment,
   );
   const catalog = new ServiceCatalog(userData, serviceCatalogAuthority(taskRoots, projects));
   // [PiDock 03] (#6 盒子 9) repository-level mutual exclusion: ONE app-private
@@ -203,15 +239,36 @@ async function run(): Promise<void> {
   // the credential value is read from the profile's PIDOCK_PROVIDER_* reference
   // at install time and is handed only to the task's isolated SDK context.
   const providerProfiles = new ProviderProfileStore(app.getPath("userData"));
+  // [PiDock T03] #138: the credential value lives only in the OS-encrypted
+  // store, and Pi's native `models.json` is the Provider management object.
+  // `PIDOCK_AGENT_DIR` overrides the agent directory for tests/alternate homes.
+  const providerSecrets = new ProviderSecretStore(app.getPath("userData"), safeStorage);
+  const nativeModels = new NativeModelsFile(resolveAgentDir(process.env, homedir()));
   const providers = new ProviderWiring(providerProfiles, async (taskId, provider, senderWebContentsId) => {
     const payload = provider === null
       ? { provider: null }
-      : { provider: { config: providerProfiles.config(provider.profileId), credential: provider.credential } };
+      : {
+          provider: {
+            config: providerProfiles.config(provider.profileId, provider.modelId),
+            credential: provider.credential,
+            thinkingLevel: provider.thinkingLevel,
+          },
+        };
     const request = { workspaceId, taskId, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } } as const;
     if (tasks) { await tasks.routeTaskOp(request); return; }
     await client.task(request);
-  });
-  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers, catalog, undefined, append);
+  }, process.env, { secrets: providerSecrets, native: nativeModels });
+  // [Pencil T18] #153: quitting and sleeping are the two phases in which no due
+  // trigger may start; waking plans forward instead of backfilling. The gate is
+  // the single answer the driver, the wake fan-out and the quit path read, and
+  // the quit-report store makes an unconfirmed shutdown visible after restart.
+  const quitReports = new QuitReportStore(userData);
+  const gate = new SchedulerGate(quitReports);
+  const schedulerState = (): ReturnType<SchedulerGate["view"]> => {
+    const persisted = gate.view().lastQuitUnconfirmed ?? quitReports.pending() ?? undefined;
+    return { ...gate.view(), ...(persisted !== undefined ? { lastQuitUnconfirmed: persisted } : {}) };
+  };
+  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers, catalog, undefined, append, taskVariables, { state: schedulerState }, mcp);
   // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
   // the driver asks each *running* Host to evaluate its own due triggers. It
   // never forks a Host and never overlaps its own ticks; stop it wherever the
@@ -222,6 +279,7 @@ async function run(): Promise<void> {
       await tasks.routeTaskOp({ taskId, op: "task/scheduleEvaluate" });
     },
     onError: (error, taskId) => console.error(`[main] schedule evaluation failed for ${taskId}: ${errorMessage(error)}`),
+    blockedReason: () => gate.blockedReason(),
   });
   if (views.window.isDestroyed()) throw Error("application-window-unavailable");
   if (views.layout) assertProductionWindowEvidence(views);
@@ -230,8 +288,37 @@ async function run(): Promise<void> {
   // Initial createTrustedWindow construction still precedes these listeners.
   const stopHosts = createHostStopper(tasks, { kind: "shell-ui", senderWebContentsId: views.shellView.webContents.id },
     () => disposal.disposeAfterTasks(tasks, client, () => schedules.stop()));
-  registerApplicationLifecycle({ app, window: views.window, platform: process.platform, stopHosts,
-    unsatisfiedHosts: stopHosts.unsatisfiedHosts });
+  // The quit path owns the gate: no due trigger starts between "quit" and the
+  // Hosts going away, and a refused quit puts scheduling back (with the refusal
+  // recorded) instead of leaving a half-dead scheduler.
+  const gatedStopHosts = async (): Promise<boolean> => {
+    gate.beginQuit();
+    schedules.stop();
+    const stopped = await stopHosts();
+    if (stopped) {
+      gate.completeQuit();
+      quitReports.clear();
+    } else {
+      gate.abortQuit({ at: new Date().toISOString(), hosts: stopHosts.unsatisfiedHosts() });
+      schedules.start();
+    }
+    return stopped;
+  };
+  registerApplicationLifecycle({ app, window: views.window, platform: process.platform, stopHosts: gatedStopHosts,
+    unsatisfiedHosts: stopHosts.unsatisfiedHosts,
+    onQuitUnconfirmed: (report) => { gate.abortQuit(report); }});
+  // Sleep/wake: no execution while asleep, and waking moves every enabled plan
+  // forward (no backfill). A Host that is not running is skipped; it will read
+  // its own persisted plan when it is forked next.
+  powerMonitor.on("suspend", () => { gate.sleep(new Date().toISOString()); });
+  powerMonitor.on("resume", () => {
+    const woke = gate.wake(new Date().toISOString());
+    if (woke === null) return;
+    for (const taskId of tasks.activeTaskIds()) {
+      void tasks.routeTaskOp({ taskId, op: "task/scheduleWake", payload: { at: woke.at } })
+        .catch((error: unknown) => console.error(`[main] schedule wake failed for ${taskId}: ${errorMessage(error)}`));
+    }
+  });
   schedules.start();
   const loaded = await loadTrustedViews(views);
   console.log(

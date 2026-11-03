@@ -316,7 +316,7 @@ describe.skipIf(process.platform === "win32")("#7 production shell/serviceCatalo
       }, protectApplicationProfile(f.profile), () => agentServiceHostFor(f.taskId));
     cleanups.push(() => agentHost.shutdownSdk().catch(() => {}));
     await agentHost.configureSdkProvider({ config: { profileId: "p-11111111-2222-3333-4444-555555555555", baseUrl: "https://models.example.test/v1", modelId: "gpt-5-mini",
-      contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1 }, credential: "synthetic-key" });
+      contextWindow: 128000, maxTokens: 8192, authRef: "PIDOCK_PROVIDER_EXAMPLE", generation: 1, protocol: "openai-completions" as const, credentialSource: "env" as const, models: [{ id: "gpt-5-mini", name: "gpt-5-mini", contextWindow: 128000, maxTokens: 8192, reasoning: false }]}, credential: "synthetic-key" });
     if (!broker) throw Error("agent tool broker not captured");
     const call = (tool: string) => broker!.call("main", { tool, args: { serviceId } });
 

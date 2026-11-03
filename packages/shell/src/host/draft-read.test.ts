@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskWorkspaceHost } from "./task-host.js";
@@ -46,6 +46,21 @@ it("returns null for a session that never had a draft, without creating one", ()
   // A read must not materialize a session or a draft file.
   expect(host.sessionIds()).toEqual([]);
   expect(readdirSync(dir)).toEqual([]);
+});
+
+it("deletes a session's draft with the session (no resurrection on restart)", () => {
+  const dir = taskDir();
+  const host = new TaskWorkspaceHost("task-a", dir, diskTaskStore);
+  const created = host.createTaskSession({ name: "复核" });
+  host.saveDraft(created.session.id, { text: "这条随会话一起删除" });
+  expect(host.readDraft(created.session.id)).toMatchObject({ text: "这条随会话一起删除" });
+  host.deleteTaskSession(created.session.id);
+  // The Host no longer knows the session or its draft, in memory or from disk.
+  expect(host.readDraft(created.session.id)).toBeNull();
+  const restarted = new TaskWorkspaceHost("task-a", dir, diskTaskStore);
+  expect(restarted.readDraft(created.session.id)).toBeNull();
+  expect(restarted.sessionIds()).not.toContain(created.session.id);
+  expect(existsSync(dir)).toBe(true);
 });
 
 it("reports the cleared draft as absent instead of an empty record", () => {

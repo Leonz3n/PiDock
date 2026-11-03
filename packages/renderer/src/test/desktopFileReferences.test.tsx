@@ -33,7 +33,9 @@ const emptySnapshot = { source: "sdk-jsonl", sessionId: "main", messages: [], pe
  * Every op this suite may see: reads only — #15's own file reads, the composer's
  * `task/sessionContext` readout and the #24 execution-status read.
  */
-const READ_ONLY_OPS = ["task/fileRoots", "task/fileTree", "task/filePreview", "task/fileDiff", "task/deliveryInfo", "task/sessionContext", "task/executionState", "task/readDraft"];
+// [#139] The composer also READS the task's session list and this session's
+// readout; both are read-only and neither writes a draft or starts a turn.
+const READ_ONLY_OPS = ["task/fileRoots", "task/fileTree", "task/filePreview", "task/fileDiff", "task/deliveryInfo", "task/sessionList", "task/sessionReadout", "task/executionState", "task/listApprovals", "task/readDraft"];
 /** The write ops a reference must never cause (box 4 of this slice). */
 const WRITE_OPS = ["task/runTaskService", "task/serviceStopScope", "task/controlService", "task/quit", "task/archive", "task/restore", "task/sendMessage", "task/registerService"];
 
@@ -67,6 +69,10 @@ const hostReads =
     }
     if (op === "task/filePreview") {
       return { ok: true, payload: { preview: { attribution: view, path: FILE, language: "markdown", source: "# 内容", truncated: false, lineCount: 1 } } };
+    }
+    // [Pencil T19] #145 the send-time re-check stats the referenced path.
+    if (op === "task/fileStat") {
+      return { ok: true, payload: { stat: { path: String(payload["relative"] ?? FILE), kind: "file", exists: true, size: 3 } } };
     }
     if (op === "task/deliveryInfo") {
       const target = deliveryTarget({ root, taskId: TASK_ID, taskDir: TASK_DIR });
@@ -184,9 +190,10 @@ describe("[PiDock 15] (#15 盒 3) 文件引用在桌面输入区", () => {
     await screen.findByTestId("composer-file-reference-task-file:repo-a:invoice.md");
 
     // Attaching is now a DRAFT WRITE and nothing else: one `task/saveDraft`, and
-    // it carries the reference so a restart can show it again.
+    // it carries the reference so a restart can show it again. The write is
+    // debounced, so wait for it before snapshotting the call list.
+    await waitFor(() => expect(fixture.taskOp.mock.calls.slice(before).map((call) => String(call[1]))).toEqual(["task/saveDraft"]));
     const added = fixture.taskOp.mock.calls.slice(before);
-    await waitFor(() => expect(added.map((call) => String(call[1]))).toEqual(["task/saveDraft"]));
     const saved = added[0]![2] as Record<string, unknown>;
     expect(saved["text"]).toBe("");
     expect(saved["references"]).toMatchObject([{ id: "task-file:repo-a:invoice.md", kind: "file", label: "repo-a/invoice.md", sourceKind: "worktree", taskId: TASK_ID }]);
@@ -202,8 +209,8 @@ describe("[PiDock 15] (#15 盒 3) 文件引用在桌面输入区", () => {
     const afterReference = fixture.taskOp.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: /移除引用 repo-a\/invoice\.md/ }));
     await waitFor(() => expect(screen.queryByTestId("composer-file-reference-task-file:repo-a:invoice.md")).not.toBeInTheDocument());
+    await waitFor(() => expect(fixture.taskOp.mock.calls.slice(afterReference).map((call) => String(call[1]))).toEqual(["task/saveDraft"]));
     const removal = fixture.taskOp.mock.calls.slice(afterReference);
-    await waitFor(() => expect(removal.map((call) => String(call[1]))).toEqual(["task/saveDraft"]));
     expect((removal[0]![2] as Record<string, unknown>)["references"]).toBeUndefined();
   });
 

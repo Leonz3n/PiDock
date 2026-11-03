@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -70,8 +71,11 @@ describe("main-owned project registry", () => {
     expect(() => store.list()).toThrow();
     await expect(store.create(input)).rejects.toThrow();
     expect(readFileSync(file, "utf8")).toBe("{bad");
-    writeFileSync(file, JSON.stringify({ version: 3, projects: [], memberships: [] }));
+    writeFileSync(file, JSON.stringify({ version: 4, projects: [], memberships: [] }));
     expect(() => store.list()).toThrow(/version/);
+    // A current-schema document must carry the audit fields; a half-written one is refused.
+    writeFileSync(file, JSON.stringify({ version: 3, projects: [], memberships: [] }));
+    expect(() => store.list()).toThrow(/fields/);
     writeFileSync(file, JSON.stringify({ version: 2, projects: [], memberships: [] }));
     expect(() => store.list()).toThrow(/fields/);
     rmSync(file);
@@ -122,6 +126,9 @@ describe("main-owned project registry", () => {
     const project = await store.create(input);
     const document = JSON.parse(readFileSync(file, "utf8"));
     document.memberships.push({ taskId: "task-1", projectId: project.id, createdAt: "2026-01-01T00:00:00Z", root: join(workspaceRoot, "gone"), dirId: "task-11111111" });
+    // Hand-written rows must keep the on-disk audit contract valid, or the registry refuses to load.
+    document.auditDigest = createHash("sha256").update(JSON.stringify({ projectIds: document.projects.map((row: { id: string }) => row.id),
+      memberships: document.memberships, receipts: document.receipts })).digest("hex");
     writeFileSync(file, JSON.stringify(document));
     await expect(store.delete(project.id)).rejects.toThrow(/associated/);
     expect(store.get(project.id)).toBeDefined();

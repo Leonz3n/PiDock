@@ -56,6 +56,64 @@ export interface RepoSourceRecord {
   remoteBranch: string;
   /** Pinned full commit fixed at fetch time (never a stale ref). */
   baseCommit: string;
+  /**
+   * [Pencil T02] #137 source binding, recorded when known: the registered
+   * checkout the worktree came from (`sourcePath` as registered,
+   * `sourceRealPath` resolved), its device/inode, the Git common dir and the
+   * remote URL digest. Optional on older records; a record without identity is
+   * reported as `待修复` on reopen, never treated as verified.
+   */
+  sourcePath?: string;
+  sourceRealPath?: string;
+  sourceDevice?: string;
+  sourceInode?: string;
+  commonDir?: string;
+  remoteDigest?: string;
+  /** Device/inode of the in-task worktree folder, re-verified on open. */
+  targetDevice?: string;
+  targetInode?: string;
+  /**
+   * [Pencil T07] #142: the ACTUAL checkout identity observed right after this
+   * creation's `git worktree add` — the resolved target real path, the branch
+   * the checkout is really on and the HEAD it really points at. Recorded
+   * beside the declared baseline (`baseCommit`) instead of being derived from
+   * it, so a record never claims an observation it did not take. Optional on
+   * records written before it existed.
+   */
+  targetRealPath?: string;
+  targetBranch?: string;
+  targetHead?: string;
+}
+
+/**
+ * [Pencil T02] #137: one existing registered Git checkout used IN PLACE by a
+ * task (`workspaceMode: "existing-git"`). It is the original, not a copy:
+ * writes modify it, and there is no task worktree, task branch or baseline
+ * diff. The real source path, current branch, observed HEAD and recorded
+ * identity are what the facts surface re-verifies on open.
+ */
+export interface SharedRepoRecord {
+  /** Stable root id within the task (the repo's safe child name). */
+  rootId: string;
+  /** Absolute registered source path (as registered). */
+  sourcePath: string;
+  /** Real path resolved when recorded. */
+  sourceRealPath?: string;
+  /** Remote name used to pin the source identity. */
+  remote: string;
+  /** Branch the checkout was on when the task was created. */
+  remoteBranch: string;
+  /** Full commit HEAD pointed at when the task was created. */
+  headCommit: string;
+  /** Git common dir recorded at creation. */
+  commonDir: string;
+  /** Remote URL digest recorded at creation. */
+  remoteDigest: string;
+  /** Device/inode of the real checkout at creation. */
+  sourceDevice?: string;
+  sourceInode?: string;
+  /** ISO time the identity was snapshot. */
+  snapshotAt: string;
 }
 
 export interface PlainDirLinkRecord {
@@ -93,7 +151,15 @@ export interface TaskDiskRecord {
   taskId: string;
   name: string;
   dirId: string;
+  /**
+   * The task's own branch. `branchKind` says what that spelling MEANS:
+   * `task-worktree` (the default, and every record written before this field)
+   * is a real local task branch created with the worktree; `none` means this
+   * mode creates no task branch at all, and `branch` is then the empty string
+   * rather than a fictitious `task/<id>` ([Pencil T07] #142, #137 leftover).
+   */
   branch: string;
+  branchKind?: "task-worktree" | "none";
   root: string;
   taskDir: string;
   remoteBranch: string;
@@ -119,6 +185,19 @@ export interface TaskDiskRecord {
    * drops a failed repo. Absent when nothing failed.
    */
   repoPrepareErrors?: RepoPrepareErrorRecord[];
+  /**
+   * [Pencil T02] #137: the explicit task workspace mode. Optional on records
+   * written before it existed; the facts read derives the legacy shape then.
+   */
+  workspaceMode?: "worktree" | "existing-git" | "plain-dirs";
+  /** [Pencil T02] #137: existing Git checkouts used in place (no copy). */
+  sharedRepos?: SharedRepoRecord[];
+  /**
+   * [Pencil T17] #152 creation intent. `scheduled` marks a task created by
+   * 「新建定时任务」 whose workspace hosts its own schedule rules; absent means an
+   * ordinary task, which may never receive a schedule rule.
+   */
+  kind?: "normal" | "scheduled";
   createdAt: string;
   updatedAt: string;
 }
@@ -160,6 +239,7 @@ export function buildTaskDiskRecord(input: {
   name: string;
   dirId: string;
   branch: string;
+  branchKind?: TaskDiskRecord["branchKind"];
   root: string;
   taskDir: string;
   remoteBranch: string;
@@ -168,6 +248,9 @@ export function buildTaskDiskRecord(input: {
   repoSources?: RepoSourceRecord[];
   dirLinks?: PlainDirLinkRecord[];
   repoPrepareErrors?: RepoPrepareErrorRecord[];
+  workspaceMode?: TaskDiskRecord["workspaceMode"];
+  sharedRepos?: SharedRepoRecord[];
+  kind?: TaskDiskRecord["kind"];
   now: string;
 }): TaskDiskRecord {
   const record: TaskDiskRecord = {
@@ -175,6 +258,7 @@ export function buildTaskDiskRecord(input: {
     name: input.name,
     dirId: input.dirId,
     branch: input.branch,
+    ...(input.branchKind !== undefined ? { branchKind: input.branchKind } : {}),
     root: input.root,
     taskDir: input.taskDir,
     remoteBranch: input.remoteBranch,
@@ -186,6 +270,9 @@ export function buildTaskDiskRecord(input: {
   if (input.repoSources !== undefined) record.repoSources = input.repoSources.map((source) => ({ ...source }));
   if (input.dirLinks !== undefined) record.dirLinks = input.dirLinks.map((link) => ({ ...link }));
   if (input.repoPrepareErrors !== undefined) record.repoPrepareErrors = input.repoPrepareErrors.map((error) => ({ ...error }));
+  if (input.workspaceMode !== undefined) record.workspaceMode = input.workspaceMode;
+  if (input.sharedRepos !== undefined) record.sharedRepos = input.sharedRepos.map((repo) => ({ ...repo }));
+  if (input.kind !== undefined) record.kind = input.kind;
   return record;
 }
 
@@ -199,10 +286,26 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
     throw new Error("invalid-payload: task record must be an object");
   }
   const record = value as Record<string, unknown>;
-  for (const key of ["taskId", "name", "dirId", "branch", "root", "taskDir"] as const) {
+  for (const key of ["taskId", "name", "dirId", "root", "taskDir"] as const) {
     if (typeof record[key] !== "string" || (record[key] as string).length === 0) {
       throw new Error(`invalid-payload: task record.${key} must be a non-empty string`);
     }
+  }
+  // [Pencil T07] #142 (#137 leftover): `branchKind` makes the branch spelling
+  // explicit. A record without it predates the field and always carried a real
+  // task branch; `none` is the only kind that may (and must) spell no branch.
+  if (record["kind"] !== undefined && record["kind"] !== "normal" && record["kind"] !== "scheduled") {
+    throw new Error("invalid-payload: task record.kind must be normal/scheduled");
+  }
+  if (record["branchKind"] !== undefined && record["branchKind"] !== "task-worktree" && record["branchKind"] !== "none") {
+    throw new Error("invalid-payload: task record.branchKind must be a known kind");
+  }
+  const branchKind = (record["branchKind"] as "task-worktree" | "none" | undefined) ?? "task-worktree";
+  if (typeof record["branch"] !== "string" ||
+      (branchKind === "none" ? (record["branch"] as string).length > 0 : (record["branch"] as string).length === 0)) {
+    throw new Error(branchKind === "none"
+      ? "invalid-payload: task record.branch must be empty when branchKind is none"
+      : "invalid-payload: task record.branch must be a non-empty string");
   }
   if (!Array.isArray(record["repos"]) || !(record["repos"] as unknown[]).every((item) => typeof item === "string")) {
     throw new Error("invalid-payload: task record.repos must be a string array");
@@ -228,6 +331,18 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
         if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
           throw new Error(`invalid-payload: task record.repoSources.${key} must be a non-empty string`);
         }
+      }
+      // [Pencil T07] #142 optional observed checkout identity: absent on older
+      // records, but a present value is a complete, non-blank reading (a
+      // half-written identity cannot be trusted as an observation).
+      for (const key of ["sourcePath", "sourceRealPath", "sourceDevice", "sourceInode", "commonDir", "remoteDigest",
+        "targetDevice", "targetInode", "targetRealPath", "targetBranch", "targetHead"] as const) {
+        if (entry[key] !== undefined && (typeof entry[key] !== "string" || (entry[key] as string).length === 0)) {
+          throw new Error(`invalid-payload: task record.repoSources.${key} must be a non-empty string when present`);
+        }
+      }
+      if (entry["targetHead"] !== undefined && !/^[a-f0-9]{40}$/.test(entry["targetHead"] as string)) {
+        throw new Error("invalid-payload: task record.repoSources.targetHead must be a full commit");
       }
     }
   }
@@ -279,6 +394,43 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
       for (const key of ["repoDir", "code", "message"] as const) {
         if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
           throw new Error(`invalid-payload: task record.repoPrepareErrors.${key} must be a non-empty string`);
+        }
+      }
+    }
+  }
+  // [Pencil T02] #137 workspace mode + existing-Git-dir sources: optional on
+  // records written before the mode existed, fully shape-checked when present.
+  if (record["workspaceMode"] !== undefined) {
+    if (record["workspaceMode"] !== "worktree" && record["workspaceMode"] !== "existing-git" && record["workspaceMode"] !== "plain-dirs") {
+      throw new Error("invalid-payload: task record.workspaceMode must be a known mode");
+    }
+  }
+  if (record["workspaceMode"] === "plain-dirs" && repos.length > 0) {
+    throw new Error("invalid-payload: task record.plain-dirs mode cannot carry worktree repos");
+  }
+  if (record["workspaceMode"] === "existing-git" && repos.length > 0) {
+    throw new Error("invalid-payload: task record.existing-git mode cannot carry worktree repos");
+  }
+  if (record["sharedRepos"] !== undefined) {
+    if (!Array.isArray(record["sharedRepos"])) {
+      throw new Error("invalid-payload: task record.sharedRepos must be an array");
+    }
+    for (const shared of record["sharedRepos"] as unknown[]) {
+      if (typeof shared !== "object" || shared === null || Array.isArray(shared)) {
+        throw new Error("invalid-payload: task record.sharedRepos entries must be objects");
+      }
+      const entry = shared as Record<string, unknown>;
+      for (const key of ["rootId", "sourcePath", "remote", "remoteBranch", "headCommit", "commonDir", "remoteDigest", "snapshotAt"] as const) {
+        if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
+          throw new Error(`invalid-payload: task record.sharedRepos.${key} must be a non-empty string`);
+        }
+      }
+      if (!/^[a-f0-9]{40}$/.test(entry["headCommit"] as string)) {
+        throw new Error("invalid-payload: task record.sharedRepos.headCommit must be a full commit");
+      }
+      for (const key of ["sourceRealPath", "sourceDevice", "sourceInode"] as const) {
+        if (entry[key] !== undefined && (typeof entry[key] !== "string" || (entry[key] as string).length === 0)) {
+          throw new Error(`invalid-payload: task record.sharedRepos.${key} must be a non-empty string when present`);
         }
       }
     }
@@ -926,7 +1078,7 @@ export function scheduleFilePath(taskDir: string): string {
 
 const SCHEDULE_PERMISSIONS = ["read", "default", "auto"] as const;
 const RUN_TRIGGERS = ["due", "manual"] as const;
-const RUN_RESULTS = ["completed", "awaiting-approval", "skipped", "failed"] as const;
+const RUN_RESULTS = ["running", "completed", "awaiting-approval", "skipped", "failed", "interrupted", "uncertain"] as const;
 
 function requireString(record: Record<string, unknown>, key: string, label: string): void {
   if (typeof record[key] !== "string" || (record[key] as string).length === 0) {
@@ -954,6 +1106,11 @@ function parseStoredSchedule(value: unknown): StoredSchedule {
     throw new Error("invalid-payload: schedule.configVersion must be a positive integer");
   }
   if (schedule["repairIssue"] !== undefined) requireString(schedule, "repairIssue", "schedule");
+  if (schedule["nextRunAt"] !== undefined && schedule["nextRunAt"] !== null) requireString(schedule, "nextRunAt", "schedule");
+  if (schedule["providerGeneration"] !== undefined &&
+      (typeof schedule["providerGeneration"] !== "number" || !Number.isInteger(schedule["providerGeneration"]) || (schedule["providerGeneration"] as number) < 1)) {
+    throw new Error("invalid-payload: schedule.providerGeneration must be a positive integer");
+  }
   return value as StoredSchedule;
 }
 
@@ -965,7 +1122,7 @@ function parseScheduledRun(value: unknown): ScheduledRunRecord {
   for (const key of ["runId", "scheduleId", "taskId", "occurrenceKey", "scheduledAt", "startedAt", "providerId", "model", "ruleText"] as const) {
     requireString(run, key, "scheduled run");
   }
-  for (const key of ["endedAt", "sessionId", "reason"] as const) {
+  for (const key of ["endedAt", "sessionId", "reason", "actualModel", "failureCode"] as const) {
     if (run[key] !== undefined) requireString(run, key, "scheduled run");
   }
   if (typeof run["configVersion"] !== "number" || !Number.isInteger(run["configVersion"]) || (run["configVersion"] as number) < 1) {
@@ -975,10 +1132,14 @@ function parseScheduledRun(value: unknown): ScheduledRunRecord {
     throw new Error("invalid-payload: scheduled run.trigger must be due/manual");
   }
   if (typeof run["result"] !== "string" || !(RUN_RESULTS as readonly string[]).includes(run["result"] as string)) {
-    throw new Error("invalid-payload: scheduled run.result must be completed/awaiting-approval/skipped/failed");
+    throw new Error("invalid-payload: scheduled run.result must be running/completed/awaiting-approval/skipped/failed/interrupted/uncertain");
   }
   if (typeof run["permission"] !== "string" || !(SCHEDULE_PERMISSIONS as readonly string[]).includes(run["permission"] as string)) {
     throw new Error("invalid-payload: scheduled run.permission must be read/default/auto");
+  }
+  if (run["providerGeneration"] !== undefined &&
+      (typeof run["providerGeneration"] !== "number" || !Number.isInteger(run["providerGeneration"]) || (run["providerGeneration"] as number) < 1)) {
+    throw new Error("invalid-payload: scheduled run.providerGeneration must be a positive integer");
   }
   return value as ScheduledRunRecord;
 }

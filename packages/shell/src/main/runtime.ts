@@ -7,6 +7,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  shell,
   utilityProcess,
   WebContentsView,
 } from "electron";
@@ -42,6 +43,7 @@ import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
 import { HostTaskAdmission } from "../host/host-task-admission.js";
 import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
+import { TaskVariableStore } from "./workspace-variables.js";
 import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { createServiceTemplateHandler, parseServiceOwnerRebindRequest, parseTaskDependencyRoutingRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
@@ -51,8 +53,17 @@ import type { PortAssignment, PortReservation, ResolvedBinding, RunDiagnostic, R
 import { codeObservationFields } from "./service-code-observation.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
-import { performProjectOperation } from "./project-ipc.js";
-import type { ProviderWiring } from "./provider-ipc.js";
+// [Pencil T14] #149: PiDock's own appearance document plus Pi's native
+// keybindings/settings as a bounded projection (see `native-preferences.ts`).
+import { performPreferencesOperation } from "./preferences-route.js";
+import { performSkillSourcesOperation } from "./skill-sources-ipc.js";
+import type { SchedulerStateView } from "./schedule-supervision.js";
+import { resolveAgentDir } from "./native-models-config.js";
+import { homedir } from "node:os";
+import { performProjectOperation, projectFailureMessage } from "./project-ipc.js";
+import { PROVIDER_REFUSAL_TEXT, ProviderRefusal, type ProviderWiring } from "./provider-ipc.js";
+import { MCP_FAILURE_TEXT, type McpWiring } from "./mcp-ipc.js";
+import { McpFailure } from "./native-mcp-config.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
 import { performCreationOperation } from "./project-task-ipc.js";
 import type { ProjectTaskAppend } from "./task-append.js";
@@ -218,11 +229,23 @@ export async function createHost(
   workspaceId: string,
   logExit = true,
   task?: { taskId: string; taskDir: string },
+  /** [Pencil T09] #144 effective variables resolved by main for this task. */
+  variables?: Record<string, string>,
+  /**
+   * [Pencil T15] #150 the exact native `mcp.json` this app manages. The Host
+   * forwards it to each task's isolated SDK context so the MCP extension loads
+   * the SAME file the manager writes; absent means no MCP surface in that Host.
+   */
+  mcpConfigPath?: string,
 ): Promise<{ client: HostClient; child: UtilityProcess; disposal: ReturnType<typeof createHostDisposer> }> {
+  if (mcpConfigPath !== undefined && (!path.isAbsolute(mcpConfigPath) || mcpConfigPath.includes("\0"))) {
+    throw new Error("invalid-payload: MCP config path must be absolute");
+  }
   const entry = path.join(here, "..", "host", "host-entry.js");
   const child = utilityProcess.fork(entry, [], {
     serviceName: task ? `pidock-node-host-${task.taskId}` : "pidock-node-host",
-    env: { ...buildHostEnv(process.env, workspaceId, task, app.getPath("userData"), normalizeTaskPath(defaultTasksRoot())),
+    env: { ...buildHostEnv(process.env, workspaceId, task, app.getPath("userData"), normalizeTaskPath(defaultTasksRoot()), process.platform, variables),
+      ...(mcpConfigPath === undefined ? {} : { PIDOCK_MCP_CONFIG: mcpConfigPath }),
       // Only where service execution is admitted: a platform that cannot own a
       // service must not be told to verify one (see `serviceExecutionAdmitted`),
       // or its Host injects an orphan that no bootstrap can ever clear.
@@ -494,8 +517,10 @@ export class PerTaskHostRegistry {
     private readonly spawn: (
       workspaceId: string,
       task: { taskId: string; taskDir: string },
-    ) => Promise<{ client: HostClient; child: UtilityProcess }> = (ws, task) =>
-      createHost(ws, true, task),
+      /** [Pencil T09] #144 effective variables, captured when THIS Host is forked. */
+      variables?: Record<string, string>,
+    ) => Promise<{ client: HostClient; child: UtilityProcess }> = (ws, task, variables) =>
+      createHost(ws, true, task, variables),
     private readonly resolveTaskDir: (taskId: string) => string | null = () => null,
     /**
      * Handles the Host's browser requests ([PiDock 06] #8): main owns the
@@ -506,6 +531,12 @@ export class PerTaskHostRegistry {
       handleRequest(request: BrowserRequestParams): Promise<BrowserPerformResult>;
     },
     private readonly taskRoots?: TaskRootIndex,
+    /**
+     * [Pencil T09] #144 resolves the effective workspace/task variables at fork
+     * time. It is read exactly once per Host start: a running Host and its turn
+     * keep the environment they were forked with when a variable later changes.
+     */
+    private readonly environmentFor?: (taskId: string) => Record<string, string>,
   ) {}
 
   private bindHostRequests(entry: PerTaskHostEntry): HostClient {
@@ -754,7 +785,9 @@ export class PerTaskHostRegistry {
     }
     // Publish ownership before invoking even a reentrant spawn. A late child
     // remains owned after sealing or deadline expiry; no business op is replayed.
-    const promise = Promise.resolve().then(() => this.spawn(this.workspaceId, { taskId, taskDir })).then((spawned) => {
+    const promise = Promise.resolve().then(() => this.environmentFor
+      ? this.spawn(this.workspaceId, { taskId, taskDir }, this.environmentFor(taskId))
+      : this.spawn(this.workspaceId, { taskId, taskDir })).then((spawned) => {
       const entry = { taskId, taskDir, client: spawned.client, child: spawned.child };
       this.byTaskDir.set(key, entry);
       let resolveExit!: () => void;
@@ -1896,6 +1929,18 @@ export function registerIpc(
    * `shell/appendTaskRepos` fails closed with "尚未接入".
    */
   append?: ProjectTaskAppend,
+  /** [Pencil T09] #144 main-owned task override store for the variable ops. */
+  variables?: TaskVariableStore,
+  /**
+   * [Pencil T18] #153 scheduler phase + the last unconfirmed quit. Read-only for
+   * the renderer, and the only way a refused quit becomes visible after restart.
+   */
+  scheduler?: { state(): SchedulerStateView },
+  /**
+   * [Pencil T15] #150 the MCP management surface. One exact-key channel over
+   * Pi's native `mcp.json`; absent fails closed with a named "未接入" state.
+   */
+  mcp?: McpWiring,
 ): void {
   if (tasks && catalog && taskRoots && projects) tasks.configureServices((workspaceId) => new InstalledServiceHostAuthority(
     app.getPath("userData"), catalog, serviceCatalogAuthority(taskRoots, projects), workspaceId, process.env));
@@ -2224,6 +2269,15 @@ export function registerIpc(
     }
   });
 
+  ipcMain.handle("shell/schedulerState", async (event) => {
+    try {
+      registry.requireShellSender(event);
+      if (!scheduler) return { ok: false as const, error: "scheduler-state-unwired: 主进程未接调度状态" };
+      return { ok: true as const, payload: scheduler.state() };
+    } catch (error) {
+      return trustFailureEnvelope(error);
+    }
+  });
   ipcMain.handle("shell/hostPing", async (event, payload?: unknown) => {
     try {
       const sender = registry.requireShellSender(event);
@@ -2374,6 +2428,44 @@ export function registerIpc(
     }
   });
 
+  // [Pencil T14] #149 设置：PiDock 外观偏好 (userData) + Pi 原生 keybindings
+  // 的有界投影。One channel, four named ops; no task op carries these writes and
+  // the page never names a path, a file or an unverified Pi action.
+  ipcMain.handle("shell/preferencesOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      const result = performPreferencesOperation(payload, {
+        userData: app.getPath("userData"),
+        agentDir: resolveAgentDir(process.env, homedir()),
+      });
+      return result.ok ? { ok: true as const, payload: result.payload } : { ok: false as const, error: result.error };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
+  // [Pencil T16] #151 local Skills sources: main owns the app-private document
+  // and the real-disk scan; the page names only an op, a directory or an id.
+  // `open` resolves the row's OWN file from that scan and hands it to the OS
+  // default handler - a read-only inspection, no editor settings and no path
+  // from the page.
+  ipcMain.handle("shell/skillsOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      const result = performSkillSourcesOperation(payload, app.getPath("userData"));
+      if (!result.ok) return { ok: false as const, error: result.error };
+      if (result.open !== undefined) {
+        const failure = await shell.openPath(result.open);
+        if (failure.length > 0) return { ok: false as const, error: "无法用系统默认程序打开技能文件" };
+      }
+      return { ok: true as const, payload: result.view };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
   ipcMain.handle("shell/providerOp", async (event, payload?: unknown) => {
     try {
       const sender = registry.requireShellSender(event);
@@ -2384,7 +2476,32 @@ export function registerIpc(
       return { ok: true as const, payload: result };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      // A bounded refusal the UI can act on (missing key, unavailable keychain,
+      // unparseable models.json). Everything else stays a generic sentence so no
+      // raw SDK/HTTP/file text can reach a renderer.
+      if (error instanceof ProviderRefusal) return { ok: false as const, error: PROVIDER_REFUSAL_TEXT[error.code] };
       return { ok: false as const, error: "Provider 配置操作失败，请检查本机凭据环境后重试" };
+    }
+  });
+
+  // [Pencil T15] #150 能力管理 · MCP: Pi 的原生 mcp.json 是管理对象。The
+  // sender must be the attested shell webContents; the operation set is fixed,
+  // extra keys are refused, and no operation can name a file, an agent
+  // directory or a credential value. A save writes the file only — every open
+  // session keeps the servers it loaded, so the UI can state that boundary.
+  ipcMain.handle("shell/mcpOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      if (!mcp) return { ok: false as const, error: "MCP 配置尚未接入" };
+      return { ok: true as const, payload: await mcp.perform(payload) };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      // Named, actionable refusals only: a raw JSON parse error or a filesystem
+      // path never reaches a renderer.
+      if (error instanceof McpFailure) {
+        return { ok: false as const, error: MCP_FAILURE_TEXT[error.code] ?? "MCP 配置操作被拒绝" };
+      }
+      return { ok: false as const, error: "MCP 配置操作失败，请检查 mcp.json 后重试" };
     }
   });
 
@@ -2392,10 +2509,11 @@ export function registerIpc(
     try {
       registry.requireShellSender(event);
       if (!projects) return { ok: false as const, error: "项目注册表尚未接入" };
-      return { ok: true as const, payload: await performProjectOperation(projects, payload, taskRoots) };
+      return { ok: true as const, payload: await performProjectOperation(projects, payload, taskRoots, variables) };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
-      return { ok: false as const, error: "项目注册表操作失败，请检查本机项目数据后重试" };
+      // Named, so a missing/corrupt registry and its recovery path stay reachable (#136).
+      return { ok: false as const, error: projectFailureMessage(error) };
     }
   });
 

@@ -11,6 +11,7 @@ import { ProjectTaskCreation, CreationIntentStore } from "./project-task-creatio
 import { previewTaskPaths } from "./task-provision.js";
 import { performCreationOperation } from "./project-task-ipc.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 const homes: string[] = [];
 function git(cwd: string, ...args: string[]) { return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
@@ -30,17 +31,34 @@ async function setup(options: { rootAbsent?: boolean } = {}) {
   const projects = new ProjectRegistry(profile);
   const project = await projects.create({ name: "Genuine", description: "", repositories: [{ name: "source", path: repo }], directories: [{ name: "shared", path: shared }] });
   const roots = new TaskRootIndex(profile, root), storage = new CreationIntentStore(profile);
+  // [Pencil T13] #148b: a worktree creation names its branch through the saved
+  // convention and refuses by name when it is unset, so every fixture saves the
+  // workspace settings first (`task/{taskId}` keeps the historical spelling).
+  saveTestDeliverySettings(profile);
   let calls = 0;
-  const host = { routeTaskOp: async ({ taskId, payload }: { taskId: string; op: "task/provision"; payload: Record<string, unknown> }) => {
+  const instances = new Map<string, TaskWorkspaceHost>();
+  const scheduleCalls: Record<string, unknown>[] = [];
+  const host = { routeTaskOp: async ({ taskId, op, payload }: { taskId: string; op: "task/provision" | "task/scheduleSave"; payload: Record<string, unknown> }) => {
     calls += 1;
+    if (op === "task/scheduleSave") {
+      // [Pencil T17] #152 the REAL Host save path, so `scheduleDefinitionIssues`
+      // is what decides whether the created definition is accepted.
+      const instance = instances.get(taskId);
+      if (!instance) throw new Error("Host 任务身份不符");
+      const result = instance.saveSchedule(payload as never);
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      scheduleCalls.push(payload);
+      return { workspaceId: "test", taskId, op, payload: { schedule: result.schedule } };
+    }
     const instance = new TaskWorkspaceHost(taskId, join(payload.rootOverride as string, taskId), diskTaskStore);
     instance.provision(payload as never);
-    return { workspaceId: "test", taskId, op: "task/provision" as const, payload: {} };
+    instances.set(taskId, instance);
+    return { workspaceId: "test", taskId, op, payload: {} };
   } };
   const service = new ProjectTaskCreation(storage, projects, roots, host, root);
   const request = { projectId: project.id, name: "Actual work", repositories: [{ sourceId: project.repositories[0]!.id, remote: "origin", remoteBranch: "main" }],
     directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true, override: false };
-  return { home, repo, root, profile, remote, project, projects, roots, storage, service, host, request, getCalls: () => calls };
+  return { home, repo, root, profile, remote, project, projects, roots, storage, service, host, request, instances, scheduleCalls, getCalls: () => calls };
 }
 async function setupTwoRepositories() {
   const env = await setup();
@@ -685,5 +703,88 @@ describe("persistent Project task creation with local Git", { timeout: GIT_CASE_
     rmSync(preview.taskDir, { recursive: true });
     rmSync(join(env.profile, "task-creations.json"));
     expect(() => new CreationIntentStore(env.profile).read()).toThrow(/恢复/);
+  });
+});
+
+/**
+ * [Pencil T17] #152: a dedicated scheduled task is created through the SAME
+ * persistent creation pipeline, with `kind: "scheduled"` written into the
+ * provision payload and its definition saved through the Host's own path.
+ */
+describe("dedicated scheduled task creation (#152)", { timeout: GIT_CASE_TIMEOUT_MS }, () => {
+  const schedule = {
+    name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险",
+    providerId: "provider-local", model: "pidock-default", permission: "default" as const, enabled: true,
+  };
+
+  it("writes kind=scheduled into the task record and saves the definition through the Host", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare({ ...env.request, kind: "scheduled", schedule });
+    expect(preview.kind).toBe("scheduled");
+    expect(preview.schedule).toMatchObject(schedule);
+    await env.service.commit(preview.id);
+    const record = readTaskRecordOnDisk(preview.taskDir);
+    expect(record?.kind).toBe("scheduled");
+    expect(env.instances.get(preview.taskId)?.taskKind()).toBe("scheduled");
+    expect(env.scheduleCalls).toEqual([expect.objectContaining({
+      name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险",
+      providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true,
+    })]);
+    // The definition is persisted with its plan, not only in the intent.
+    const schedules = env.instances.get(preview.taskId)?.listSchedules() ?? [];
+    expect(schedules).toMatchObject([{ name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", permission: "default", enabled: true }]);
+    expect(schedules[0]?.nextRunAt).toBeTruthy();
+  });
+
+  it("refuses a scheduled creation without a definition, and a normal one carrying a rule", async () => {
+    const env = await setup();
+    await expect(env.service.prepare({ ...env.request, kind: "scheduled" })).rejects.toThrow("定时任务创建必须提供规则");
+    await expect(env.service.prepare({ ...env.request, kind: "normal", schedule })).rejects.toThrow("普通任务不能携带定时规则");
+    // Nothing half-created: no intent, no task folder.
+    expect(env.service.current()).toBeNull();
+    expect(env.getCalls()).toBe(0);
+  });
+
+  it("produces a scheduled plain-directory intent through the real IPC (empty branch, definition attached)", async () => {
+    // [Pencil T17] #152 real Electron reproduction: the S02 scheduled form uses
+    // 仅普通目录, where the creation mode names NO branch. The IPC answer is
+    // therefore `branch: ""` with the definition attached; the renderer's
+    // reader must accept exactly this shape instead of reporting a broken intent.
+    const env = await setup();
+    const plainRequest = { ...env.request, repositories: [], workspaceMode: "plain-dirs" as const };
+    const prepared = await performCreationOperation(env.service,
+      { op: "prepare", input: { ...plainRequest, kind: "scheduled", schedule } }, async () => null, () => undefined);
+    const answer = prepared as { canceled: boolean; intent: { id: string; kind: string; branch: string; workspaceMode: string; repos: unknown[]; schedule: Record<string, unknown> } };
+    expect(answer.canceled).toBe(false);
+    expect(answer.intent).toMatchObject({
+      kind: "scheduled", branch: "", workspaceMode: "plain-dirs", repos: [],
+      schedule: expect.objectContaining({ name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-local", model: "pidock-default", permission: "default", enabled: true }),
+    });
+    // The same real IPC read answers the same intent (what `current()` shows).
+    const current = (await performCreationOperation(env.service, { op: "current" }, async () => null, () => undefined)) as typeof answer.intent;
+    expect(current).toMatchObject({ id: answer.intent.id, kind: "scheduled", branch: "", schedule: answer.intent.schedule });
+  });
+
+  it("accepts kind+schedule at the IPC boundary and refuses a mismatched or invalid shape", async () => {
+    const env = await setup();
+    await expect(performCreationOperation(env.service, { op: "prepare", input: { ...env.request, schedule } }, async () => null, () => undefined))
+      .rejects.toThrow("schedule requires a scheduled task kind");
+    await expect(performCreationOperation(env.service, { op: "prepare", input: { ...env.request, kind: "scheduled" } }, async () => null, () => undefined))
+      .rejects.toThrow("scheduled task requires a schedule definition");
+    await expect(performCreationOperation(env.service, { op: "prepare", input: { ...env.request, kind: "scheduled", schedule: { ...schedule, permission: "root" } } }, async () => null, () => undefined))
+      .rejects.toThrow("invalid schedule definition");
+    const answer = await performCreationOperation(env.service, { op: "prepare", input: { ...env.request, kind: "scheduled", schedule } }, async () => null, () => undefined) as { canceled: boolean; intent: { kind: string } };
+    expect(answer.canceled).toBe(false);
+    expect(answer.intent.kind).toBe("scheduled");
+  });
+
+  it("keeps a definition that the Host refuses by name as a pending, retryable creation", async () => {
+    const env = await setup();
+    const preview = await env.service.prepare({ ...env.request, kind: "scheduled", schedule: { ...schedule, prompt: "" } });
+    await expect(env.service.commit(preview.id)).rejects.toThrow("prompt-empty");
+    expect(env.service.current()).toMatchObject({ id: preview.id, state: "pending" });
+    // The task itself was provisioned as the dedicated scheduled task; only the
+    // definition was refused, so nothing silently loses its rule.
+    expect(readTaskRecordOnDisk(preview.taskDir)?.kind).toBe("scheduled");
   });
 });

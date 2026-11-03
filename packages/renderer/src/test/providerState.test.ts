@@ -43,7 +43,7 @@ const ANTHROPIC: ProviderProfile = {
 const LOCAL: ProviderProfile = {
   id: "provider-local",
   name: "本地推理",
-  protocol: "openai-chat-completions",
+  protocol: "openai-completions",
   baseUrl: "http://127.0.0.1:11434/v1",
   enabled: true,
   models: [{ id: "本地 Qwen", contextWindow: 32, thinking: { mode: "custom", levels: ["off", "low", "medium"], default: "low" } }],
@@ -133,7 +133,7 @@ describe("display name follow", () => {
 describe("model list sync", () => {
   const transport: DiscoveryTransport = async ({ protocol }) => ({
     ok: true,
-    ids: protocol === "openai-chat-completions" ? ["qwen3-coder", "qwen3-coder", " x "] : ["gpt-5", "gpt-5-mini"],
+    ids: protocol === "openai-completions" ? ["qwen3-coder", "qwen3-coder", " x "] : ["gpt-5", "gpt-5-mini"],
   });
 
   it("returns candidates only, deduped, from the provider's own connection", async () => {
@@ -338,9 +338,9 @@ describe("protocol labels", () => {
     // (`anthropic-messages`) where the prototype prints `Anthropic Messages`.
     expect(protocolLabel("anthropic-messages")).toBe("Anthropic Messages");
     expect(protocolLabel("openai-responses")).toBe("OpenAI Responses");
-    expect(protocolLabel("openai-chat-completions")).toBe("OpenAI Chat Completions");
+    expect(protocolLabel("openai-completions")).toBe("OpenAI Chat Completions");
     // The stored value stays the wire id, and an unknown one is never blank.
-    expect(Object.keys(PROTOCOL_LABELS)).toEqual(["anthropic-messages", "openai-responses", "openai-chat-completions"]);
+    expect(Object.keys(PROTOCOL_LABELS)).toEqual(["anthropic-messages", "openai-responses", "openai-completions"]);
     expect(protocolLabel("some-future-protocol")).toBe("some-future-protocol");
   });
 });
