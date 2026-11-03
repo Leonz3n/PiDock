@@ -796,6 +796,38 @@ describe("#6 append + probe guards (S2)", () => {
     ).toBe(false);
   });
 
+  it("accepts the empty branch main writes for branchless modes, and keeps the worktree check strict", () => {
+    // [Pencil T19] #137/#142 regression: main stores `branch: ""` for modes
+    // that create no task branch, so the Host must accept exactly that value
+    // for those two modes instead of calling `isSafeTaskBranchRef("")`.
+    const shared = [{ rootId: "repo-a", sourcePath: "/src/repo", remote: "origin", remoteBranch: "main",
+      headCommit: "a".repeat(40), commonDir: "/src/repo/.git", remoteDigest: "b".repeat(64) }];
+    expect(validateHostTaskOp("task/provision", {
+      name: "纯目录", dirId: "task-abcdef12", workspaceMode: "plain-dirs", branch: "",
+      plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
+    })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/provision", {
+      name: "已有检出", dirId: "task-abcdef12", workspaceMode: "existing-git", branch: "",
+      remoteBranch: "", fetchedCommit: "", sharedRepos: shared,
+    })).toEqual({ ok: true });
+    // A worktree task DOES own a branch: the empty value is still refused.
+    expect(validateHostTaskOp("task/provision", {
+      name: "Worktree", dirId: "task-abcdef12", workspaceMode: "worktree", branch: "",
+      remoteBranch: "main", fetchedCommit: "a5a4a0d1234",
+      repoSelections: [{ repoDir: "frontend", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/frontend" }],
+    }).ok).toBe(false);
+    // The branchless exception is exactly the empty string: an unsafe value is
+    // still refused by name in both branchless modes.
+    expect(validateHostTaskOp("task/provision", {
+      name: "纯目录", dirId: "task-abcdef12", workspaceMode: "plain-dirs", branch: "--force",
+      plainDirs: [{ directoryId: "notes-1", sourcePath: "/data/notes" }],
+    }).ok).toBe(false);
+    expect(validateHostTaskOp("task/provision", {
+      name: "已有检出", dirId: "task-abcdef12", workspaceMode: "existing-git", branch: "bad branch",
+      remoteBranch: "", fetchedCommit: "", sharedRepos: shared,
+    }).ok).toBe(false);
+  });
+
   it("allows a pure-directory provision with no Git baseline and still requires it once a repo is selected", () => {
     // A pure-directory task needs no Git repository: no remoteBranch/fetchedCommit.
     expect(
@@ -1003,6 +1035,11 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/filePreview", { rootId: "r", relative: "a.ts" })).toEqual({ ok: true });
     expect(validateHostTaskOp("task/filePreview", { rootId: "r" }).ok).toBe(false);
     expect(validateHostTaskOp("task/filePreview", { rootId: "r", relative: "" }).ok).toBe(false);
+    // [Pencil T19] the reference re-check stats exactly one named path.
+    expect(validateHostTaskOp("task/fileStat", { rootId: "r", relative: "a.ts" })).toEqual({ ok: true });
+    expect(validateHostTaskOp("task/fileStat", { rootId: "r" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/fileStat", { rootId: "r", relative: "" }).ok).toBe(false);
+    expect(validateHostTaskOp("task/fileStat", { rootId: "r", relative: 7 }).ok).toBe(false);
     expect(validateHostTaskOp("task/fileRoots", undefined)).toEqual({ ok: true });
     expect(validateHostTaskOp("task/fileRoots", "nope").ok).toBe(false);
   });

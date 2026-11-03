@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { validateHostTaskOp } from "../host/host-guards.js";
 import { TaskWorkspaceHost } from "../host/task-host.js";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import { diskTaskStore } from "../host/task-host.js";
@@ -54,9 +55,16 @@ async function setup() {
       // Append ops are routed the way `host/host.ts` routes them, so the mode
       // guards are exercised on the real Host record owner.
       if (op === "task/appendDirs") {
+        const guard = validateHostTaskOp(op as never, payload);
+        if (!guard.ok) throw new Error(guard.error);
         const appended = instance.appendDirs({ plainDirs: payload["plainDirs"] as { directoryId: string; sourcePath: string }[] });
         return { workspaceId: "test", taskId, op: "task/appendDirs" as const, payload: { ...appended.record, appended: appended.appended, skipped: appended.skipped } };
       }
+      // [Pencil T19] the REAL Host guard runs before `provision`, exactly as
+      // `host/host.ts` does. Main writes `branch: ""` for the two branchless
+      // modes; letting the guard see that payload is the #137/#142 regression.
+      const guard = validateHostTaskOp(op as never, payload);
+      if (!guard.ok) throw new Error(guard.error);
       instance.provision(payload as never);
       return { workspaceId: "test", taskId, op: "task/provision" as const, payload: {} };
     },

@@ -633,8 +633,17 @@ export function validateHostTaskOp(
     // [Pencil T13] #148 `branch` is the task branch main already created from
     // the saved convention; it lands in the record and in git argv, so it is
     // shape-checked here (safety rules shared with the append path).
-    if (payload["branch"] !== undefined && !isSafeTaskBranchRef(payload["branch"])) {
-      return { ok: false, error: "invalid-payload: task/provision.branch must be a safe task branch ref" };
+    //
+    // [Pencil T19] #137/#142 regression: only a WORKTREE task owns a task
+    // branch. Main writes `branch: ""` for `plain-dirs` and `existing-git`
+    // (they create no branch at all), so an empty value is accepted EXACTLY for
+    // those two modes; a worktree task with an empty branch is still refused.
+    const branch = payload["branch"];
+    if (branch !== undefined) {
+      const branchlessMode = payload["workspaceMode"] === "plain-dirs" || payload["workspaceMode"] === "existing-git";
+      if (!(branchlessMode && branch === "") && !isSafeTaskBranchRef(branch)) {
+        return { ok: false, error: "invalid-payload: task/provision.branch must be a safe task branch ref" };
+      }
     }
     const hasRepos = (Array.isArray(payload["repoSelections"]) && payload["repoSelections"].length > 0) ||
       (Array.isArray(payload["repos"]) && payload["repos"].length > 0);
@@ -1464,7 +1473,7 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
-  if (op === "task/fileTree" || op === "task/filePreview" || op === "task/fileDiff" || op === "task/deliveryInfo") {
+  if (op === "task/fileTree" || op === "task/fileStat" || op === "task/filePreview" || op === "task/fileDiff" || op === "task/deliveryInfo") {
     if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
     const rootId = payload["rootId"];
     if (typeof rootId !== "string" || rootId.trim().length === 0) {
@@ -1474,9 +1483,9 @@ export function validateHostTaskOp(
     if (relative !== undefined && typeof relative !== "string") {
       return { ok: false, error: `invalid-payload: ${op}.relative must be a string` };
     }
-    // A preview reads one file: an explicit relative path is required.
-    if (op === "task/filePreview" && (typeof relative !== "string" || relative.trim().length === 0)) {
-      return { ok: false, error: "invalid-payload: task/filePreview.relative must be a non-empty string" };
+    // A preview/stat reads one path: an explicit relative path is required.
+    if ((op === "task/filePreview" || op === "task/fileStat") && (typeof relative !== "string" || relative.trim().length === 0)) {
+      return { ok: false, error: `invalid-payload: ${op}.relative must be a non-empty string` };
     }
     return { ok: true };
   }
