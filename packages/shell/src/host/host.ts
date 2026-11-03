@@ -56,6 +56,7 @@ import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import type { PromptContextEntry } from "./sdk-prompt-context.js";
 import { availableReasoningLevels, validateExplicitTextProvider } from "./explicit-text-provider.js";
 import { SESSION_PERMISSIONS, SESSION_THINKING_LEVELS, type SessionIndex, type SessionThinkingLevel } from "./session-index.js";
+import { sessionCreatedPayload, sessionListPayload } from "./session-list-payload.js";
 import { switchSessionModel } from "./session-switch.js";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
@@ -1941,22 +1942,13 @@ async function performTaskOp(
       // which one is active and which model each one is bound to; these ops are
       // exact-key, task-scoped (main binds the task from the sender) and never
       // invent a session. A read never materializes a session or a transcript.
+      // [#139] Reads and writes share ONE reply shape (`session-list-payload`):
+      // `activeSessionId`, `sessions` and the installed `provider` row. The
+      // evidence defect this closes: the writes used to omit `provider`, and the
+      // renderer replaces its whole list with a write reply, so the model menu
+      // went empty after any session switch until a remount.
       case "task/sessionList": {
-        const index = host.sessionIndex();
-        const installed = host.sdkProviderConfig();
-        return { ok: true, payload: {
-          activeSessionId: index.activeSessionId,
-          sessions: index.sessions,
-          provider: installed === null ? null : {
-            profileId: installed.config.profileId,
-            modelId: installed.config.modelId,
-            generation: installed.generation,
-            models: installed.config.models.map((row) => ({
-              id: row.id, name: row.name, contextWindow: row.contextWindow, maxTokens: row.maxTokens,
-              reasoning: row.reasoning, reasoningLevels: availableReasoningLevels(row),
-            })),
-          },
-        } };
+        return { ok: true, payload: sessionListPayload(host.sessionIndex(), host.sdkProviderConfig()) };
       }
       case "task/sessionCreate": {
         const name = record["name"];
@@ -1972,7 +1964,8 @@ async function performTaskOp(
             ...(typeof name === "string" ? { name } : {}),
             ...(typeof permission === "string" ? { permission: permission as (typeof SESSION_PERMISSIONS)[number] } : {}),
           });
-          return { ok: true, payload: { session: created.session, activeSessionId: created.index.activeSessionId, sessions: created.index.sessions } };
+          // Same list payload as `task/sessionList`, plus the created session.
+          return { ok: true, payload: sessionCreatedPayload(created, host.sdkProviderConfig()) };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -1997,7 +1990,9 @@ async function performTaskOp(
             if (sdkTurns?.busy(sessionId)) throw new Error("sdk-session-busy");
             index = host.deleteTaskSession(sessionId);
           }
-          return { ok: true, payload: { activeSessionId: index.activeSessionId, sessions: index.sessions } };
+          // [#139] A write reply is a full list reply (provider included) so the
+          // renderer can replace its list without losing the model menu.
+          return { ok: true, payload: sessionListPayload(index, host.sdkProviderConfig()) };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
