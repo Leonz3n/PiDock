@@ -867,6 +867,64 @@ describe("Desktop SDK conversation", () => {
     expect(f.calls.filter((call) => call.action === "start")[1]).toMatchObject({ requestId: first.requestId, text: "original" });
   });
 
+  /**
+   * [#139 hotfix] The real-Electron evidence caught a `task-locked` refusal (the
+   * other session of this task holds the running turn) rendered as
+   * 「请求结果未知」. The Host refused before the turn existed, so the honest state
+   * is 忙碌/明确拒绝 — with the same request id kept for the retry the evidence ran.
+   */
+  it("renders a definite task-locked refusal as busy, never as an unknown outcome", async () => {
+    const f = setup(); f.setFail("task-locked: 同一任务同时只能有一个会话执行"); mount(f);
+    await screen.findByText(/尚未开始/);
+    await send("busy request");
+    const notice = await screen.findByText(/忙碌：/);
+    expect(notice).toHaveTextContent("明确拒绝");
+    expect(notice).toHaveTextContent("task-locked: 同一任务同时只能有一个会话执行");
+    expect(screen.queryByText(/请求结果未知/)).not.toBeInTheDocument();
+    // The exact request is still on hand: retry-by-request-id is the real exit.
+    expect(screen.getByRole("button", { name: "按原 ID 重试" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "消息" })).toHaveValue("busy request");
+    const first = f.calls.find((call) => call.action === "start")!;
+    f.setFail("");
+    fireEvent.click(screen.getByRole("button", { name: "按原 ID 重试" }));
+    await waitFor(() => expect(f.calls.filter((call) => call.action === "start")).toHaveLength(2));
+    expect(f.calls.filter((call) => call.action === "start")[1]).toMatchObject({ requestId: first.requestId, text: "busy request" });
+    await screen.findByText(/正在等待模型|已从 SDK 历史核验/);
+  });
+
+  /**
+   * [#139 hotfix] The context readout was only re-read on mount/switch: after a
+   * turn settled the composer kept 「未报告」 although the Host already returned
+   * `context.used`. A settle (and a cancel, which also writes the request into
+   * the session's JSONL) re-reads `task/sessionReadout`.
+   */
+  it("re-reads the session readout when a turn settles and when it is cancelled", async () => {
+    const f = setup();
+    const reads: string[] = [];
+    f.setTaskOp((_taskId, op) => { if (op === "task/sessionReadout") reads.push(op); return undefined; });
+    mount(f);
+    await screen.findByText(/尚未开始/);
+    await waitFor(() => expect(reads).toHaveLength(1));
+    await send("hello");
+    await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument());
+    // An accepted turn is not a settle: nothing has been written to the JSONL yet.
+    expect(reads).toHaveLength(1);
+    const first = String(f.calls.find((call) => call.action === "start")?.requestId);
+    f.setReadout(sessionReadout({
+      context: { used: 2048, window: 200000, source: "sdk-usage" },
+      usage: { input: 2048, output: 96, cacheRead: 0, cacheWrite: 0 }, turns: 1,
+    }));
+    f.setStatus(turn("task-a", first, "done"));
+    act(() => { f.emit({ kind: "sdk-turn-status", turn: turn("task-a", first, "done") }); });
+    await waitFor(() => expect(reads).toHaveLength(2));
+    await waitFor(() => expect(screen.getByTestId("composer-context")).toHaveTextContent("上下文 2.0k / 200k"));
+    // A cancelled turn settles too.
+    await send("second");
+    await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    await waitFor(() => expect(reads).toHaveLength(3));
+  });
+
   it("replaces transient output with confirmed SDK projection on terminal and cancels only its own turn", async () => {
     const f = setup(); mount(f); await screen.findByText(/尚未开始/); await send("hello");
     await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeInTheDocument());
