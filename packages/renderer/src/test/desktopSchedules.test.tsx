@@ -316,3 +316,30 @@ it("shows an accepted run as 执行中 with its ACTUAL model and opens the origi
   expect(failed.getByText(/credential-missing/)).toBeInTheDocument();
   expect(failed.getByText(/未实际运行/)).toBeInTheDocument();
 });
+
+it("shows an unconfirmed quit and the asleep phase instead of claiming the scheduler is healthy", async () => {
+  bridge((taskId, op) => ({ ok: true, payload: { workspaceId: "local", taskId, op, payload: op === "task/scheduleList"
+    ? { schedules: [schedule(taskId, true)], templates: [] } : { runs: [run(taskId)] } } }));
+  const schedulerState = vi.fn(async () => ({ ok: true, payload: {
+    phase: "asleep",
+    blockedReason: "系统休眠中：不执行定时触发",
+    sleepingSince: "2026-09-29T08:00:00Z",
+    lastQuitUnconfirmed: { at: "2026-09-28T23:00:00Z", hosts: ["task-b"], attempts: 3 },
+  } }));
+  window.pidock = { ...window.pidock, schedulerState } as never;
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(screen.getByTestId("desktop-scheduler-state")).toBeInTheDocument());
+  expect(screen.getByTestId("desktop-scheduler-state")).toHaveTextContent("系统休眠");
+  const quit = screen.getByTestId("desktop-scheduler-quit-unconfirmed");
+  expect(quit).toHaveTextContent("上次退出未确认");
+  expect(quit).toHaveTextContent("task-b");
+});
+
+it("renders a reconciled interrupted run as a named outcome, not a success", async () => {
+  bridge((taskId, op) => ({ ok: true, payload: { workspaceId: "local", taskId, op, payload: op === "task/scheduleList"
+    ? { schedules: [schedule(taskId, true)], templates: [] }
+    : { runs: [{ ...run(taskId), result: "interrupted", reason: "执行已中断：上次进程已不在" }, { ...run(taskId), runId: "run-uncertain", result: "uncertain" }] } } }));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  await waitFor(() => expect(screen.getAllByText("已中断").length).toBeGreaterThan(0));
+  expect(screen.getAllByText("状态不确定").length).toBeGreaterThan(0);
+});
