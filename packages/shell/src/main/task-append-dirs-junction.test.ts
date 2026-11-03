@@ -12,6 +12,7 @@ import { ProjectTaskAppend, createNodeAppendGit } from "./task-append.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { createNodePrepScanDeps, createPrepScanAuthority } from "./task-prep-scan.js";
 import * as fs from "node:fs";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 // Partial mock (repo precedent: `service-host-binding.test.ts`): only `symlinkSync`
 // is replaced. It throws the real de-privileged EPERM shape for a directory
@@ -84,6 +85,7 @@ async function setup() {
   });
 
   const roots = new TaskRootIndex(profile, root);
+  saveTestDeliverySettings(profile);
   const storage = new CreationIntentStore(profile);
 
   const taskRootFor = (taskId: string, payload: Record<string, unknown>): string =>

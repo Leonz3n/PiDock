@@ -201,3 +201,123 @@ export async function retryCreation(bridge: PidockBridge, id: string, adoptOrpha
   }
   return { taskId: row.taskId, retried: row.retried.filter((entry): entry is string => typeof entry === "string") };
 }
+
+/* -------------------------------------------------------------------------- */
+/* [Pencil T13] #148 pre-creation branch/push-target preview                   */
+/* -------------------------------------------------------------------------- */
+
+/** The one sentence a mode with no Git delivery shows (mirrors main's constant). */
+export const NO_GIT_DELIVERY = "无 Git 交付";
+
+export interface DeliverySettingsView {
+  branchTemplate: string;
+  remote: string;
+  savedAt: string | null;
+}
+
+/** One repository row of the pre-creation preview, exactly as main planned it. */
+export interface CreationPreviewRowView {
+  repoId: string;
+  name: string;
+  repoPath: string;
+  localBranch: string;
+  remote: string;
+  pushTarget: string;
+  remoteUrl: string | null;
+  currentBranch: string;
+  problem: { code: string; message: string } | null;
+}
+
+export interface CreationDeliveryPreviewView {
+  taskId: string;
+  taskTitle: string;
+  workspaceMode: WorkspaceModeView;
+  branchTemplate: string;
+  remote: string;
+  gitDelivery: "branch" | "existing" | "none";
+  ready: boolean;
+  rows: CreationPreviewRowView[];
+  problem: { code: string; message: string } | null;
+  message: string;
+}
+
+function settingsView(value: unknown): DeliverySettingsView {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("交付设置返回异常");
+  const row = value as Record<string, unknown>;
+  if (typeof row.branchTemplate !== "string" || typeof row.remote !== "string" ||
+      (row.savedAt !== null && row.savedAt !== undefined && typeof row.savedAt !== "string")) {
+    throw new Error("交付设置返回异常");
+  }
+  return { branchTemplate: row.branchTemplate, remote: row.remote, savedAt: typeof row.savedAt === "string" ? row.savedAt : null };
+}
+
+function problemView(value: unknown): { code: string; message: string } | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("创建前预览返回异常");
+  const row = value as Record<string, unknown>;
+  if (typeof row.code !== "string" || !row.code || typeof row.message !== "string" || !row.message) {
+    throw new Error("创建前预览返回异常");
+  }
+  return { code: row.code, message: row.message };
+}
+
+function previewRow(value: unknown): CreationPreviewRowView {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("创建前预览返回异常");
+  const row = value as Record<string, unknown>;
+  for (const key of ["repoId", "name", "repoPath", "localBranch", "remote", "pushTarget", "currentBranch"]) {
+    if (typeof row[key] !== "string") throw new Error("创建前预览返回异常");
+  }
+  if (row.remoteUrl !== null && typeof row.remoteUrl !== "string") throw new Error("创建前预览返回异常");
+  return {
+    repoId: String(row.repoId), name: String(row.name), repoPath: String(row.repoPath),
+    localBranch: String(row.localBranch), remote: String(row.remote), pushTarget: String(row.pushTarget),
+    remoteUrl: typeof row.remoteUrl === "string" ? row.remoteUrl : null,
+    currentBranch: String(row.currentBranch), problem: problemView(row.problem),
+  };
+}
+
+function previewView(value: unknown): CreationDeliveryPreviewView {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("创建前预览返回异常");
+  const row = value as Record<string, unknown>;
+  for (const key of ["taskId", "taskTitle", "branchTemplate", "remote", "message"]) {
+    if (typeof row[key] !== "string") throw new Error("创建前预览返回异常");
+  }
+  if (typeof row.ready !== "boolean" || !Array.isArray(row.rows)) throw new Error("创建前预览返回异常");
+  if (row.workspaceMode !== "worktree" && row.workspaceMode !== "existing-git" && row.workspaceMode !== "plain-dirs") {
+    throw new Error("创建前预览返回异常");
+  }
+  if (row.gitDelivery !== "branch" && row.gitDelivery !== "existing" && row.gitDelivery !== "none") {
+    throw new Error("创建前预览返回异常");
+  }
+  return {
+    taskId: String(row.taskId), taskTitle: String(row.taskTitle), workspaceMode: row.workspaceMode,
+    branchTemplate: String(row.branchTemplate), remote: String(row.remote), gitDelivery: row.gitDelivery,
+    ready: row.ready, rows: row.rows.map((entry) => previewRow(entry)),
+    problem: problemView(row.problem), message: String(row.message),
+  };
+}
+
+/** The saved convention/remote the create form shows and edits (main-read). */
+export async function creationDeliverySettings(bridge: PidockBridge): Promise<DeliverySettingsView> {
+  const value = await request(bridge, { op: "deliverySettings" });
+  if (!value || typeof value !== "object" || !("settings" in value)) throw new Error("交付设置返回异常");
+  return settingsView((value as { settings?: unknown }).settings);
+}
+
+/** Save both; main validates and NAMES an invalid pair instead of defaulting. */
+export async function saveCreationDeliverySettings(
+  bridge: PidockBridge, input: { branchTemplate: string; remote: string },
+): Promise<DeliverySettingsView> {
+  const value = await request(bridge, { op: "saveDeliverySettings", branchTemplate: input.branchTemplate, remote: input.remote });
+  if (!value || typeof value !== "object" || !("settings" in value)) throw new Error("交付设置返回异常");
+  return settingsView((value as { settings?: unknown }).settings);
+}
+
+/**
+ * Read the pre-creation preview from main. The page sends the same creation
+ * input it will submit; every branch/target in the answer comes from main's
+ * read of the saved settings + the real checkouts, never from the page.
+ */
+export async function previewCreationDelivery(bridge: PidockBridge, input: CreationInput): Promise<CreationDeliveryPreviewView> {
+  return previewView(await request(bridge, { op: "deliveryPreview", input }));
+}

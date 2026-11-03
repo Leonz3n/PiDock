@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Icon } from "./Icon";
-import { abandonCreation, commitCreation, creationStatus, currentCreation, prepareCreation, retryCreation, CREATION_RETENTION_NOTICE, WORKSPACE_MODE_LABELS, type AbandonCleanupView, type CreationInput, type CreationIntentView, type CreationScheduleInput, type CreationStatusView, type RepoPhaseView, type WorkspaceModeView } from "../data/desktopCreation";
+import { abandonCreation, commitCreation, creationStatus, currentCreation, prepareCreation, retryCreation, CREATION_RETENTION_NOTICE, NO_GIT_DELIVERY, WORKSPACE_MODE_LABELS, creationDeliverySettings, previewCreationDelivery, saveCreationDeliverySettings, type AbandonCleanupView, type CreationDeliveryPreviewView, type CreationInput, type CreationIntentView, type CreationScheduleInput, type CreationStatusView, type DeliverySettingsView, type RepoPhaseView, type WorkspaceModeView } from "../data/desktopCreation";
 import { parseProviderStatus, providerCall } from "../data/providerProfile";
-import { BRANCH_TEMPLATE_TOKEN, sourceName, sourcePath, type DesktopProject } from "../data/desktopProjects";
+import { sourceName, sourcePath, type DesktopProject } from "../data/desktopProjects";
 import type { PidockBridge } from "../data/shellBridge";
 import { hostText } from "../data/workspaceFiles";
 
 const button = "inline-flex min-h-8 items-center justify-center gap-1.5 border border-line bg-paper px-2.5 py-1 text-xs hover:bg-bg disabled:cursor-not-allowed disabled:opacity-50";
 const field = "w-full min-w-0 border border-line bg-paper px-2 py-1.5 text-sm text-ink";
+const fieldDense = "w-full min-w-0 border border-line bg-paper px-1.5 py-1 font-mono text-[11px] text-ink";
 const label = "flex min-w-0 flex-col gap-1 text-[11px] font-medium text-muted";
 const kbd = "rounded-[3px] border border-line bg-bg px-1.5 py-0.5 font-mono text-[10px] text-muted";
 const PHASE_LABELS: Record<RepoPhaseView, string> = { created: "已创建", pending: "待准备", failed: "失败" };
@@ -16,13 +17,6 @@ const MODE_HINTS: Record<WorkspaceModeView, string> = {
   "existing-git": "直接使用已登记原检出：不创建 Worktree、不创建任务分支、不拉取/合并/重置；未提交修改保持原样，写入影响原文件。",
   "plain-dirs": "仅普通目录：共享原文件，不涉及 Git 仓库；写入影响原文件。",
 };
-
-/** The `{task-name}` token rendered as a display-only push target preview. */
-function branchPreview(template: string | null, name: string): string {
-  if (template === null) return "Host 未上报工作区分支模板";
-  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "task";
-  return template.split(BRANCH_TEMPLATE_TOKEN).join(slug);
-}
 
 export function DesktopTaskCreation({ project, bridge, onCreated }: {
   project?: DesktopProject;
@@ -56,6 +50,17 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
   const [adoptOrphans, setAdoptOrphans] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // [Pencil T13] #148 the pre-creation preview: the exact local branch and push
+  // target main will create, read from the SAVED convention/remote and the real
+  // checkouts. `null` = not read (yet); the page never fills the gap itself.
+  const [settings, setSettings] = useState<DeliverySettingsView | null>(null);
+  const [settingsDraft, setSettingsDraft] = useState({ branchTemplate: "", remote: "" });
+  const [settingsNote, setSettingsNote] = useState("");
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsVersion, setSettingsVersion] = useState(0);
+  const [preview, setPreview] = useState<CreationDeliveryPreviewView | null>(null);
+  const [previewError, setPreviewError] = useState("");
+  const previewEpoch = useRef(0);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const submitRef = useRef<() => void>(() => undefined);
@@ -138,13 +143,12 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
   const noSelections = mode === "plain-dirs" ? !hasSelectedDirs : !hasSelectedRepos;
   const scheduleReady = !scheduled || (scheduleRule.trim().length > 0 && schedulePrompt.trim().length > 0 &&
     scheduleTarget.providerId.length > 0 && scheduleTarget.model.length > 0);
-  const submitDisabled = busy || project?.id !== formProjectId || !currentName.trim() || noSelections || !selectedReady ||
-    (hasSelectedDirs && !sharedWriteConfirmed) || !scheduleReady;
-
-  const prepare = async (event?: FormEvent) => {
-    event?.preventDefault();
-    if (!project || project.id !== formProjectId) { setError("项目选择已变化，请选择原项目或取消后重新创建"); return; }
-    if (submitDisabled) { nameRef.current?.focus(); return; }
+  /**
+   * The exact input the page would submit. The preview and `prepare` send the
+   * SAME shape from this one builder, so main's proposed task id (and therefore
+   * the previewed branch) applies to the creation that follows.
+   */
+  const creationInput = (): CreationInput => {
     const schedule: CreationScheduleInput | undefined = scheduled
       ? {
           name: name.trim(),
@@ -157,8 +161,8 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
           enabled: true,
         }
       : undefined;
-    const input: CreationInput = {
-      projectId: project.id, name, workspaceMode: mode,
+    return {
+      projectId: project?.id ?? "", name, workspaceMode: mode,
       ...(scheduled ? { kind: "scheduled" as const, ...(schedule ? { schedule } : {}) } : {}),
       repositories: projectRepos.filter((row) => repos[row.id]?.selected).map((row) => ({
         sourceId: row.id, remote: repos[row.id]!.remote.trim(),
@@ -168,6 +172,76 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
       })),
       directoryIds: directories, sharedWriteConfirmed, override,
     };
+  };
+  // The preview re-reads whenever the selection, the name, the mode or the
+  // saved convention/remote change: main is the only place a branch is named.
+  const previewSignature = JSON.stringify({
+    name, mode,
+    repositories: projectRepos.filter((row) => repos[row.id]?.selected)
+      .map((row) => [row.id, repos[row.id]?.remote ?? "", repos[row.id]?.branch ?? ""]),
+    settingsVersion,
+  });
+  useEffect(() => {
+    if (!open || intent || typeof bridge.createTask !== "function") return;
+    const request = ++previewEpoch.current;
+    // Debounced: typing a task name must not spawn one `git remote` per keystroke.
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const loaded = await previewCreationDelivery(bridge, creationInput());
+          if (previewEpoch.current !== request) return;
+          setPreview(loaded);
+          setPreviewError("");
+        } catch (failure) {
+          if (previewEpoch.current !== request) return;
+          setPreview(null);
+          setPreviewError(failure instanceof Error ? failure.message : "创建前预览不可读取");
+        }
+      })();
+    }, 120);
+    return () => { clearTimeout(timer); };
+    // `creationInput` reads the state this signature already covers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, intent, bridge, previewSignature]);
+  // The saved convention/remote, read from main's own profile document.
+  useEffect(() => {
+    if (!open || typeof bridge.createTask !== "function") return;
+    let live = true;
+    void creationDeliverySettings(bridge).then((loaded) => {
+      if (!live) return;
+      setSettings(loaded);
+      setSettingsDraft({ branchTemplate: loaded.branchTemplate, remote: loaded.remote });
+    }).catch((failure: unknown) => {
+      if (!live) return;
+      setSettings(null);
+      setSettingsNote(failure instanceof Error ? failure.message : "交付设置不可读取");
+    });
+    return () => { live = false; };
+  }, [open, bridge, settingsVersion]);
+  const saveSettings = async () => {
+    setSettingsBusy(true);
+    setSettingsNote("");
+    try {
+      const saved = await saveCreationDeliverySettings(bridge, settingsDraft);
+      setSettings(saved);
+      setSettingsDraft({ branchTemplate: saved.branchTemplate, remote: saved.remote });
+      setSettingsNote("已保存分支规范与推送目标；预览按新设置重新读取");
+      setSettingsVersion((value) => value + 1);
+    } catch (failure) {
+      // Main names an unset/invalid pair; creation stays blocked until it is fixed.
+      setSettingsNote(failure instanceof Error ? failure.message : "保存交付设置失败，未做任何改动");
+    } finally { setSettingsBusy(false); }
+  };
+  /** A preview that came back not-ready blocks creation with its named reason. */
+  const previewBlocked = preview !== null && !preview.ready;
+  const submitDisabled = busy || project?.id !== formProjectId || !currentName.trim() || noSelections || !selectedReady ||
+    (hasSelectedDirs && !sharedWriteConfirmed) || !scheduleReady || previewBlocked;
+
+  const prepare = async (event?: FormEvent) => {
+    event?.preventDefault();
+    if (!project || project.id !== formProjectId) { setError("项目选择已变化，请选择原项目或取消后重新创建"); return; }
+    if (submitDisabled) { nameRef.current?.focus(); return; }
+    const input = creationInput();
     setBusy(true); setError(null);
     try {
       const result = await prepareCreation(bridge, input);
@@ -308,11 +382,15 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
             </div>
             <div className="rounded-[5px] border border-line bg-bg px-3 py-2">
               <p className="break-all font-mono text-xs text-ink">{intent.taskDir}</p>
-              <p className="mt-1 text-xs text-muted">{intent.workspaceMode === "existing-git"
+              <p className="mt-1 break-all text-xs text-muted">{intent.workspaceMode === "existing-git"
                 // A shared original gets no task branch at all: naming one here
                 // would invent a branch that never exists.
                 ? "任务分支：不创建（直接使用原检出的当前分支）"
-                : `任务分支：${hostText(intent.branch, "Host 未上报任务分支")}`}</p>
+                : intent.workspaceMode === "plain-dirs"
+                  ? `${NO_GIT_DELIVERY}：仅普通目录，不创建分支，也没有推送目标`
+                  // The confirm step shows the SAME branch + push target the
+                  // preview showed; this is the last checkpoint before creation.
+                  : `本地分支：${hostText(intent.branch, "Host 未上报任务分支")} · 推送目标：${preview?.remote ? `${preview.remote} ${intent.branch}` : hostText(preview?.remote ?? "", "未读取推送远程")}`}</p>
             </div>
             {intent.workspaceMode === "existing-git"
               ? intent.repos.map((repo) => <p className="break-all text-xs" key={repo.id}>
@@ -462,11 +540,64 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
                     <p className="mt-1 text-[10px] text-muted">已读取 {(project?.environment ?? []).length} 个工作区变量，创建后默认继承；可在任务事实中按单个键局部覆盖（删除覆盖恢复继承）。</p></>}
               </div>
               <div className="min-w-0">
-                <p className="text-[11px] font-medium text-muted">推送到远程仓库时自动创建分支</p>
-                <p className="mt-1 truncate font-mono text-[10px] text-accent" title={branchPreview(project?.branchTemplate ?? null, name)}>origin/{branchPreview(project?.branchTemplate ?? null, name)}</p>
-                <p className="mt-1 text-[10px] text-muted">仅预览工作区分支模板；本任务创建不会推送，远端分支与 PR 见 #148</p>
+                <p className="text-[11px] font-medium text-muted">交付设置（分支规范 / 推送目标远程）</p>
+                <div className="mt-1 flex flex-wrap items-end gap-1.5">
+                  <label className="flex min-w-[132px] flex-1 flex-col gap-0.5 text-[10px] text-muted">分支规范
+                    <input className={fieldDense} aria-label="分支规范" maxLength={200} value={settingsDraft.branchTemplate}
+                      placeholder="ticket/{taskId}-{slug}"
+                      onChange={(event) => setSettingsDraft((old) => ({ ...old, branchTemplate: event.target.value }))} />
+                  </label>
+                  <label className="flex w-[104px] flex-col gap-0.5 text-[10px] text-muted">远程名
+                    <input className={fieldDense} aria-label="推送目标远程" maxLength={100} value={settingsDraft.remote}
+                      placeholder="origin"
+                      onChange={(event) => setSettingsDraft((old) => ({ ...old, remote: event.target.value }))} />
+                  </label>
+                  <button className={button} type="button" disabled={busy || settingsBusy}
+                    aria-label="保存交付设置" onClick={() => void saveSettings()}>{settingsBusy ? "保存中" : "保存"}</button>
+                </div>
+                <p className="mt-1 truncate text-[10px] text-muted" title={settings?.savedAt ?? ""}>
+                  {settings === null
+                    ? "工作空间尚未保存分支规范与推送远程"
+                    : `${settings.savedAt ? "已保存" : "未保存"}：${settings.branchTemplate || "（空）"} · ${settings.remote || "（空）"}`}
+                </p>
+                {settingsNote && <p role="status" className="mt-1 text-[10px] text-muted">{settingsNote}</p>}
               </div>
             </div>
+            {/* [Pencil T13] #148 the pre-creation preview the form must show
+                BEFORE anything is created: per repository the exact local branch
+                and push target main will make, or the named reason it will not. */}
+            <section aria-label="创建前分支与推送目标预览" className="rounded-[6px] border border-line bg-bg px-2.5 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <p className="text-[11px] font-medium text-muted">创建前预览：本地分支与推送目标</p>
+                <span className="text-[10px] text-muted">
+                  {preview === null ? "正在读取" : preview.gitDelivery === "branch" ? `任务 ${preview.taskId}` : preview.gitDelivery === "existing" ? "不创建任务分支" : NO_GIT_DELIVERY}
+                </span>
+              </div>
+              {mode === "plain-dirs" || preview?.gitDelivery === "none" ? <p className="mt-1 text-[11px] text-ink">
+                {NO_GIT_DELIVERY}<span className="text-muted">：仅普通目录，不创建分支，也没有推送目标</span>
+              </p> : <ul className="mt-1 flex list-none flex-col gap-1 p-0">
+                {(preview?.rows ?? []).map((row) => <li key={row.repoId} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]">
+                  <span className="shrink-0 font-medium text-ink">{row.name}</span>
+                  {row.problem
+                    ? <span className="min-w-0 break-all text-[#ad4545]">{row.problem.code}：{row.problem.message}</span>
+                    : preview?.gitDelivery === "existing"
+                      ? <span className="min-w-0 break-all text-muted">本地分支 <code className="font-mono text-accent">{row.localBranch}</code> · 使用原检出当前分支，不创建任务分支</span>
+                      : <>
+                        <span className="min-w-0 break-all text-muted">本地分支 <code className="font-mono text-accent">{row.localBranch}</code></span>
+                        <span className="min-w-0 break-all text-muted">推送目标 <code className="font-mono text-accent">{row.pushTarget}</code></span>
+                      </>}
+                </li>)}
+                {preview !== null && preview.rows.length === 0 && <li className="text-[11px] text-muted">尚未选择仓库，没有可预览的分支。</li>}
+              </ul>}
+              {previewError && <p className="mt-1 text-[10px] text-muted">创建前预览不可读取：{previewError}（创建时 main 仍会按已保存的分支规范校验）</p>}
+              {preview !== null && <p className={`mt-1 break-all text-[10px] ${preview.ready ? "text-muted" : "text-[#ad4545]"}`}>
+                {preview.message}
+              </p>}
+              {previewBlocked && !noSelections && <p role="alert" className="mt-1 break-all text-[10px] text-[#ad4545]">
+                创建已阻止：{preview?.problem?.code ?? preview?.rows.find((row) => row.problem)?.problem?.code}：
+                {preview?.problem?.message ?? preview?.rows.find((row) => row.problem)?.problem?.message}（不会用默认分支名代替）
+              </p>}
+            </section>
             <label className="flex gap-2 text-[11px] text-muted"><input type="checkbox" checked={override} disabled={busy} onChange={(event) => setOverride(event.target.checked)} />单次选择其他任务根（系统目录选择器）</label>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="max-w-[380px] text-[10px] text-muted">创建失败会保留本机待完成意图，可用同一身份重试；不会覆盖原始仓库或目录。写入按本任务审批，跨任务隔离尚未完成（T06）。</p>

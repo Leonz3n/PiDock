@@ -9,7 +9,11 @@
  *   per repository instead of being replaced by a hidden `task/<id>` guess.
  *   `previewBranchName` is the single spelling the create-task form and the
  *   delivery sheet both read, so the previewed branch is the branch that would
- *   be created/pushed.
+ *   be created/pushed. `planCreationDelivery` is that same rule BEFORE a task
+ *   exists (`#148b`): the create form renders one row per repository with the
+ *   exact local branch and push target, a not-ready plan blocks the create
+ *   button with a named reason, and a mode with no Git delivery says
+ *   `NO_GIT_DELIVERY` instead of inventing a branch.
  * - Commit and push never run implicitly. `commitRepos` / `pushRepos` are only
  *   reachable from an explicit user action, they always report per repository,
  *   and a mixed multi-repo outcome keeps each repository's own status.
@@ -281,6 +285,196 @@ export function planDelivery(input: {
     ready: problem === null && rows.length > 0 && rows.every((row) => row.problem === null),
     rows,
     problem,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Creation-time preview (S02 create form: branch + push target BEFORE create) */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The one sentence a creation mode with no Git delivery shows. Plain-directory
+ * tasks create no branch and have no push target, so the form prints this
+ * instead of inventing a `task/<id>` branch it would never create.
+ */
+export const NO_GIT_DELIVERY = "无 Git 交付";
+
+/** What a creation would do with Git: create a task branch, reuse the checkout's, or nothing. */
+export type CreationGitDelivery = "branch" | "existing" | "none";
+
+/** One repository row of the pre-creation preview. */
+export interface CreationPreviewRow {
+  repoId: string;
+  name: string;
+  repoPath: string;
+  /** The exact local branch the creation would create (empty when refused). */
+  localBranch: string;
+  /** Remote name the push would target (empty when refused / no Git delivery). */
+  remote: string;
+  /** The exact `remote branch` push target, empty when there is none. */
+  pushTarget: string;
+  /** Resolved remote URL, when the checkout answered. */
+  remoteUrl: string | null;
+  /** The checkout's current branch as main/host read it (existing-git rows). */
+  currentBranch: string;
+  /** Named refusal for THIS repository, or null when the row is ready. */
+  problem: { code: GitDeliveryProblem; message: string } | null;
+}
+
+/**
+ * The pre-creation preview the S02 create form renders and the creation path
+ * reads: the exact local branch and push target per selected repository. It is
+ * computed from the SAVED convention/remote, never from a page-side guess, and
+ * a `ready: false` preview is what blocks the create button with a named reason.
+ */
+export interface CreationDeliveryPreview {
+  /** The task id this preview was computed for; creation reuses it verbatim. */
+  taskId: string;
+  taskTitle: string;
+  workspaceMode: "worktree" | "existing-git" | "plain-dirs";
+  branchTemplate: string;
+  remote: string;
+  slug: string;
+  gitDelivery: CreationGitDelivery;
+  ready: boolean;
+  rows: CreationPreviewRow[];
+  /** Plan-level refusal (settings/mode), so the form can say WHY nothing is ready. */
+  problem: { code: GitDeliveryProblem; message: string } | null;
+  /** One sentence for the mode: what would be created, or why nothing would be. */
+  message: string;
+}
+
+/** What the caller (main/host) already read from each selected checkout. */
+export interface CreationPreviewRepoInput {
+  repoId: string;
+  name: string;
+  repoPath: string;
+  /** Branch the checkout is on right now, read by the caller; empty when unreadable. */
+  currentBranch?: string;
+  /** `git remote get-url <remote>` resolved by the caller; null = the remote is missing. */
+  remoteUrl?: string | null;
+}
+
+/**
+ * The pre-creation plan.
+ *
+ * - `worktree` creates a task branch: the branch is `previewBranchName` of the
+ *   SAVED template with the REAL task id, and the push target is the SAVED
+ *   remote plus that branch. An unset/invalid template, an unset/invalid remote
+ *   name, or a remote the checkout does not have is a NAMED refusal that blocks
+ *   creation — never a silent `task/<id>` / `origin` default.
+ * - `existing-git` reuses the checkout's own branch and creates none, so the
+ *   convention does not apply and no push target is previewed.
+ * - `plain-dirs` has no Git delivery at all: no rows, `NO_GIT_DELIVERY`.
+ */
+export function planCreationDelivery(input: {
+  taskId: string;
+  taskTitle: string;
+  workspaceMode: "worktree" | "existing-git" | "plain-dirs";
+  settings: { branchTemplate?: unknown; remote?: unknown };
+  repos: readonly CreationPreviewRepoInput[];
+}): CreationDeliveryPreview {
+  const template = typeof input.settings.branchTemplate === "string" ? input.settings.branchTemplate : "";
+  const slug = slugifyTaskTitle(input.taskTitle);
+  const base = {
+    taskId: input.taskId,
+    taskTitle: input.taskTitle,
+    workspaceMode: input.workspaceMode,
+    branchTemplate: template,
+    slug,
+  };
+  if (input.workspaceMode === "plain-dirs") {
+    // A plain-directory task has no Git delivery at all; a caller that still
+    // passed repositories is refused by name rather than silently ignored.
+    const problem = input.repos.length > 0
+      ? { code: "repo-unavailable" as const, message: "仅普通目录模式不接受 Git 仓库来源，请改用独立 Worktree 或已有 Git 目录模式" }
+      : null;
+    return {
+      ...base,
+      remote: "",
+      gitDelivery: "none",
+      ready: problem === null,
+      rows: [],
+      problem,
+      message: problem === null
+        ? `仅普通目录：${NO_GIT_DELIVERY}（不创建分支、没有推送目标；写入直接落在原目录）`
+        : `无法预览：${problem.message}`,
+    };
+  }
+  if (input.workspaceMode === "existing-git") {
+    const rows = input.repos.map((repo) => {
+      const current = repo.currentBranch ?? "";
+      const problem = current.length === 0 || !isSafeTaskBranchRef(current)
+        ? { code: "branch-name-unsafe" as const, message: `仓库 ${repo.name} 不在可用的本地分支上（分离头指针或读取失败），无法确认使用哪个分支` }
+        : null;
+      return {
+        repoId: repo.repoId,
+        name: repo.name,
+        repoPath: repo.repoPath,
+        localBranch: problem ? "" : current,
+        remote: "",
+        pushTarget: "",
+        remoteUrl: repo.remoteUrl ?? null,
+        currentBranch: current,
+        problem,
+      };
+    });
+    const problem = rows.length === 0
+      ? { code: "repo-unavailable" as const, message: "已有 Git 目录模式至少需要一个已登记的仓库来源" }
+      : null;
+    return {
+      ...base,
+      remote: "",
+      gitDelivery: "existing",
+      ready: problem === null && rows.every((row) => row.problem === null),
+      rows,
+      problem,
+      message: "已有 Git 目录：使用原检出当前分支，不创建任务分支，也没有推送目标",
+    };
+  }
+  const branchCheck = previewBranchName(template, { taskId: input.taskId, title: input.taskTitle });
+  const remoteCheck = validateRemoteName(input.settings.remote);
+  const branchValue = branchCheck.ok ? branchCheck.value : "";
+  const remoteValue = remoteCheck.ok ? remoteCheck.value : "";
+  const rows: CreationPreviewRow[] = input.repos.map((repo) => {
+    const remoteUrl = repo.remoteUrl ?? null;
+    const rowProblem = !branchCheck.ok
+      ? { code: branchCheck.code, message: branchCheck.message }
+      : !remoteCheck.ok
+        ? { code: remoteCheck.code, message: remoteCheck.message }
+        : remoteUrl === null
+          ? { code: "remote-invalid" as const, message: `仓库 ${repo.name} 没有名为 ${remoteValue} 的远程（git remote get-url 无结果），推送目标不可用` }
+          : null;
+    return {
+      repoId: repo.repoId,
+      name: repo.name,
+      repoPath: repo.repoPath,
+      localBranch: rowProblem ? "" : branchValue,
+      remote: rowProblem ? "" : remoteValue,
+      pushTarget: rowProblem ? "" : `${remoteValue} ${branchValue}`,
+      remoteUrl,
+      currentBranch: repo.currentBranch ?? "",
+      problem: rowProblem,
+    };
+  });
+  const problem = !branchCheck.ok
+    ? { code: branchCheck.code, message: branchCheck.message }
+    : !remoteCheck.ok
+      ? { code: remoteCheck.code, message: remoteCheck.message }
+      : rows.length === 0
+        ? { code: "repo-unavailable" as const, message: "独立 Worktree 模式至少需要一个已登记的仓库来源" }
+        : null;
+  const ready = problem === null && rows.length > 0 && rows.every((row) => row.problem === null);
+  return {
+    ...base,
+    remote: remoteValue,
+    gitDelivery: "branch",
+    ready,
+    rows,
+    problem,
+    message: ready
+      ? `将为 ${rows.length} 个仓库创建本地分支 ${branchValue}，推送目标 ${remoteValue} ${branchValue}`
+      : `无法预览：${problem?.message ?? rows.find((row) => row.problem)?.problem?.message ?? "未知原因"}`,
   };
 }
 

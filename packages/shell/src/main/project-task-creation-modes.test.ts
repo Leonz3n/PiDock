@@ -24,6 +24,7 @@ import { performCreationOperation } from "./project-task-ipc.js";
 import { createNodeAppendGit, ProjectTaskAppend } from "./task-append.js";
 import { createNodePrepScanDeps, createPrepScanAuthority } from "./task-prep-scan.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 const homes: string[] = [];
 function git(cwd: string, ...args: string[]) {
@@ -44,6 +45,7 @@ async function setup() {
   writeFileSync(join(repo, "dirty.txt"), "keep me\n");
   const projects = new ProjectRegistry(profile);
   const project = await projects.create({ name: "Real", description: "", repositories: [{ name: "source", path: repo }], directories: [] });
+  saveTestDeliverySettings(profile);
   const roots = new TaskRootIndex(profile, root), storage = new CreationIntentStore(profile);
   const host = {
     routeTaskOp: async ({ taskId, op, payload }: { taskId: string; op: string; payload: Record<string, unknown> }) => {
@@ -111,7 +113,7 @@ describe("task workspace modes through the real creation path", { timeout: 30_00
     const env = await setup();
     const head = git(env.repo, "rev-parse", "HEAD");
     const prepared = await performCreationOperation(env.service, { op: "prepare", input: env.existingGitRequest }, async () => null, () => undefined) as {
-      intent: { id: string; taskId: string; taskDir: string; workspaceMode: string; repos: { commit: string; remoteBranch: string; repoDir: string }[] };
+      intent: { id: string; taskId: string; taskDir: string; branch: string; workspaceMode: string; repos: { commit: string; remoteBranch: string; repoDir: string }[] };
     };
     expect(prepared.intent.workspaceMode).toBe("existing-git");
     expect(prepared.intent.repos[0]).toMatchObject({ commit: head, remoteBranch: "main" });
@@ -130,7 +132,9 @@ describe("task workspace modes through the real creation path", { timeout: 30_00
     // existed. The checkout's own branch/HEAD ride `sharedRepos` instead.
     expect(record?.branch).toBe("");
     expect(record?.branchKind).toBe("none");
-    expect(record?.branch).not.toBe(prepared.intent.branch);
+    // [Pencil T13] #148b: the intent spells no branch either, so nothing in the
+    // creation claims one that was never made.
+    expect(prepared.intent.branch).toBe("");
     expect(record?.repos).toEqual([]);
     expect(record?.sharedRepos).toHaveLength(1);
     expect(record?.sharedRepos?.[0]).toMatchObject({

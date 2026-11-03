@@ -9,6 +9,7 @@ import { ProjectRegistry } from "./project-registry.js";
 import { ProjectTaskCreation, CreationIntentStore } from "./project-task-creation.js";
 import { performCreationOperation } from "./project-task-ipc.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 /**
  * [Pencil T08] #143: worktree partial-failure recovery, driven through the real
@@ -41,6 +42,7 @@ async function setupTwoRepositories() {
   const projects = new ProjectRegistry(profile);
   const project = await projects.create({ name: "Genuine", description: "",
     repositories: [{ name: "source", path: repo }, { name: "second", path: second }], directories: [] });
+  saveTestDeliverySettings(profile);
   const roots = new TaskRootIndex(profile, root), storage = new CreationIntentStore(profile);
   let calls = 0;
   const host = { routeTaskOp: async ({ taskId, payload }: { taskId: string; op: "task/provision"; payload: Record<string, unknown> }) => {

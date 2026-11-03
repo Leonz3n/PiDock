@@ -625,6 +625,12 @@ export function validateHostTaskOp(
       }
       return { ok: true };
     }
+    // [Pencil T13] #148 `branch` is the task branch main already created from
+    // the saved convention; it lands in the record and in git argv, so it is
+    // shape-checked here (safety rules shared with the append path).
+    if (payload["branch"] !== undefined && !isSafeTaskBranchRef(payload["branch"])) {
+      return { ok: false, error: "invalid-payload: task/provision.branch must be a safe task branch ref" };
+    }
     const hasRepos = (Array.isArray(payload["repoSelections"]) && payload["repoSelections"].length > 0) ||
       (Array.isArray(payload["repos"]) && payload["repos"].length > 0);
     const hasPlainDirs = Array.isArray(payload["plainDirs"]) && payload["plainDirs"].length > 0;

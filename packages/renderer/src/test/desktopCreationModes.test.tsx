@@ -77,7 +77,7 @@ describe("task workspace mode in the S02 create form", () => {
     expect(screen.getByText(/共享原文件，不创建 Worktree 或任务分支/)).toBeInTheDocument();
   });
 
-  it("shows the workspace env as inherited (display only) and the branch template as a push preview only", () => {
+  it("shows the workspace env as inherited (display only) and main's real branch/push target preview", () => {
     render(<DesktopTaskCreation project={project} bridge={bridge(vi.fn(async () => ({ ok: true, payload: null })))} onCreated={vi.fn(async () => {})} />);
     fireEvent.click(screen.getByRole("button", { name: "任务" }));
     fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "Refactor Auth" } });
@@ -85,8 +85,11 @@ describe("task workspace mode in the S02 create form", () => {
     expect(screen.getByText(/NODE_ENV=development/)).toBeInTheDocument();
     expect(screen.getByText(/已读取 2 个工作区变量，创建后默认继承；可在任务事实中按单个键局部覆盖（删除覆盖恢复继承）。/)).toBeInTheDocument();
     expect(screen.getAllByText("工作区").length).toBeGreaterThan(0);
-    expect(screen.getByText("origin/feature/refactor-auth")).toBeInTheDocument();
-    expect(screen.getByText(/本任务创建不会推送.*#148/)).toBeInTheDocument();
+    // [Pencil T13] #148: the page no longer renders a guessed `origin/<project
+    // template>`; the branch/push target comes from main's saved convention and
+    // is covered by `desktopCreationPreview.test.tsx`.
+    expect(screen.getByRole("region", { name: "创建前分支与推送目标预览" })).toBeInTheDocument();
+    expect(screen.queryByText(/origin\/feature\/refactor-auth/)).not.toBeInTheDocument();
     expect(screen.getByText(/跨任务隔离尚未完成（T06）/)).toBeInTheDocument();
   });
 

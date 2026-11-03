@@ -14,6 +14,7 @@ import { performAppendOperation } from "./project-append-ipc.js";
 import { createNodeAppendGit, ProjectTaskAppend, executeAppendPlan, describeFetchFailure } from "./task-append.js";
 import { createNodePrepScanDeps, createPrepScanAuthority, derivePrepInputs } from "./task-prep-scan.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 // Seam: [PiDock 03] (#6) production append for an EXISTING task. These tests
 // drive the REAL create flow, the REAL `TaskWorkspaceHost` (in process, the
@@ -98,6 +99,7 @@ async function setup() {
     directories: [],
   });
   const roots = new TaskRootIndex(profile, root);
+  saveTestDeliverySettings(profile);
   const storage = new CreationIntentStore(profile);
   const payloads: Record<string, unknown>[] = [];
   const taskRootFor = (taskId: string, payload: Record<string, unknown>): string =>

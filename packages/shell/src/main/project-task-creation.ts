@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { protectApplicationProfile, type TaskPathProtection } from "../host/protected-application-path.js";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
@@ -10,7 +10,21 @@ import type { WorkspaceMode } from "./workspace-files.js";
 import { createDirectoryLink, linkTargetMatches } from "./directory-link.js";
 import { buildLinkName, buildRepoChildName, checkLinkNameCollisions, REMOTE_NAME } from "./multi-repo-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
-import { buildTaskBranch, normalizeTaskPath } from "./task-provision.js";
+import { isSafeTaskBranchRef, normalizeTaskPath } from "./task-provision.js";
+import {
+  planCreationDelivery,
+  previewBranchName,
+  readCurrentBranch,
+  readDeliverySettings,
+  readRemoteUrl,
+  runGit,
+  saveDeliverySettings as persistDeliverySettings,
+  validateBranchTemplate,
+  validateRemoteName,
+  type CreationDeliveryPreview,
+  type CreationPreviewRepoInput,
+  type StoredDeliverySettings,
+} from "./git-delivery.js";
 import {
   createdRepoCount, deriveRepoState, summarizeCleanup, summarizePartialFailure,
   type CleanupResourceResult, type RepoFailure, type RepoFailureCode, type RepoObservation,
@@ -314,7 +328,16 @@ function validate(value: unknown): CreationIntent {
         (typeof row.rootDevice === "string" && typeof row.rootInode === "string" && typeof row.rootRealPath === "string" && isAbsolute(row.rootRealPath))) ||
       !Array.isArray(row.repos) || row.repos.length > 30 || !Array.isArray(row.directories) || row.directories.length > 30 ||
       (!row.repos.length && !row.directories.length)) throw new Error("创建意图损坏");
-  string(row.name); string(row.branch);
+  string(row.name);
+  // [Pencil T13] #148: a worktree creation names its task branch through the
+  // saved convention, so it must be a real ref. The other two modes create no
+  // branch at all and store an empty one; a legacy intent may still spell the
+  // old `task/<id>` there, so both spellings stay readable.
+  if (workspaceMode === "worktree") {
+    if (!isSafeTaskBranchRef(row.branch)) throw new Error("创建意图分支损坏");
+  } else if (typeof row.branch !== "string" || (row.branch.length > 0 && !isSafeTaskBranchRef(row.branch))) {
+    throw new Error("创建意图分支损坏");
+  }
   for (const raw of row.repos) {
     const item = strict(raw, ["id", "name", "path", "realPath", "device", "inode", "remote", "remoteBranch", "remoteDigest", "commonDir", "commit", "repoDir"]);
     if (!UUID.test(string(item.id)) || !/^[a-f0-9]{40}$/.test(String(item.commit)) || item.repoDir !== buildRepoChildName(item.id as string)) throw new Error("仓库意图损坏");
@@ -483,12 +506,113 @@ export class CreationIntentStore {
 /** The intent is the recovery authority; success is exposed only after all three records agree. */
 export class ProjectTaskCreation {
   private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * [Pencil T13] #148 task ids proposed by a pre-creation preview, keyed by the
+   * exact creation input. `prepare` reuses the proposed id when the key still
+   * matches, so the branch a preview showed is the branch creation really
+   * makes; a stale proposal is just re-proposed, never trusted.
+   */
+  private readonly proposals = new Map<string, { taskId: string; at: number }>();
+  private static readonly PROPOSAL_TTL_MS = 30 * 60_000;
   constructor(private readonly store: CreationIntentStore, private readonly projects: ProjectRegistry,
     private readonly roots: TaskRootIndex, private readonly host: CreationHost, private readonly defaultRoot: string,
     private readonly afterBoundary?: (boundary: CreationBoundary) => void,
     private readonly lock?: WorktreeMetadataLock) {}
   private run<T>(action: () => Promise<T>): Promise<T> {
     const result = this.queue.then(action); this.queue = result.catch(() => undefined); return result;
+  }
+
+  /**
+   * [Pencil T13] #148 the app-private delivery settings (branch convention +
+   * push remote). Read from the SAME document the delivery sheet writes, so the
+   * creation preview and the sheet can never disagree; an absent document is an
+   * empty pair, never a hidden default.
+   */
+  deliverySettings(): StoredDeliverySettings {
+    return readDeliverySettings(this.store.userDataPath());
+  }
+  /** Save both settings only when both validate; an invalid pair is named. */
+  saveDeliverySettings(input: { branchTemplate: unknown; remote: unknown }): StoredDeliverySettings {
+    const saved = persistDeliverySettings(this.store.userDataPath(), input);
+    if (!saved.ok) throw new Error(`${saved.code}: ${saved.message}`);
+    return saved.settings;
+  }
+  /** The key a preview proposal is filed under: the exact creation input. */
+  private proposalKey(input: CreationRequest, mode: WorkspaceMode, settings: StoredDeliverySettings): string {
+    const repositories = [...input.repositories]
+      .map((row) => ({ sourceId: row.sourceId, remote: row.remote, remoteBranch: row.remoteBranch }))
+      .sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+    return createHash("sha256")
+      .update(JSON.stringify({ projectId: input.projectId, name: input.name, mode,
+        branchTemplate: settings.branchTemplate, remote: settings.remote, repositories }))
+      .digest("hex")
+      .slice(0, 16);
+  }
+  /** The id a preview showed for this input, or a fresh proposal for it. */
+  private proposeTaskId(key: string): string {
+    const now = Date.now();
+    for (const [stale, value] of this.proposals) {
+      if (now - value.at > ProjectTaskCreation.PROPOSAL_TTL_MS) this.proposals.delete(stale);
+    }
+    const existing = this.proposals.get(key);
+    if (existing) { existing.at = now; return existing.taskId; }
+    const taskId = `task-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    this.proposals.set(key, { taskId, at: now });
+    return taskId;
+  }
+  private proposedTaskId(key: string): string | null {
+    const proposed = this.proposals.get(key);
+    if (!proposed || Date.now() - proposed.at > ProjectTaskCreation.PROPOSAL_TTL_MS) return null;
+    return proposed.taskId;
+  }
+  private taskIdTaken(taskId: string, root: string): boolean {
+    return existsSync(join(root, taskId)) || this.roots.inventory().tasks.some((row) => row.taskId === taskId);
+  }
+  /**
+   * [Pencil T13] #148 the local branch this creation will really make. A
+   * worktree task names it through the SAVED convention, so an unset, invalid
+   * or unsafe convention refuses by name instead of falling back to a hidden
+   * `task/<id>`; the other two modes create no branch at all.
+   */
+  private taskBranch(mode: WorkspaceMode, input: { taskId: string; title: string; settings: StoredDeliverySettings }): string {
+    if (mode !== "worktree") return "";
+    const checked = previewBranchName(input.settings.branchTemplate, { taskId: input.taskId, title: input.title });
+    if (!checked.ok) throw new Error(`${checked.code}: ${checked.message}`);
+    if (!isSafeTaskBranchRef(checked.value)) throw new Error(`branch-name-unsafe: 分支规范展开后不是合法的 git 分支名：${checked.value}`);
+    return checked.value;
+  }
+  /**
+   * [Pencil T13] #148 the pre-creation preview: the exact local branch and push
+   * target per selected repository, read from the SAVED convention/remote and
+   * from the real checkouts. Read-only: nothing is fetched, created or written.
+   */
+  previewDelivery(input: CreationRequest): Promise<CreationDeliveryPreview> {
+    return this.run(async () => {
+      const project = this.projects.get(input.projectId);
+      if (!project) throw new Error("项目已删除或不可读取");
+      const mode: WorkspaceMode = input.workspaceMode ?? (input.repositories.length > 0 ? "worktree" : "plain-dirs");
+      if (mode !== "worktree" && mode !== "existing-git" && mode !== "plain-dirs") throw new Error("任务工作区模式无效");
+      const settings = this.deliverySettings();
+      // The remote name is validated before it can reach a git argv; an unset or
+      // invalid name is a named plan problem, not a lookup to attempt.
+      const remote = validateRemoteName(settings.remote);
+      const repos: CreationPreviewRepoInput[] = [];
+      for (const selection of input.repositories) {
+        const source = project.repositories.find((row) => row.id === selection?.sourceId);
+        if (!source) throw new Error("项目仓库已改变");
+        repos.push({
+          repoId: source.id,
+          name: source.name,
+          repoPath: source.path,
+          // Real reads of THIS checkout; a detached HEAD or a missing remote is
+          // what the plan names, never something the page guessed.
+          currentBranch: mode === "worktree" ? "" : readCurrentBranch(runGit, source.path),
+          remoteUrl: mode === "worktree" && remote.ok ? readRemoteUrl(runGit, source.path, remote.value) : null,
+        });
+      }
+      const taskId = this.proposeTaskId(this.proposalKey(input, mode, settings));
+      return planCreationDelivery({ taskId, taskTitle: input.name, workspaceMode: mode, settings, repos });
+    });
   }
   /**
    * The repository-level mutual exclusion of [PiDock 03] (#6 盒子 9), keyed by
@@ -701,6 +825,20 @@ export class ProjectTaskCreation {
       if (kind === "scheduled" && input.schedule === undefined) throw new Error("定时任务创建必须提供规则、提示词与 Provider／模型");
       if (kind !== "scheduled" && input.schedule !== undefined) throw new Error("普通任务不能携带定时规则");
       const name = string(input.name), root = path(selectedRoot ?? this.defaultRoot);
+      // [Pencil T13] #148 the branch convention and push remote are SETTINGS, so
+      // a worktree creation reads them here and refuses by name when either is
+      // unset or invalid — before any fetch, worktree or branch is attempted.
+      // The same values produced the preview the user confirmed. The convention
+      // is named first: it is what the branch would be.
+      const deliverySettings = this.deliverySettings();
+      if (mode === "worktree") {
+        const template = validateBranchTemplate(deliverySettings.branchTemplate);
+        if (!template.ok) throw new Error(`${template.code}: ${template.message}`);
+      }
+      const deliveryRemote = mode === "worktree" ? validateRemoteName(deliverySettings.remote) : null;
+      if (mode === "worktree" && deliveryRemote !== null && !deliveryRemote.ok) {
+        throw new Error(`${deliveryRemote.code}: ${deliveryRemote.message}`);
+      }
       this.store.assertTaskPath(root);
       for (const selected of input.repositories) {
         const source = project.repositories.find((row) => row.id === selected?.sourceId);
@@ -756,13 +894,29 @@ export class ProjectTaskCreation {
         return { ...source, ...diskIdentity(source.path), linkName: buildLinkName(sourceId) };
       });
       if (!checkLinkNameCollisions([...dirIds]).ok || new Set(repos.map((row) => row.repoDir)).size !== repos.length) throw new Error("任务来源名称冲突");
+      // Every selected checkout must really have the push remote the preview
+      // showed, otherwise the previewed push target would be a fiction.
+      if (mode === "worktree" && deliveryRemote !== null && deliveryRemote.ok) {
+        for (const repo of repos) {
+          if (readRemoteUrl(runGit, repo.path, deliveryRemote.value) === null) {
+            throw new Error(`remote-invalid: 仓库 ${repo.name} 没有名为 ${deliveryRemote.value} 的远程（git remote get-url 无结果），推送目标不可用`);
+          }
+        }
+      }
+      // The preview proposed a task id for exactly this input; reuse it so the
+      // created branch is the previewed branch. A taken or stale proposal is
+      // replaced by a fresh unique id (the intent panel then shows the truth).
+      const proposed = this.proposedTaskId(this.proposalKey(input, mode, deliverySettings));
       let taskId: string;
-      do { taskId = `task-${randomUUID().replace(/-/g, "").slice(0, 8)}`; }
-      while (existsSync(join(root, taskId)) || this.roots.inventory().tasks.some((row) => row.taskId === taskId));
+      if (proposed !== null && !this.taskIdTaken(proposed, root)) {
+        taskId = proposed;
+      } else {
+        do { taskId = `task-${randomUUID().replace(/-/g, "").slice(0, 8)}`; }
+        while (this.taskIdTaken(taskId, root));
+      }
       const realRoot = rootIdentity?.realPath ?? join(realpathSync(dirname(root)), basename(root));
       checkWorkspaceOverlap(join(realRoot, taskId), repos, directories);
-      const branch = buildTaskBranch(taskId);
-      if (!branch.ok) throw new Error(branch.error.message);
+      const branch = this.taskBranch(mode, { taskId, title: name, settings: deliverySettings });
       const schedule = input.schedule === undefined ? undefined : {
         ...input.schedule,
         name: input.schedule.name.trim(),
@@ -774,7 +928,7 @@ export class ProjectTaskCreation {
       };
       const intent: CreationIntent = { id: randomUUID(), taskId, name, projectId: project.id, projectSnapshot: JSON.stringify(project),
         root, rootDevice: rootIdentity?.device ?? null, rootInode: rootIdentity?.inode ?? null, rootRealPath: rootIdentity?.realPath ?? null,
-        taskDir: join(root, taskId), branch: branch.branch, repos, directories,
+        taskDir: join(root, taskId), branch, repos, directories,
         sharedWriteConfirmed: input.sharedWriteConfirmed === true, state: "pending", workspaceMode: mode,
         ...(kind === "scheduled" ? { kind, ...(schedule ? { schedule } : {}) } : {}) };
       this.store.write(intent);
@@ -1070,6 +1224,10 @@ export class ProjectTaskCreation {
         const first = intent.repos[0];
         const result = await this.host.routeTaskOp({ taskId: intent.taskId, op: "task/provision", payload: {
           name: intent.name, dirId: intent.taskId, rootOverride: intent.root,
+          // [Pencil T13] #148 the task branch this creation really made (the
+          // previewed one, from the saved convention); a mode without a branch
+          // spells it empty so the record cannot claim one.
+          branch: intent.branch,
           workspaceMode: mode,
           remoteBranch: existingGit ? "" : (first?.remoteBranch ?? ""), fetchedCommit: existingGit ? "" : (first?.commit ?? ""),
           ...(existingGit ? {
