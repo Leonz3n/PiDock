@@ -184,7 +184,7 @@ describe("#24 desktop task page execution state", () => {
     // [#117 第 7 项] The composer's draft now also lives in the Host, so the
     // allowed read set grew by exactly one member: `task/readDraft`. No write op
     // may appear here, which is what this line is for.
-    expect(ops.every((op) => ["task/executionState", "task/sessionList", "task/sessionReadout", "task/readDraft", "task/saveDraft"].includes(op))).toBe(true);
+    expect(ops.every((op) => ["task/executionState", "task/listApprovals", "task/sessionList", "task/sessionReadout", "task/readDraft", "task/saveDraft"].includes(op))).toBe(true);
     // Typing is what makes a draft write; nothing here clears, sends or stops
     // anything behind the user's back.
     expect(ops).toContain("task/saveDraft");

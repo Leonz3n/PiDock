@@ -35,7 +35,7 @@ const emptySnapshot = { source: "sdk-jsonl", sessionId: "main", messages: [], pe
  */
 // [#139] The composer also READS the task's session list and this session's
 // readout; both are read-only and neither writes a draft or starts a turn.
-const READ_ONLY_OPS = ["task/fileRoots", "task/fileTree", "task/filePreview", "task/fileDiff", "task/deliveryInfo", "task/sessionList", "task/sessionReadout", "task/executionState", "task/readDraft"];
+const READ_ONLY_OPS = ["task/fileRoots", "task/fileTree", "task/filePreview", "task/fileDiff", "task/deliveryInfo", "task/sessionList", "task/sessionReadout", "task/executionState", "task/listApprovals", "task/readDraft"];
 /** The write ops a reference must never cause (box 4 of this slice). */
 const WRITE_OPS = ["task/runTaskService", "task/serviceStopScope", "task/controlService", "task/quit", "task/archive", "task/restore", "task/sendMessage", "task/registerService"];
 
