@@ -173,12 +173,15 @@ describe("S03B provider form", () => {
   });
 
   it("adds discovered models without rewriting the rows, and reports empty/unsupported truthfully", async () => {
+    // [#138] The fixtures are main's own `DiscoveryOutcome` statuses now
+    // (`success|empty|failure|unsupported`); a renderer-side near-synonym is
+    // exactly the defect this case locks out.
     const { calls } = bridge({
       discover: (request: Record<string, unknown>) => request.protocol === "anthropic-messages"
         ? { status: "unsupported", candidates: [], message: "该端点未提供模型列表接口（HTTP 404）" }
         : request.baseUrl === "https://empty.test/v1"
           ? { status: "empty", candidates: [], message: "端点返回了空的模型列表" }
-          : { status: "ok", candidates: ["discovered-a", "discovered-b"], message: "发现 2 个候选模型" },
+          : { status: "success", candidates: ["discovered-a", "discovered-b"], message: "已同步 2 个候选" },
     });
     const user = userEvent.setup();
     page();
@@ -210,6 +213,49 @@ describe("S03B provider form", () => {
     await waitFor(() => expect(screen.getByText("该端点未提供模型列表接口（HTTP 404）")).toBeInTheDocument());
     expect(calls.filter((call) => call.op === "discover").map((call) => call.protocol))
       .toEqual(["openai-completions", "openai-completions", "anthropic-messages"]);
+  });
+
+  it("renders the candidates of a successful discovery and quotes main's failure reason verbatim", async () => {
+    // [#138] The real-Electron capture: a successful discovery rendered zero
+    // candidates and a network failure lost `无法连接端点`, because the renderer
+    // accepted a different status dialect than main sends. Both halves are
+    // asserted here with main's own payloads.
+    const { calls } = bridge({
+      discover: (request: Record<string, unknown>) => request.baseUrl === "https://down.test/v1"
+        ? { status: "failure", candidates: [], message: "模型发现失败：无法连接端点；已保留表单与已配置模型" }
+        : { status: "success", candidates: ["loopback-chat-7b", "loopback-fast"], message: "已同步 2 个候选" },
+    });
+    const user = userEvent.setup();
+    page();
+    await screen.findByTestId("providers-panel");
+    await user.click(screen.getByRole("button", { name: /添加供应商/ }));
+    const form = await screen.findByTestId("provider-form");
+    await user.type(within(form).getByLabelText("名称"), "Loopback");
+    await user.type(within(form).getByLabelText("Base URL"), "https://models.example.test/v1");
+    await user.type(within(form).getByLabelText(/^模型 ID 1/), "manual-model");
+    await user.type(within(form).getByLabelText("API Key"), KEY);
+
+    await user.click(within(form).getByRole("button", { name: "获取模型列表" }));
+    const list = await screen.findByRole("list", { name: "可选模型" });
+    expect(within(list).getAllByRole("button").map((button) => button.textContent))
+      .toEqual(["＋ loopback-chat-7b", "＋ loopback-fast"]);
+    expect(screen.getByText("已同步 2 个候选")).toBeInTheDocument();
+    // The manual id is only noted, never turned into an error.
+    expect(screen.getByTestId("discovery-misses")).toHaveTextContent("manual-model");
+    expect(within(form).getByRole("button", { name: "保存并写入 models.json" })).not.toBeDisabled();
+    expect(screen.queryByText(/模型列表返回异常/)).toBeNull();
+
+    await user.clear(within(form).getByLabelText("Base URL"));
+    await user.type(within(form).getByLabelText("Base URL"), "https://down.test/v1");
+    await user.click(within(form).getByRole("button", { name: "获取模型列表" }));
+    // main's own sentence, character for character; no renderer-side rewrite.
+    expect(await screen.findByText("模型发现失败：无法连接端点；已保留表单与已配置模型")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "可选模型" })).toBeNull();
+    expect(screen.queryByTestId("discovery-misses")).toBeNull();
+    expect(screen.queryByText(/模型列表返回异常/)).toBeNull();
+    // The typed row survives the failure and nothing was written.
+    expect(within(form).getByLabelText(/^模型 ID 1/)).toHaveValue("manual-model");
+    expect(calls.some((call) => call.op === "save")).toBe(false);
   });
 
   it("only offers reasoning levels the model declares, and never shows 'off' as a toggle", async () => {
@@ -382,7 +428,7 @@ describe("S03B review fixes", () => {
     // C2: discovery only ADDS candidates, so a miss is a note — the save must
     // still go out with the manual id the user typed.
     const { calls } = bridge({
-      discover: { status: "ok", candidates: ["deepseek-chat"], message: "发现 1 个候选模型" },
+      discover: { status: "success", candidates: ["deepseek-chat"], message: "已同步 1 个候选" },
       save: { profile: PROFILE, written: true, conflict: null },
     });
     page();

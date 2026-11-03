@@ -116,7 +116,7 @@ describe("provider draft validation", () => {
 });
 
 describe("discovery notes and level defaults", () => {
-  const discovered = { status: "ok" as const, candidates: ["a-model"], message: "发现 1 个候选模型" };
+  const discovered = { status: "success" as const, candidates: ["a-model"], message: "已同步 1 个候选" };
 
   it("notes a manual model id instead of blocking the save", () => {
     const manual = draft({ models: [row({ id: "manual-model" })], modelId: "manual-model" });
@@ -182,9 +182,22 @@ describe("provider status parsing", () => {
     }] })).toThrow("Provider 模型返回异常");
   });
 
-  it("parses discovery and probe outcomes strictly", () => {
-    expect(parseDiscovery({ status: "ok", candidates: ["a"], message: "1" })).toEqual({ status: "ok", candidates: ["a"], message: "1" });
-    expect(() => parseDiscovery({ status: "ok", candidates: [1], message: "" })).toThrow("模型列表返回异常");
+  it("parses main's five discovery answers strictly", () => {
+    // Four statuses exist in main; the fifth answer is "not from main" and is
+    // refused by name instead of being read as one of them.
+    expect(parseDiscovery({ status: "success", candidates: ["a"], message: "已同步 1 个候选" }))
+      .toEqual({ status: "success", candidates: ["a"], message: "已同步 1 个候选" });
+    expect(parseDiscovery({ status: "empty", candidates: [], message: "连接返回空列表" }).status).toBe("empty");
+    expect(parseDiscovery({ status: "failure", candidates: [], message: "模型发现失败：无法连接端点" }).status).toBe("failure");
+    expect(parseDiscovery({ status: "unsupported", candidates: [], message: "当前连接未声明模型发现端点" }).status).toBe("unsupported");
+    // An unknown status is NOT renamed into a main one: it is refused.
+    for (const status of ["ok", "failed", "refused", "SUCCESS", ""]) {
+      expect(() => parseDiscovery({ status, candidates: [], message: "" })).toThrow("模型列表返回异常");
+    }
+    // main's invariant: only `success` carries candidates.
+    expect(() => parseDiscovery({ status: "success", candidates: [], message: "" })).toThrow("模型列表返回异常");
+    expect(() => parseDiscovery({ status: "failure", candidates: ["a"], message: "" })).toThrow("模型列表返回异常");
+    expect(() => parseDiscovery({ status: "success", candidates: [1], message: "" })).toThrow("模型列表返回异常");
     expect(parseProbe({ ok: false, code: "timeout", message: "超时", status: null, latencyMs: null }))
       .toEqual({ ok: false, code: "timeout", message: "超时", status: null, latencyMs: null });
     expect(() => parseProbe({ ok: true, code: "ok", message: "", status: -1, latencyMs: 1 })).toThrow("连通性测试返回异常");

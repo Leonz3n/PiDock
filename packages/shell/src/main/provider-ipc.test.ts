@@ -291,3 +291,35 @@ it("names a rejected key and an unreadable store separately from unavailable enc
   // their own cause (a rejected key, a damaged store file).
   expect(codes).toEqual(["credential-invalid", "secret-store-unreadable", "secret-store-unavailable", "secret-store-unavailable"]);
 });
+
+/**
+ * [#138] The renderer used to accept `ok|empty|failed|unsupported|refused`, so
+ * every real answer was shown as `模型列表返回异常`. Main is the authority: this
+ * case drives `discover` through the production IPC entry point with the real
+ * HTTP transport and checks the payload keeps main's own status keys and its own
+ * `无法连接端点` sentence — the strings the renderer now parses verbatim.
+ */
+it("answers discovery with main's own status keys and wording", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pidock-provider-discover-"));
+  const store = new ProviderProfileStore(dir, () => "2026-09-29T00:00:00.000Z");
+  const answer = (fetchImpl: typeof globalThis.fetch) => new ProviderWiring(store, async () => {}, ENV, { fetchImpl });
+  const request = { op: "discover", protocol: "openai-completions", baseUrl: "https://models.example.test/v1", apiKey: SECRET };
+
+  const listed = (await answer(async () => new Response(JSON.stringify({ data: [{ id: "loopback-chat-7b" }, { id: "loopback-fast" }] }), { status: 200 })).perform(request, 1)) as Record<string, unknown>;
+  expect(listed["status"]).toBe("success");
+  expect(listed["candidates"]).toEqual(["loopback-chat-7b", "loopback-fast"]);
+  // The four statuses are the whole dialect; no renderer-side synonym rides along.
+  expect(listed).not.toHaveProperty("state");
+  expect(["success", "empty", "failure", "unsupported"]).toContain(listed["status"]);
+
+  const empty = (await answer(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })).perform(request, 1)) as Record<string, unknown>;
+  expect(empty["status"]).toBe("empty");
+  expect(empty["candidates"]).toEqual([]);
+
+  const down = (await answer(async () => { throw new Error("ECONNREFUSED"); }).perform(request, 1)) as Record<string, unknown>;
+  expect(down["status"]).toBe("failure");
+  expect(String(down["message"])).toContain("无法连接端点");
+
+  const missing = (await answer(async () => new Response("{}", { status: 404 })).perform(request, 1)) as Record<string, unknown>;
+  expect(missing["status"]).toBe("unsupported");
+});
