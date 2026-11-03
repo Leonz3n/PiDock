@@ -21,7 +21,12 @@ export type WorkspaceModeView = "worktree" | "existing-git" | "plain-dirs";
 
 /** Per-source reopen verification result ([Pencil T02] #137). */
 export type WorkspaceVerificationView = {
-  state: "ready" | "missing" | "mismatch" | "repair-required";
+  /**
+   * `branch-mismatch` / `base-mismatch` ([Pencil T08]) name a worktree
+   * whose path still exists but whose branch or pinned baseline no longer
+   * matches the task binding: repair is explicit, never a silent re-creation.
+   */
+  state: "ready" | "missing" | "mismatch" | "repair-required" | "branch-mismatch" | "base-mismatch";
   reason: string;
 };
 
@@ -434,7 +439,8 @@ function verificationView(value: unknown): WorkspaceVerificationView | undefined
   if (!item) return undefined;
   const state = str(item["state"]);
   const reason = str(item["reason"]);
-  if ((state !== "ready" && state !== "missing" && state !== "mismatch" && state !== "repair-required") || reason === undefined) {
+  if ((state !== "ready" && state !== "missing" && state !== "mismatch" && state !== "repair-required" &&
+       state !== "branch-mismatch" && state !== "base-mismatch") || reason === undefined) {
     return undefined;
   }
   return { state, reason };
