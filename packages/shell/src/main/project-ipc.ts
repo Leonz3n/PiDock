@@ -2,9 +2,11 @@ import type { ProjectRegistry, ProjectCreateInput, ProjectUpdateInput } from "./
 import type { TaskRootIndex } from "./task-root-index.js";
 import { verifyProjectSources } from "./project-sources.js";
 import { TrustDomainViolation } from "./trust-domain.js";
+import { resolveTaskVariables, TaskVariableStore, variableEnvironment } from "./workspace-variables.js";
 
 type ProjectOperation = "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations"
-  | "claim" | "unlink" | "transfer" | "status" | "recover" | "verifySources" | "blockers";
+  | "claim" | "unlink" | "transfer" | "status" | "recover" | "verifySources" | "blockers"
+  | "variables" | "setVariable" | "removeVariable" | "taskVariables" | "setTaskVariable" | "removeTaskVariable";
 
 /**
  * Named registry failures. The UI has to tell "missing, restore from backup",
@@ -13,6 +15,12 @@ type ProjectOperation = "list" | "get" | "create" | "update" | "rename" | "delet
  */
 export function projectFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
+  // [Pencil T09] #144: a variable refusal names the KEY only; the value is never
+  // part of an error (so a pasted value cannot reach a log or the UI toast).
+  if (message.startsWith("variable-")) return message;
+  if (message.startsWith("task-variable-invalid-task")) return "任务标识无效，未读写任务变量";
+  if (message.startsWith("task-variable-store-")) return "任务变量存储不可用或已损坏";
+  if (message === "task-variable-task-unassociated") return "该任务未归属工作空间，无法继承工作空间变量";
   if (message.includes("backup requires explicit recovery")) return "项目注册表缺失，可从备份恢复";
   if (message.includes("no valid backup")) return "项目注册表缺失，且备份不可用";
   if (message.includes("audit integrity")) return "项目注册表审计摘要不一致，可能被外部改动";
@@ -46,7 +54,8 @@ function taskId(value: unknown): string {
 }
 
 /** Renderer selects an operation and ID, never a registry file or membership. */
-export async function performProjectOperation(store: ProjectRegistry, request: unknown, roots?: TaskRootIndex): Promise<unknown> {
+export async function performProjectOperation(store: ProjectRegistry, request: unknown, roots?: TaskRootIndex,
+  variables?: TaskVariableStore): Promise<unknown> {
   if (!object(request) || typeof request["op"] !== "string") throw new TrustDomainViolation("invalid-payload", "invalid project operation");
   switch (request["op"]) {
     case "list": shape(request, "list", []); return store.list();
@@ -98,6 +107,52 @@ export async function performProjectOperation(store: ProjectRegistry, request: u
       if (!roots) throw new TrustDomainViolation("invalid-payload", "task root index unavailable");
       return store.claim(taskId(args["taskId"]), projectId(args["projectId"]), roots);
     }
+    case "variables": {
+      const target = projectId(shape(request, "variables", ["projectId"])["projectId"]);
+      const project = store.get(target);
+      if (!project) throw new TrustDomainViolation("invalid-payload", "unknown project");
+      return { workspace: project.environment.map((row) => ({ ...row })) };
+    }
+    case "setVariable": {
+      const args = shape(request, "setVariable", ["projectId", "key", "value"]);
+      if (typeof args["key"] !== "string" || typeof args["value"] !== "string") {
+        throw new TrustDomainViolation("invalid-payload", "invalid variable payload");
+      }
+      const project = await store.setEnvironmentVariable(projectId(args["projectId"]), args["key"], args["value"]);
+      return { workspace: project.environment.map((row) => ({ ...row })) };
+    }
+    case "removeVariable": {
+      const args = shape(request, "removeVariable", ["projectId", "key"]);
+      if (typeof args["key"] !== "string") throw new TrustDomainViolation("invalid-payload", "invalid variable payload");
+      const result = await store.removeEnvironmentVariable(projectId(args["projectId"]), args["key"]);
+      return { removed: result.removed, workspace: result.project.environment.map((row) => ({ ...row })) };
+    }
+    case "taskVariables": {
+      const id = taskId(shape(request, "taskVariables", ["taskId"])["taskId"]);
+      if (!roots || !variables) throw new TrustDomainViolation("invalid-payload", "task variable store unavailable");
+      return taskVariableView(store, variables, roots, id);
+    }
+    case "setTaskVariable": {
+      const args = shape(request, "setTaskVariable", ["taskId", "key", "value"]);
+      const id = taskId(args["taskId"]);
+      if (!roots || !variables) throw new TrustDomainViolation("invalid-payload", "task variable store unavailable");
+      if (typeof args["key"] !== "string" || typeof args["value"] !== "string") {
+        throw new TrustDomainViolation("invalid-payload", "invalid variable payload");
+      }
+      // Validate the association BEFORE the write: an unowned task cannot accrue overrides.
+      taskVariableView(store, variables, roots, id);
+      variables.set(id, args["key"], args["value"]);
+      return taskVariableView(store, variables, roots, id);
+    }
+    case "removeTaskVariable": {
+      const args = shape(request, "removeTaskVariable", ["taskId", "key"]);
+      const id = taskId(args["taskId"]);
+      if (!roots || !variables) throw new TrustDomainViolation("invalid-payload", "task variable store unavailable");
+      if (typeof args["key"] !== "string") throw new TrustDomainViolation("invalid-payload", "invalid variable payload");
+      taskVariableView(store, variables, roots, id);
+      const result = variables.remove(id, args["key"]);
+      return { ...taskVariableView(store, variables, roots, id), removed: result.removed };
+    }
     case "unlink": {
       const args = shape(request, "unlink", ["taskId", "expectedProjectId"]);
       return store.unlink(taskId(args["taskId"]), projectId(args["expectedProjectId"]));
@@ -109,4 +164,25 @@ export async function performProjectOperation(store: ProjectRegistry, request: u
     }
     default: throw new TrustDomainViolation("invalid-payload", "unknown project operation");
   }
+}
+
+/**
+ * The effective variable view of one associated task: workspace inheritance,
+ * local overrides and the resolved rows with their provenance. Rows a legacy
+ * registry still carries but this build refuses are listed by key, never injected.
+ */
+function taskVariableView(store: ProjectRegistry, variables: TaskVariableStore, roots: TaskRootIndex, id: string) {
+  const association = store.association(id, roots);
+  if (association.state !== "assigned" || association.projectId === null) {
+    throw new Error("task-variable-task-unassociated");
+  }
+  const project = store.get(association.projectId);
+  if (!project) throw new Error("task-variable-task-unassociated");
+  const overrides = variables.list(id);
+  const resolved = resolveTaskVariables(project.environment, overrides);
+  return {
+    taskId: id, projectId: project.id, workspace: project.environment.map((row) => ({ ...row })),
+    overrides, effective: resolved.rows, refused: resolved.refused,
+    environment: variableEnvironment(resolved.rows),
+  };
 }

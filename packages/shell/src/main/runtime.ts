@@ -42,6 +42,7 @@ import { TaskRootIndex, type VerifiedTaskIdentity } from "./task-root-index.js";
 import { HostTaskAdmission } from "../host/host-task-admission.js";
 import { shutdownDeadline } from "../host/shutdown-deadline.js";
 import { ProjectRegistry } from "./project-registry.js";
+import { TaskVariableStore } from "./workspace-variables.js";
 import { ServiceCatalog, serviceCatalogAuthority, type ServiceLaunch } from "./service-catalog.js";
 import { InstalledServiceHostAuthority, type ServiceOwnerChange, type ServiceOwnerDurableRecord } from "./service-host-binding.js";
 import { createServiceTemplateHandler, parseServiceOwnerRebindRequest, parseTaskDependencyRoutingRequest, performServiceBindingOperation, performServiceCatalogOperation, performServiceConfigPreview, parseServiceRunGroupRequest, parseServiceRunRequest } from "./service-catalog-ipc.js";
@@ -218,11 +219,13 @@ export async function createHost(
   workspaceId: string,
   logExit = true,
   task?: { taskId: string; taskDir: string },
+  /** [Pencil T09] #144 effective variables resolved by main for this task. */
+  variables?: Record<string, string>,
 ): Promise<{ client: HostClient; child: UtilityProcess; disposal: ReturnType<typeof createHostDisposer> }> {
   const entry = path.join(here, "..", "host", "host-entry.js");
   const child = utilityProcess.fork(entry, [], {
     serviceName: task ? `pidock-node-host-${task.taskId}` : "pidock-node-host",
-    env: { ...buildHostEnv(process.env, workspaceId, task, app.getPath("userData"), normalizeTaskPath(defaultTasksRoot())),
+    env: { ...buildHostEnv(process.env, workspaceId, task, app.getPath("userData"), normalizeTaskPath(defaultTasksRoot()), process.platform, variables),
       // Only where service execution is admitted: a platform that cannot own a
       // service must not be told to verify one (see `serviceExecutionAdmitted`),
       // or its Host injects an orphan that no bootstrap can ever clear.
@@ -494,8 +497,10 @@ export class PerTaskHostRegistry {
     private readonly spawn: (
       workspaceId: string,
       task: { taskId: string; taskDir: string },
-    ) => Promise<{ client: HostClient; child: UtilityProcess }> = (ws, task) =>
-      createHost(ws, true, task),
+      /** [Pencil T09] #144 effective variables, captured when THIS Host is forked. */
+      variables?: Record<string, string>,
+    ) => Promise<{ client: HostClient; child: UtilityProcess }> = (ws, task, variables) =>
+      createHost(ws, true, task, variables),
     private readonly resolveTaskDir: (taskId: string) => string | null = () => null,
     /**
      * Handles the Host's browser requests ([PiDock 06] #8): main owns the
@@ -506,6 +511,12 @@ export class PerTaskHostRegistry {
       handleRequest(request: BrowserRequestParams): Promise<BrowserPerformResult>;
     },
     private readonly taskRoots?: TaskRootIndex,
+    /**
+     * [Pencil T09] #144 resolves the effective workspace/task variables at fork
+     * time. It is read exactly once per Host start: a running Host and its turn
+     * keep the environment they were forked with when a variable later changes.
+     */
+    private readonly environmentFor?: (taskId: string) => Record<string, string>,
   ) {}
 
   private bindHostRequests(entry: PerTaskHostEntry): HostClient {
@@ -754,7 +765,7 @@ export class PerTaskHostRegistry {
     }
     // Publish ownership before invoking even a reentrant spawn. A late child
     // remains owned after sealing or deadline expiry; no business op is replayed.
-    const promise = Promise.resolve().then(() => this.spawn(this.workspaceId, { taskId, taskDir })).then((spawned) => {
+    const promise = Promise.resolve().then(() => this.spawn(this.workspaceId, { taskId, taskDir }, this.environmentFor?.(taskId))).then((spawned) => {
       const entry = { taskId, taskDir, client: spawned.client, child: spawned.child };
       this.byTaskDir.set(key, entry);
       let resolveExit!: () => void;
@@ -1896,6 +1907,8 @@ export function registerIpc(
    * `shell/appendTaskRepos` fails closed with "尚未接入".
    */
   append?: ProjectTaskAppend,
+  /** [Pencil T09] #144 main-owned task override store for the variable ops. */
+  variables?: TaskVariableStore,
 ): void {
   if (tasks && catalog && taskRoots && projects) tasks.configureServices((workspaceId) => new InstalledServiceHostAuthority(
     app.getPath("userData"), catalog, serviceCatalogAuthority(taskRoots, projects), workspaceId, process.env));
@@ -2396,7 +2409,7 @@ export function registerIpc(
     try {
       registry.requireShellSender(event);
       if (!projects) return { ok: false as const, error: "项目注册表尚未接入" };
-      return { ok: true as const, payload: await performProjectOperation(projects, payload, taskRoots) };
+      return { ok: true as const, payload: await performProjectOperation(projects, payload, taskRoots, variables) };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       // Named, so a missing/corrupt registry and its recovery path stay reachable (#136).
