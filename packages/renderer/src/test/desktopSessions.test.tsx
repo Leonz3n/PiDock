@@ -616,7 +616,7 @@ describe("[#146] 停止 / 归档 / 恢复 / 删除 entries", () => {
     for (const height of [900, 560]) {
       Object.defineProperty(window, "innerHeight", { value: height, configurable: true });
       fireEvent(window, new Event("resize"));
-      const panel = await openPanel();
+      await openPanel();
       const row = await screen.findByTestId("session-row-main");
       expect(within(row).getByRole("button", { name: "删除" })).toBeVisible();
       fireEvent.click(within(row).getByRole("button", { name: "删除" }));

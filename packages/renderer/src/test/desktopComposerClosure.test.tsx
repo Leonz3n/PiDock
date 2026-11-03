@@ -194,6 +194,9 @@ describe("[Pencil T10] #145 删除会话时连带草稿", () => {
     fireEvent.click(screen.getByTestId("session-all"));
     const row = await screen.findByTestId("session-row-s-2");
     fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+    // [#146] Delete is confirmed first; the draft/receipt cascade runs after the
+    // Host accepted the delete, not on the first click.
+    fireEvent.click(await screen.findByTestId("session-delete-confirm-button"));
     await waitFor(() => expect(localStorage.getItem(receiptKey)).toBeNull());
     // No empty record is left behind for a session the Host no longer has.
     expect(useDraftStore.getState().getDraft(TASK_ID, "s-2")).toEqual({ text: "", references: [] });

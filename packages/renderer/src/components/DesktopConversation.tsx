@@ -913,12 +913,12 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     applyList(result.list);
   };
   /** [#146] Adopt a lifecycle reply and say what actually happened, never more. */
-  const applyLifecycleWrite = (action: SessionActionId, session: TaskSession, result: { ok: true; reply: SessionLifecycleReply } | { ok: false; error: string }): boolean => {
+  const applyLifecycleWrite = (action: SessionActionId, session: TaskSession, result: ({ ok: true } & SessionLifecycleReply) | { ok: false; error: string }): boolean => {
     if (!result.ok) { setSessionNotice(`${session.name}：${result.error}`); return false; }
-    applyList(result.reply.list);
+    applyList(result.list);
     const verb = action === "stop" ? "停止" : action === "archive" ? "归档" : action === "delete" ? "删除" : action;
-    setLifecycleNotice(result.reply.stopped
-      ? `已先停止「${session.name}」的 ${result.reply.abortedTurnIds.length} 个执行回合并等待结算，然后完成${verb}`
+    setLifecycleNotice(result.stopped
+      ? `已先停止「${session.name}」的 ${result.abortedTurnIds.length} 个执行回合并等待结算，然后完成${verb}`
       : `「${session.name}」没有正在执行的回合，已直接完成${verb}`);
     return true;
   };
@@ -939,7 +939,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     // Archiving the session being shown moves the page to the next real one;
     // an archived session is read-only and never takes another turn.
     if (applyLifecycleWrite("archive", session, result) && id === sessionId) {
-      const next = result.ok ? result.reply.list.activeSessionId : null;
+      const next = result.ok ? result.list.activeSessionId : null;
       if (next !== null) resetForSession(next);
     }
   };
@@ -984,7 +984,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       }
     }
     if (deleted && id === sessionId) {
-      const next = result.ok ? result.reply.list.activeSessionId : null;
+      const next = result.ok ? result.list.activeSessionId : null;
       if (next !== null) resetForSession(next);
       else { setSnapshot(null); setValid(false); setConnected(false); setActiveSessionId(SDK_SESSION_ID); }
     }

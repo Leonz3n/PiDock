@@ -241,7 +241,9 @@ async function lifecycleMutation(taskId: string, op: Parameters<typeof shellTask
     announceSessionWrite(taskId);
     const payload = result.payload as Record<string, unknown>;
     const ids = Array.isArray(payload["abortedTurnIds"]) ? payload["abortedTurnIds"].filter((id): id is string => typeof id === "string") : [];
-    return { ok: true as const, reply: { list, stopped: payload["stopped"] === true, abortedTurnIds: ids } };
+    // Same `list` key as every other session writer (#139); the lifecycle
+    // outcome rides beside it so a page can quote what really happened.
+    return { ok: true as const, list, stopped: payload["stopped"] === true, abortedTurnIds: ids };
   } catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : String(error) }; }
 }
 
