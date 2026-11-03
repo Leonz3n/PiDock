@@ -1,6 +1,8 @@
 # Pi 1.4.0 → 1.5.0：设计与工单调整
 
-**目标基线为 Pi 1.5.0；仓库实际依赖仍为 1.4.0，尚未升级或运行新版产品验收。** 本轮仅更新设计与 GitHub tickets，产品实现继续暂停。既有 [1.4 适配报告](pi-1.4-upgrade-review.md) 保存历史交付证据。
+> **执行状态（#134，2026-11-02）：** 依赖已实际升级并验证，见文末「#134 执行结果」。本节以下的设计分析保留原样，其中"尚未升级／未运行"的描述只对被升级取代，不再描述当前仓库状态。
+
+**目标基线为 Pi 1.5.0；本文写作时仓库实际依赖仍为 1.4.0、尚未运行新版产品验收，本轮设计调整已由 #134 落地执行。** 既有 [1.4 适配报告](pi-1.4-upgrade-review.md) 保存历史交付证据。
 
 核对上游发布 tag [`v1.5.0`](https://github.com/earendil-works/pi/tree/v1.5.0)，对应提交 `f9a26365568127461c47a07a37dcb42c140a3ac5`；已确认 npm 的 `pi-ai`、`pi-coding-agent`、`pi-schema` 均发布 `1.5.0`，engines 均为 Node `>=22.19.0`。本次读取该 tag 的源码、文档与 coding-agent / ai / agent / mcp / schema changelog，并静态对照本项目生产 SDK kernel、工具定义及 Host broker。未安装新版依赖、未执行其安装脚本或连接真实 Provider / MCP。
 
@@ -66,3 +68,66 @@ React 消息和工具卡片仍需自己的流式性能验证。大工具参数�
 ## 本轮证据与未交付边界
 
 本轮验证只包括固定 tag 与 npm 元数据核对、源码／设计静态核查、文档一致性和 GitHub 原生关系回读。1.5 的类型检查、SDK 行为、真实模型、MCP、跨进程、Windows 安装与 macOS 产品回归均尚未运行。所有新加验收保持未勾选，#134 原有 1.4 已勾选记录保留在历史范围；不把本报告作为升级已完成的证据。
+
+---
+
+## #134 执行结果（Pi 1.4.0 → 1.5.0）
+
+依赖、锁文件、生产代码适配、测试证据与 Electron bridge 均已实际运行于 **Node 24.21.0 / pnpm 11.22.0**。本节是执行记录；上游设计分析见上文，历史 1.4 证据见 [1.4 适配报告](pi-1.4-upgrade-review.md)。
+
+### 依赖图变化
+
+| 项 | 1.4.0 | 1.5.0（实际解析） |
+| --- | --- | --- |
+| `@earendil-works/pi-ai` / `pi-coding-agent` | `1.4.0` 精确 pin | `1.5.0` 精确 pin（`packages/shell/package.json`） |
+| `@earendil-works/pi-schema` | 不存在 | `1.5.0`，作为 pi-ai / pi-agent-core 的**传递**依赖（未新增 direct dependency，生产代码不 `import` 它） |
+| `pi-agent-core` / `pi-mcp` / `pi-codemode` / `pi-tui` / `pi-telemetry` | `1.4.0` | `1.5.0` |
+| `typebox` | pi-ai 依赖 `1.3.27` | pi-ai 不再依赖；`pi-coding-agent` 仍自带 `1.3.27`（仅类型面） |
+| `undici` | `8.10.2` | `8.12.3` |
+| `minimatch` | `10.2.6` | `11.0.3` |
+| engines | `node >=22.19.0` | `node >=22.19.0`（三个包相同，项目 24.21.0 满足） |
+
+`pnpm-lock.yaml` 仍是唯一锁文件；`pnpm install --frozen-lockfile` 复跑通过。不依赖全局 `pi` CLI、`models.json` 覆盖或自动更新（`ModelRuntime.create({modelsPath: null, refreshOnCreate: false, allowModelNetwork: false})` 未变）。
+
+### 工具 schema 类型边界（决策）
+
+`pi-ai` / `pi-agent-core` 1.5 接受任意 JSON Schema（`Tool<TParameters extends object>`、`AgentTool<TParameters extends object>`），但 **`pi-coding-agent` 的扩展面 `ToolDefinition<TParams extends TSchema>` 仍以 TypeBox 的 `TSchema` 命名参数**。因此：
+
+- 保留普通 JSON Schema 字面量，**不新增** `@earendil-works/pi-schema` 或 `typebox` direct dependency；
+- 两处 `as` 收敛到具名适配器 `asToolDefinition()`（`sdk-agent-tool-contract.ts`），注释说明运行期不转换、`execute` 收到的是 pi-schema 已转换值；
+- 生产代码不从 pi-ai 主入口导入 `Type` / `Static` / `TSchema`（1.5 已删除这些导出）。
+
+### 参数转换：1.4 与 1.5 实测与决定
+
+pi-ai 1.5 对**普通 JSON Schema**也执行 `compile(schema, {coerce:true}).parse(...)`，转换发生在 `execute` 之前，Host 只看到转换后的值。1.4 行为由仓库内仍保留的 1.4.0 校验器实测，1.5 行为由 `@earendil-works/pi-schema@1.5.0` 实测，并有真 SDK 测试固定。
+
+| 输入 | 1.4.0 | 1.5.0 | #134 决定 |
+| --- | --- | --- | --- |
+| 必填字符串 `null`（`fs.write content`） | `""`（写空文件） | `"null"` | 接受上游转换；写入内容与审批/指纹一致，测试断言落盘为 `null` 且结果报告 4 字节 |
+| 必填字符串 `null`（`fs.read path`） | `""` → broker 拒绝空名 | `"null"` → 作为任务内文件名 | 接受；仍在任务范围内，写路径仍要求 worktree（`tool-refused:not-a-worktree`），测试固定两条 |
+| 整数 `"3.5"` / `1.9` | 校验失败 `must be integer` | `3` / `1` | 接受截断；**转换后**才应用 Host 上界 |
+| 整数 `0.5` / `-0.5` | 校验失败 | 截断为 `0`，仍被 `minimum: 1` 拒绝 | 无需改动；转换不放宽上界 |
+| 超范围整数（`limit: 1000001`） | 校验失败 | 通过 SDK，被 Host `<= 1000000` 拒绝 | Host 严格性保留（`tool-refused:invalid-arguments`） |
+| 单值装数组（`shared: {..}`、`dependencies: {..}`） | 校验失败 `must be array` | `[{..}]` | 接受；每一行仍由 `isServiceTemplateEdit` 键精确校验，且审批显示 1 行后才写入 |
+| 单值字符串装数组（`shared: "abc"`） | 校验失败 | `["abc"]` → Host 拒绝 | Host 严格性保留（`tool-refused:invalid-arguments`），测试断言未进入 review/apply |
+| 可选属性 `null`（`offset`/`limit`） | 丢弃 | 丢弃 | 无变化，测试断言与无参读取完全一致 |
+| 未知字段 | `schema is false` / `must not have additional properties` | `unknown field` | 两者都不作为断言文案；测试断言拒绝发生在执行前、字段名可见、无副作用；Host 未知键分支保留给直连调用方 |
+| `descriptor: null` | 校验失败 | 校验失败（`expected object, got null`） | 无变化 |
+
+**安全结论：** 转换只影响 Host 收到的值；`parseArguments` 的键白名单、类型/范围、路径收敛、真实路径、权限门与写锁不变。审批 payload、`versionOf` 指纹和 effect 全部读取同一份 `ParsedArguments`，因此不存在"批准一种形状、执行另一种形状"。测试用同一任务内 `shared: {..}` 与 `shared: [{..}]` 铸造出**相同** `contentVersion` 与 operation 文本，不同 value 则不同，证明指纹绑定转换后的值而不是模型的书写形状。
+
+### 验证证据（Node 24.21.0）
+
+- `pnpm build` / `pnpm typecheck` / `pnpm lint` 通过；`pnpm test`（turbo 串起两个 workspace 包）：`@pidock/shell` 160 文件通过 / 3 跳过、2240 测试通过 / 27 跳过；`@pidock/renderer` 114 文件、1128 测试通过。
+- 真 SDK → Host seam 新增用例（`sdk-agent-tools.test.ts`）：`null` 写入、`null` 路径、整数截断与上界、可选 `null`、未知字段、失败路径（含 transcript 不含凭据）、90 KB 大参数、模板单值数组化 + 审批一致性 + 指纹一致、`shared: "abc"` 拒绝、显式模型绑定（无 SDK 默认模型回退）。
+- 1.5 `SessionManager` 写失败父链回滚（`sdk-text-kernel.test.ts`）：内存 leaf 回退、磁盘字节不变、重开后每个 `parentId` 都存在于文件；回合层：JSONL 写入被拒 → 回合失败、文件不变、冷恢复不重放该提示词。
+- 保留契约复跑：事件顺序 `delta,message_end,agent_settled`、`agent_settled.aborted`、`length` → `sdk-output-truncated`、工具白名单、ACK/幂等/不重放。
+- 真实 Electron bridge smoke（`electron scripts/electron-sdk-bridge-test.mjs`，真 utilityProcess → main → sandbox preload → SDK）：`types=[delta,message_end,agent_settled]`、usage `4/2/1/0`、cancel `cancelled`、冷恢复 `done`、quit 后 `sdk-host-closing`、sandbox `contextIsolated+sandboxed`。
+- `node scripts/sdk-context-isolation-test.mjs`、`node scripts/sdk-shutdown-test.mjs` 通过。
+
+### 未测 / 刻意留给其它工单
+
+- 未连接真实在线模型或真实 MCP Server：转换规则以 pi-schema 与真 SDK 校验器实测，Provider 为本地 stub/loopback。
+- 上游 `StreamingJsonParser` 位于 provider 实现内，未用真实增量 provider 分片验证；本项目大参数以整值经真 SDK 到 Host 验证。
+- 历史 0.87.1／1.4.0 会话备份升级与回退矩阵归 #154；Windows 安装归 #22。
+- 模型目录/推理档位新字段、usage `cost.totalFromProvider`、`responseModel` 仍属 #139；生产 kernel 仍只读四个计数并固定 `thinkingLevel: "off"`。

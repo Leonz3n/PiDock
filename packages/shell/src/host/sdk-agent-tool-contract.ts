@@ -53,6 +53,14 @@ export interface SdkAgentToolSpec {
   /** One-line snippet for the prompt. */
   summary: string;
   description: string;
+  /**
+   * Plain JSON Schema (draft-style keywords only: `type`/`required`/
+   * `properties`/`additionalProperties`/`minimum`/`maximum`). No TypeBox and no
+   * `@earendil-works/pi-schema` builder: this package does not import
+   * `pi-schema` directly — pi-ai 1.5 depends on it and compiles exactly this
+   * literal at the SDK boundary, which is what turns a model's arguments into
+   * the values `execute` receives (see `asToolDefinition`).
+   */
   parameters: Record<string, unknown>;
 }
 
@@ -237,27 +245,62 @@ export interface SdkAgentToolOutcome {
 export type SdkAgentToolCaller = (sessionId: string, request: SdkAgentToolRequest) => Promise<SdkAgentToolOutcome>;
 
 /**
+ * One plain JSON Schema tool as the coding-agent extension type (Pi 1.5).
+ *
+ * Why the two assertions are still needed, and why they hide no argument
+ * semantics (verified against the installed 1.5.0 declarations, not against a
+ * loader's compatibility export):
+ *
+ * - pi-ai 1.5 widened its own tool type to `Tool<TParameters extends object>` and
+ *   validates with `@earendil-works/pi-schema` `compile(schema, {coerce:
+ *   true}).parse(...)`, so the plain JSON Schema literal below is a REAL pi-ai
+ *   tool (`Tool.parameters: object`) and is not converted anywhere;
+ * - pi-agent-core 1.5 widened `AgentTool<TParameters extends object>` the same
+ *   way, so a plain JSON Schema is a real agent tool too;
+ * - `pi-coding-agent` 1.5 still declares the extension boundary as
+ *   `ToolDefinition<TParams extends TSchema = TSchema>` (`core/extensions/types.d.ts:13,472`)
+ *   where `TSchema` is TypeBox's. Only that *type* is narrower than the runtime:
+ *   `createAgentSession({customTools})` reads `name`/`label`/`description`/
+ *   `parameters`/`execute` and never asks TypeBox to compile anything, so the
+ *   object is accepted as written.
+ *
+ * `execute` receives pi-schema's validated, coerced output (pi-agent-core
+ * `prepareToolCall` -> `validateToolArguments` -> `executePreparedToolCall`), not
+ * the raw model arguments, which is why it takes `unknown` and why the Host
+ * re-validates it from scratch (`sdk-agent-tool-broker.ts`). The assertions are
+ * therefore a type-level adapter for an upstream type that has not been widened;
+ * nothing is rewritten at runtime, and no schema is synthesized behind the Host's
+ * back.
+ */
+function asToolDefinition(spec: SdkAgentToolSpec, execute: (toolCallId: string, params: unknown) => Promise<{ content: { type: "text"; text: string }[]; details: undefined }>): ToolDefinition {
+  return ({
+    name: spec.name,
+    label: spec.name,
+    description: spec.description,
+    promptSnippet: spec.summary,
+    // Cast #1 of 2: `Record<string, unknown>` (the plain JSON Schema literal this
+    // module owns) -> the coding-agent `TSchema`-typed field. The value is passed
+    // through unchanged; see the comment above.
+    parameters: spec.parameters as ToolDefinition["parameters"],
+    // A mutating tool must not interleave with another one; reads may run
+    // alongside each other (the agent default is parallel).
+    executionMode: spec.kind === "read" ? "parallel" : "sequential",
+    execute,
+    // Cast #2 of 2: the whole declaration, same reason (the upstream generic).
+  }) as unknown as ToolDefinition;
+}
+
+/**
  * Build the pi tool definitions one AgentSession declares. `sessionId` is the
  * session whose JSONL this AgentSession owns: the kernel builds its tools per
  * session, so the request always names the session the gate must decide for.
  */
 export function buildSdkAgentToolDefinitions(sessionId: string, call: SdkAgentToolCaller): ToolDefinition[] {
-  return SDK_AGENT_TOOL_SPECS.map(
-    (spec) =>
-      ({
-        name: spec.name,
-        label: spec.name,
-        description: spec.description,
-        promptSnippet: spec.summary,
-        parameters: spec.parameters as ToolDefinition["parameters"],
-        // A mutating tool must not interleave with another one; reads may run
-        // alongside each other (the agent default is parallel).
-        executionMode: spec.kind === "read" ? "parallel" : "sequential",
-        async execute(_toolCallId: string, params: unknown) {
-          const outcome = await call(sessionId, { tool: spec.name, args: params });
-          return { content: [{ type: "text" as const, text: outcome.text }], details: undefined };
-        },
-      }) as unknown as ToolDefinition,
+  return SDK_AGENT_TOOL_SPECS.map((spec) =>
+    asToolDefinition(spec, async (_toolCallId: string, params: unknown) => {
+      const outcome = await call(sessionId, { tool: spec.name, args: params });
+      return { content: [{ type: "text" as const, text: outcome.text }], details: undefined };
+    }),
   );
 }
 

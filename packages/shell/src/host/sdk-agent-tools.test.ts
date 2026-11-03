@@ -26,8 +26,9 @@ import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
 import { buildTaskDiskRecord, readTaskRecordOnDisk, serializeTaskRecord } from "./task-store.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { commandPathTokens, derivedPrimaryCheckouts, resolveSdkAgentToolPath } from "./sdk-agent-tool-broker.js";
-import { SDK_AGENT_TOOL_NAMES } from "./sdk-agent-tool-contract.js";
+import { SDK_AGENT_TOOL_NAMES, SERVICE_TEMPLATE_TOOL } from "./sdk-agent-tool-contract.js";
 import { protectApplicationProfile } from "./protected-application-path.js";
+import type { ServiceTemplateEditPort } from "../rpc/service-template-request.js";
 import type { SdkContextClient, SdkContextOptions } from "./sdk-context-client.js";
 
 const roots: string[] = [];
@@ -112,7 +113,7 @@ function fixture(): Fixture {
  * result) answers with the result text, so a refusal reaches the assertions the
  * way the model would see it.
  */
-async function stubRuntime(cacheDir: string): Promise<ModelRuntime> {
+async function stubRuntime(cacheDir: string, seenModels: string[] = []): Promise<ModelRuntime> {
   const runtime = await ModelRuntime.create({
     authPath: join(cacheDir, ".pidock-sdk-auth.json"),
     modelsPath: join(cacheDir, ".pidock-sdk-models.json"),
@@ -126,6 +127,11 @@ async function stubRuntime(cacheDir: string): Promise<ModelRuntime> {
     getModels: () => [model],
     stream: (_model, context, options) => provider.streamSimple(_model, context, options),
     streamSimple: (_model, context) => {
+      // Pi 1.5: which model the SDK really asks for. `createAgentSession` falls
+      // back to its own initial model when no explicit model is given
+      // (`createAgentSession` -> `findInitialModel`); recording the provider/id
+      // every stream is called with is what proves the explicit binding won.
+      seenModels.push(`${_model.provider}/${_model.id}`);
       const messages = context.messages as { role: string; content: unknown }[];
       const text = (value: unknown): string => typeof value === "string" ? value
         : Array.isArray(value) ? (value as { type: string; text?: string }[]).filter((part) => part.type === "text").map((part) => part.text ?? "").join("") : "";
@@ -160,13 +166,25 @@ async function stubRuntime(cacheDir: string): Promise<ModelRuntime> {
 interface Harness {
   host: TaskWorkspaceHost;
   fixture: Fixture;
+  /** Every `provider/model` the SDK asked the stub for, in order. */
+  seenModels: string[];
+  /** The session JSONL as the SDK wrote it (the real transcript). */
+  transcript(): Promise<string>;
   prompt(tool: string, args: Record<string, unknown>): Promise<{ state: string; text: string }>;
 }
 
-/** The real Host with the worker hop replaced by a loopback context client. */
-async function harness(): Promise<Harness> {
+/**
+ * The real Host with the worker hop replaced by a loopback context client.
+ *
+ * `templates` (optional) is the shared-template port the Host hands its broker.
+ * A test that drives the template tool through the REAL SDK needs one, but not
+ * necessarily main's catalog: the seam under test is "what values does the Host
+ * receive and bind", so a recording port is the honest stand-in for main.
+ */
+async function harness(options: { templates?: () => ServiceTemplateEditPort | undefined } = {}): Promise<Harness> {
   const parts = fixture();
-  const runtime = await stubRuntime(parts.taskDir);
+  const seenModels: string[] = [];
+  const runtime = await stubRuntime(parts.taskDir, seenModels);
   // The Host's source of truth about the task is its store; in production that
   // is `diskTaskStore` reading `task.json`. Seed the memory store with exactly
   // the record the fixture wrote so the scope is the real one.
@@ -192,11 +210,24 @@ async function harness(): Promise<Harness> {
       } as unknown as SdkContextClient;
     },
     protectApplicationProfile(parts.profileDir),
+    () => undefined,
+    options.templates,
   );
   let turn = 0;
   return {
     host,
     fixture: parts,
+    seenModels,
+    /**
+     * The JSONL the SDK itself appended to. Read after at least one turn: the
+     * kernel writes a per-session binding that names the file, and that file is
+     * the transcript the model and the user really share (tool results included).
+     * The router is looked up per call - `configureSdkProvider` replaces it, so a
+     * router captured here at construction time would be the stale bare reader.
+     */
+    async transcript() {
+      return readFileSync((await host.sdkTextKernel().open("main")).file, "utf8");
+    },
     async prompt(tool, args) {
       turn += 1;
       const issued = `00000000-0000-4000-8000-${String(turn).padStart(12, "0")}`;
@@ -875,4 +906,291 @@ it("derives the original checkout from the worktree's own git pointer", async ()
   // The pointer git writes is already a real path (macOS `/var` is a link).
   expect(derivedPrimaryCheckouts([parts.worktree])).toEqual([realpathSync(parts.checkout)]);
   expect(derivedPrimaryCheckouts([parts.taskDir])).toEqual([]);
+});
+
+/**
+ * Pi 1.5: the SDK validates AND COERCES tool arguments with
+ * `@earendil-works/pi-schema` (`compile(schema, {coerce: true}).parse(...)`,
+ * pi-ai `validateToolArguments`) before pi-agent-core calls `execute`, so the
+ * Host receives converted values, never the model's raw ones. The comment beside
+ * `parseArguments` states the decisions; each test below drives the REAL kernel,
+ * the REAL SDK and the REAL broker for one converted shape and asserts what the
+ * Host sees, what is approved and what really happens. The "1.4" note in each
+ * name is the measured 1.4 result for the same literal (the 1.4 validator
+ * returned it for these schemas), i.e. the behaviour these tests would fail on.
+ */
+it("writes the coerced null (1.5 literal \"null\", not 1.4's empty string) and the result counts the converted bytes", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+
+  // 1.4: content:null -> "" (an empty file). 1.5: -> "null".
+  const written = await h.prompt("fs.write", { path: "repo/coerced-null.txt", content: null });
+  expect(written.state).toBe("done");
+  expect(readFileSync(join(h.fixture.worktree, "coerced-null.txt"), "utf8")).toBe("null");
+  // The tool result names the bytes the CONVERTED value has, so the model reads
+  // what was written instead of "0 bytes" for a file that holds 4.
+  expect(written.text).toContain("Successfully wrote 4 bytes");
+  await h.host.shutdownSdk();
+});
+
+it("reads the coerced null path as the literal in-task name, and still refuses it outside a worktree on write", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  // A file really named `null` in the task folder. 1.4 turned `path:null` into
+  // "" and the broker refused the empty name; 1.5 turns it into "null", so the
+  // Host sees a normal in-scope name.
+  writeFileSync(join(h.fixture.taskDir, "null"), "named null\n");
+  const read = await h.prompt("fs.read", { path: null });
+  expect(read.state).toBe("done");
+  expect(read.text).toContain("named null");
+  // The conversion does not widen the write boundary: a `null` name outside a
+  // worktree is the same named refusal as any other name (1.4 refused the empty
+  // name earlier, with the same net effect: the write does not happen).
+  const before = snapshot(h.fixture.root);
+  const refused = await h.prompt("fs.write", { path: null, content: "x" });
+  expect(refused.text).toContain("tool-refused:not-a-worktree");
+  expect(snapshot(h.fixture.root)).toEqual(before);
+  await h.host.shutdownSdk();
+});
+
+it("truncates an integer argument and then applies the Host bounds (1.4 refused both shapes outright)", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  writeFileSync(join(h.fixture.worktree, "lines.txt"), "one\ntwo\nthree\nfour\n");
+
+  // 1.4: "3.5"/1.9 -> `must be integer` and nothing ran. 1.5: 3 and 1.
+  const coerced = await h.prompt("fs.read", { path: "repo/lines.txt", offset: "3.5", limit: 1.9 });
+  expect(coerced.state).toBe("done");
+  expect(coerced.text).toContain("3\tthree");
+  expect(coerced.text).not.toContain("four");
+  expect(coerced.text).not.toContain("two");
+
+  // Truncation happens BEFORE the Host's bounds, and the Host's bounds still
+  // decide: 0.5 -> 0 is refused by `minimum: 1` (the SDK validator), and a value
+  // the schema does not bound is refused by the broker's own positive-integer
+  // check - the conversion never turns a bad number into an accepted one.
+  const zero = await h.prompt("fs.read", { path: "repo/lines.txt", offset: 0.5 });
+  expect(zero.text).toContain("offset");
+  expect(zero.text).toContain(">= 1");
+  const tooBig = await h.prompt("fs.read", { path: "repo/lines.txt", limit: 1_000_001 });
+  expect(tooBig.text).toContain("tool-refused:invalid-arguments");
+  expect(tooBig.text).toContain("limit");
+  await h.host.shutdownSdk();
+});
+
+it("drops an optional null exactly as 1.4 did, so a bounded read falls back to the whole file", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  writeFileSync(join(h.fixture.worktree, "lines.txt"), "one\ntwo\nthree\n");
+  const plain = await h.prompt("fs.read", { path: "repo/lines.txt" });
+  const withNulls = await h.prompt("fs.read", { path: "repo/lines.txt", offset: null, limit: null });
+  expect(withNulls).toEqual(plain);
+  expect(withNulls.text).toContain("1\tone");
+  expect(withNulls.text).toContain("3\tthree");
+  await h.host.shutdownSdk();
+});
+
+it("refuses an unknown field before the effect, names it, and keeps the credential out of the transcript", async () => {
+  const h = await harness();
+  const credential = "synthetic-key-do-not-print";
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential });
+  await h.host.setPermission("main", "auto");
+  // 1.4 spoke TypeBox (`bogus: schema is false`); 1.5 speaks pi-schema
+  // (`unknown field`). Neither wording is asserted - what matters is that the
+  // call is refused before `execute`, that the offending FIELD is named, and that
+  // nothing was written.
+  const result = await h.prompt("fs.write", { path: "repo/unknown.txt", content: "x", bogus: 1 });
+  expect(result.state).toBe("done");
+  expect(result.text).toContain("bogus");
+  expect(existsSync(join(h.fixture.worktree, "unknown.txt"))).toBe(false);
+  // The transcript the model and the user share never carries the Provider
+  // credential, whatever the refusal wording is.
+  const transcript = await h.transcript();
+  expect(transcript).toContain("bogus");
+  expect(transcript).not.toContain(credential);
+  await h.host.shutdownSdk();
+});
+
+it("refuses a failed schema conversion by naming the argument, with no write and no credential in the transcript", async () => {
+  const h = await harness();
+  const credential = "synthetic-key-do-not-print";
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential });
+  await h.host.setPermission("main", "auto");
+  const before = snapshot(h.fixture.root);
+  const result = await h.prompt("fs.write", { path: "repo/object-content.txt", content: { a: 1 } });
+  expect(result.state).toBe("done");
+  // 1.4: `content: must be string`; 1.5: `/content: expected string, got object`.
+  expect(result.text).toContain("content");
+  expect(snapshot(h.fixture.root)).toEqual(before);
+  expect(existsSync(join(h.fixture.worktree, "object-content.txt"))).toBe(false);
+  expect(await h.transcript()).not.toContain(credential);
+  await h.host.shutdownSdk();
+});
+
+it("writes a large argument (90 KB) whole and keeps the credential out of it", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  // Pi 1.5 parses streamed tool-call arguments with `StreamingJsonParser`; a big
+  // argument must still reach the Host as ONE value and land byte-for-byte.
+  const content = `${"0123456789abcdef".repeat(5_625)}\n`;
+  expect(Buffer.byteLength(content, "utf8")).toBe(90_001);
+  const result = await h.prompt("fs.write", { path: "repo/large.txt", content });
+  expect(result.state).toBe("done");
+  expect(result.text).toContain("Successfully wrote 90001 bytes");
+  expect(readFileSync(join(h.fixture.worktree, "large.txt"), "utf8")).toBe(content);
+  await h.host.shutdownSdk();
+});
+
+/**
+ * The recording shared-template port the template coercion tests hand the Host.
+ * It stands in for main (the catalog's owner) but not for the seam under test:
+ * the broker's review -> confirmation -> apply sequence is the real one, and the
+ * rows it receives and writes are the values the SDK produced.
+ */
+function recordingTemplatePort(initial: { key: string; value: string }[]) {
+  const state = { rows: [...initial], reviews: [] as { shared: unknown; dependencies?: unknown; descriptor: unknown }[], applied: [] as { shared: unknown; dependencies?: unknown; descriptor: unknown }[] };
+  const review = (shared: unknown) => {
+    const rows = shared as { key: string; value: string }[];
+    const before = new Map(state.rows.map((row) => [row.key, row.value]));
+    const after = new Map(rows.map((row) => [row.key, row.value]));
+    const added = [...after.keys()].filter((key) => !before.has(key));
+    const removed = [...before.keys()].filter((key) => !after.has(key));
+    const changed = [...after.keys()].filter((key) => before.has(key) && before.get(key) !== after.get(key))
+      .map((key) => ({ key, before: before.get(key)!, after: after.get(key)! }));
+    return { added, removed, changed };
+  };
+  const snapshotOf = (edit: { shared: unknown; descriptor: unknown; dependencies?: unknown }) => {
+    const diff = review(edit.shared);
+    const contentChanged = diff.added.length + diff.removed.length + diff.changed.length > 0;
+    return {
+      serviceId: "svc-coerced",
+      pinnedVersion: 1,
+      version: 2,
+      versionLabel: "v2",
+      saved: false,
+      descriptorChanged: JSON.stringify(edit.descriptor) !== JSON.stringify({ name: "API a", program: "node" }),
+      dependenciesChanged: edit.dependencies !== undefined,
+      contentChanged,
+      diff,
+      restartNeeded: [],
+    };
+  };
+  const port: ServiceTemplateEditPort = {
+    async review(edit) {
+      state.reviews.push(edit);
+      return { ok: true, review: snapshotOf(edit) };
+    },
+    async apply(edit, reviewedPinnedVersion) {
+      state.applied.push(edit);
+      state.rows = (edit.shared as { key: string; value: string }[]).map((row) => ({ key: row.key, value: row.value }));
+      return { ok: true, review: { ...snapshotOf(edit), saved: true, pinnedVersion: reviewedPinnedVersion } };
+    },
+  };
+  return { port, state };
+}
+
+it("wraps a single template row/declaration into one row before the diff, the fingerprint and the write (1.4 refused both)", async () => {
+  const templates = recordingTemplatePort([{ key: "SERVICE_GREETING", value: "hello-a" }]);
+  const h = await harness({ templates: () => templates.port });
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+
+  const running = h.prompt("service.template.update", {
+    serviceId: "svc-coerced",
+    descriptor: { name: "API a", program: "node" },
+    // 1.4: `shared: must be array`. 1.5: a one-row array.
+    shared: { key: "SERVICE_GREETING", value: "hello-b" },
+    dependencies: { to: "svc-peer", kind: "call" },
+  });
+  await vi.waitFor(() => expect(h.host.listApprovals("main").some((row) => row.status === "pending")).toBe(true));
+  const asked = h.host.listApprovals("main").find((row) => row.status === "pending")!;
+  // The confirmation names the CONVERTED edit: one changed row, one dependency
+  // declaration - not the single objects the model sent.
+  expect(asked.tool).toBe(SERVICE_TEMPLATE_TOOL);
+  expect(asked.operation).toContain("修改 1 行");
+  expect(asked.operation).toContain("依赖声明有变化");
+  expect(templates.state.reviews[0]?.shared).toEqual([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+  expect(templates.state.reviews[0]?.dependencies).toEqual([{ to: "svc-peer", kind: "call" }]);
+  expect(templates.state.applied).toEqual([]);
+
+  h.host.approve("main", asked.id);
+  await running;
+  // What was reviewed is what was written, row for row.
+  expect(templates.state.applied[0]?.shared).toEqual([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+  expect(templates.state.applied[0]?.dependencies).toEqual([{ to: "svc-peer", kind: "call" }]);
+  expect(templates.state.rows).toEqual([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+  await h.host.shutdownSdk();
+});
+
+it("binds the same payload version to the same CONVERTED values, whatever raw shape produced them", async () => {
+  // The fingerprint (`versionOf`) is computed from the converted edit, so the
+  // model's spelling cannot change what a confirmation authorizes: a single row
+  // and the one-element array it becomes mint the SAME contentVersion, and the
+  // confirmation of one shape can only ever execute that same converted value.
+  // One task/session throughout - the version is also bound to the task's own
+  // service target, so a fresh fixture would produce a different hash for a
+  // reason that has nothing to do with the arguments.
+  const templates = recordingTemplatePort([{ key: "SERVICE_GREETING", value: "hello-a" }]);
+  const h = await harness({ templates: () => templates.port });
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  const ask = async (shared: unknown) => {
+    const running = h.prompt(SERVICE_TEMPLATE_TOOL, { serviceId: "svc-coerced", descriptor: { name: "API a", program: "node" }, shared });
+    await vi.waitFor(() => expect(h.host.listApprovals("main").some((row) => row.status === "pending")).toBe(true));
+    const asked = h.host.listApprovals("main").find((row) => row.status === "pending")!;
+    return { asked, running };
+  };
+
+  // The single object and the array that coerces to the same one row: same
+  // reviewed edit, so the same version and the same operation text.
+  const single = await ask({ key: "SERVICE_GREETING", value: "hello-b" });
+  h.host.reject("main", single.asked.id);
+  expect((await single.running).text).toContain("tool-refused:approval-rejected");
+  const array = await ask([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+  expect(array.asked.contentVersion).toBe(single.asked.contentVersion);
+  expect(array.asked.operation).toBe(single.asked.operation);
+  h.host.approve("main", array.asked.id);
+  await array.running;
+  // What the confirmation named is exactly what was written.
+  expect(templates.state.applied[0]?.shared).toEqual([{ key: "SERVICE_GREETING", value: "hello-b" }]);
+
+  // A different VALUE is a different authorization, whichever shape spells it.
+  const other = await ask({ key: "SERVICE_GREETING", value: "hello-c" });
+  expect(other.asked.contentVersion).not.toBe(single.asked.contentVersion);
+  h.host.reject("main", other.asked.id);
+  await other.running;
+  await h.host.shutdownSdk();
+});
+
+it("refuses a coerced single string that is not a row, so arrayification cannot smuggle a bad template row", async () => {
+  const templates = recordingTemplatePort([{ key: "SERVICE_GREETING", value: "hello-a" }]);
+  const h = await harness({ templates: () => templates.port });
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  // 1.4 refused `shared: "abc"` as `must be array`; 1.5 wraps it as ["abc"], and
+  // the Host's own key-exact row reader refuses it - the conversion never widens
+  // what an edit may contain.
+  const result = await h.prompt(SERVICE_TEMPLATE_TOOL, { serviceId: "svc-coerced", descriptor: { name: "API a", program: "node" }, shared: "abc" });
+  expect(result.text).toContain("tool-refused:invalid-arguments");
+  expect(templates.state.reviews).toEqual([]);
+  expect(templates.state.applied).toEqual([]);
+  expect(h.host.listApprovals("main")).toEqual([]);
+  await h.host.shutdownSdk();
+});
+
+it("keeps the explicit model binding across real turns (no SDK default-model fallback)", async () => {
+  const h = await harness();
+  await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+  await h.host.setPermission("main", "auto");
+  await h.prompt("fs.read", { path: "repo/notes.txt" });
+  // Pi 1.5 moved to the models.dev v2 catalog with a new default model. An
+  // explicit selection must still be the only model the SDK asks for.
+  expect(h.seenModels.length).toBeGreaterThan(0);
+  expect(new Set(h.seenModels)).toEqual(new Set([`${model.provider}/${model.id}`]));
+  await h.host.shutdownSdk();
 });

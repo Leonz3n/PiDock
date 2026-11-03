@@ -831,7 +831,35 @@ export function derivedPrimaryCheckouts(worktrees: readonly string[]): string[] 
   return [...checkouts].sort();
 }
 
-/** Parsed, strictly validated arguments of one tool call. */
+/**
+ * The arguments of one tool call, as the Host is allowed to read them (Pi 1.5):
+ * parsed and strictly validated here, converted by the SDK before `execute`.
+ *
+ * These are the values pi-ai's `validateToolArguments` produced with
+ * `@earendil-works/pi-schema` `compile(schema, {coerce: true}).parse(...)`, NOT
+ * the raw model arguments: pi-agent-core validates (and coerces) BEFORE it calls
+ * `execute`, and the transcript keeps the raw tool call while this function only
+ * ever sees the converted copy. The converted value is what the approval shows,
+ * what the payload fingerprint (`versionOf` below) binds and what the effect
+ * executes - all three read `ParsedArguments` - so a confirmation can never
+ * authorize one shape while another shape runs.
+ *
+ * What that means for the strict checks here is deliberate, not implied:
+ * - a required string the model sent as `null` arrives as the literal `"null"`
+ *   (1.4 produced `""`, which this function refused); it is accepted as the
+ *   name it literally spells, and the confinement checks below still decide
+ *   whether that name is inside the task;
+ * - `"3.5"`/`3.5` for an integer arrives as `3` (1.4 refused it). The bounds
+ *   below are applied AFTER the conversion, so `0.5` (-> 0) and `-1` are still
+ *   refused rather than quietly becoming a valid line number;
+ * - a single value for an array arrives as a one-item array (1.4 refused it).
+ *   Each row is still validated key-exactly by `isServiceTemplateEdit`, and the
+ *   review shows the rows before anything is written;
+ * - optional properties sent as `null` are dropped upstream, exactly as in 1.4.
+ * The Host's own key allowlist, type/range checks, path confinement and gate are
+ * unchanged: this module is not a second coercion layer, it is the strict
+ * semantic layer over whatever pi-schema produced.
+ */
 interface ParsedArguments {
   ok: true;
   values: { path?: string; pattern?: string; content?: string; command?: string; cwd?: string; offset?: number; limit?: number; serviceId?: string; templateEdit?: ServiceTemplateEditContent };
@@ -853,6 +881,13 @@ function parseArguments(tool: SdkAgentToolName, args: Record<string, unknown>): 
     // unknown key here and a named refusal, never a hint main would honour.
     [SERVICE_TEMPLATE_TOOL]: ["serviceId", "descriptor", "shared", "dependencies"],
   };
+  // In a real SDK turn this branch is not the one that answers: every schema here
+  // is closed (`additionalProperties: false`), so pi-schema 1.5 refuses an unknown
+  // field with `- <field>: unknown field` BEFORE `execute` runs (1.4 used TypeBox's
+  // `schema is false` wording; nothing asserts either wording). It is kept - and
+  // covered - because a direct broker caller (an older worker, a Host-driven
+  // retry) is not the SDK, and the Host must never rely on the worker's validator
+  // for its own key-exactness.
   const unknown = Object.keys(args).filter((key) => !allowed[tool].includes(key));
   if (unknown.length > 0) return { ok: false, outcome: refuse("tool-refused:invalid-arguments", `未知参数：${unknown.join("、")}`) };
   const string = (key: string, max: number): string | ArgumentsRefusal => {
