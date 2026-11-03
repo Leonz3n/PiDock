@@ -14,6 +14,8 @@ type DraftState = {
   removeReference: (taskId: string, sessionId: string, referenceId: string) => void;
   restore: (taskId: string, sessionId: string, draft: Draft) => void;
   clear: (taskId: string, sessionId: string) => void;
+  /** Drop the record entirely (session deleted): no empty entry is left behind. */
+  forget: (taskId: string, sessionId: string) => void;
 };
 
 export const seedDrafts: Record<string, Draft> = {
@@ -52,5 +54,10 @@ export const useDraftStore = create<DraftState>((set, get) => ({
   },
   clear: (taskId, sessionId) => {
     set({ drafts: { ...get().drafts, [sessionKeyOf(taskId, sessionId)]: emptyDraft } });
+  },
+  forget: (taskId, sessionId) => {
+    const rest = { ...get().drafts };
+    delete rest[sessionKeyOf(taskId, sessionId)];
+    set({ drafts: rest });
   },
 }));

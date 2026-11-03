@@ -7,7 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
 import { readHostDraft, saveHostDraft } from "../data/draftStore";
-import { executionStateThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
+import { executionStateThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell, shellTaskOp } from "../data/shellBridge";
 import { DesktopApprovalCard, type ApprovalRead } from "./DesktopApprovalCard";
 import { approvalFailureText, approvalRequest, parseTaskApprovals, type ApprovalDecision, type TaskApproval } from "../data/toolApproval";
 import { executionStateFromHost, runRecordFromExecutionState, runStateOfExecution, type SessionExecutionView } from "../data/executionLedger";
@@ -26,6 +26,9 @@ import { DesktopToolDock, DESKTOP_TOOL_ICONS, DESKTOP_TOOL_LABELS, DESKTOP_TOOLS
 import { DesktopTaskSources } from "./DesktopTaskSources";
 import { BrandMark, LocalUserAvatar } from "./ui";
 import { hostText } from "../data/workspaceFiles";
+import { REFERENCE_KIND_TEXT, referenceIssues, referenceRootFacts, referenceSendRefusal, rootReferenceIssue, type ReferenceIssue } from "../data/referenceGuard";
+import { splitPromptContext } from "../data/historyReferences";
+import { useDraftStore } from "../stores/drafts";
 
 type Turn = { taskId: string; sessionId: string; requestId: string; turnId: string; state: "accepted" | "done" | "cancelled" | "failed" | "interrupted"; error?: string; needsResync: boolean };
 type Message = SdkMessage;
@@ -240,6 +243,13 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
    */
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [attachmentReport, setAttachmentReport] = useState<string | null>(null);
+  /**
+   * [Pencil T10] #145 发送前的引用重检结果。`issues` 按芯片 id 命名，芯片上直接
+   * 标出原因；发送被拒绝时草稿和引用都留在本会话，不丢输入也绝不静默改来源。
+   */
+  const [referenceProblems, setReferenceProblems] = useState<ReferenceIssue[]>([]);
+  const [referenceReport, setReferenceReport] = useState<string | null>(null);
+  const messageInput = useRef<HTMLTextAreaElement | null>(null);
   const attachmentInput = useRef<HTMLInputElement | null>(null);
   const attachmentSequence = useRef(0);
   const draftLoaded = useRef(false);
@@ -495,10 +505,52 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     try { await verify(); if (epoch !== generation.current) return; await reconcile(epoch, attemptRef.current?.requestId); if (epoch === generation.current) setValid(true); }
     catch (error) { setValid(false); setConnected(false); setNotice(errorText(error)); setInvalidated(true); }
   };
+  /**
+   * [Pencil T10] #145 发送前的引用重检。两步：芯片自身身份（无需宿主）与 Host 真实
+   * 读到的 `task/fileRoots`。根目录读不到也算一个具名问题：不假定引用可用，不把
+   * 无法核对的来源当作已发送。
+   */
+  const verifyReferences = async (list: readonly Reference[]): Promise<ReferenceIssue[]> => {
+    const issues = referenceIssues(list, taskId);
+    const named = new Set(issues.map((issue) => issue.id));
+    const pending = list.filter((reference) => !named.has(reference.id) && reference.kind !== "attachment" && reference.kind !== "skill");
+    if (pending.length === 0) return issues;
+    const failed = (message: string): ReferenceIssue[] => [...issues, ...pending.map((reference) => ({ id: reference.id, label: reference.label, message }))];
+    let read;
+    try { read = await shellTaskOp(taskId, "task/fileRoots"); }
+    catch (error) { return failed(`来源重检失败：${error instanceof Error ? error.message : String(error)}；请重试或重新选择引用`); }
+    if (!read.ok) return failed(`来源重检失败：${read.error}；请重试或重新选择引用`);
+    const facts = referenceRootFacts(read.payload);
+    if (facts.error !== null) return failed(facts.error);
+    for (const reference of pending) {
+      const message = rootReferenceIssue(reference, facts.roots);
+      if (message !== null) issues.push({ id: reference.id, label: reference.label, message });
+    }
+    return issues;
+  };
   const start = async (reuse = false) => {
     if (busy.current || !connected || !valid || receiptError || (!reuse && (attemptRef.current?.phase === "unknown" || attemptRef.current?.phase === "accepted" || snapshot?.pending))) return;
     const text = reuse ? attemptRef.current?.text : draft;
     if (!text?.trim()) return;
+    // [Pencil T10] #145 引用先重检再发送：芯片上的来源身份与 Host 真实读到的任务
+    // 根目录对比，失效／跨任务／越界的来源按名字提示修正。草稿与引用都留在本会话，
+    // 发送被拒绝时不丢输入也不静默改用源仓库或另一个任务里的同名文件。按原 ID 重试
+    // 沿用已接受的上下文，不再重检（Host 指纹会拒绝被改过的上下文）。
+    if (!reuse) {
+      // A refused send must not be able to race a second click: the same guard
+      // the turn uses (`busy`) is held across the re-check and released on refusal.
+      busy.current = true;
+      let problems: ReferenceIssue[];
+      try { problems = await verifyReferences(references); }
+      catch (error) {
+        problems = references.map((reference) => ({ id: reference.id, label: reference.label, message: `来源重检失败：${error instanceof Error ? error.message : String(error)}；请重试或重新选择引用` }));
+      }
+      if (problems.length > 0) busy.current = false;
+      setReferenceProblems(problems);
+      const refusal = referenceSendRefusal(problems);
+      setReferenceReport(refusal);
+      if (refusal !== null) return;
+    }
     // A reference/attachment is part of what the Host fingerprints: a replay
     // reuses the exact context it was accepted with, otherwise the Host would
     // refuse the request id as `idempotency-mismatch`.
@@ -578,6 +630,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   };
   const submit = (event: FormEvent) => { event.preventDefault(); void start(); };
   const addFileReference = (row: CandidateRow) => {
+    // [Pencil T10] #145 a new chip is unverified until the next send re-checks it.
+    setReferenceProblems([]);
     // The same id spelling and field set `TaskPage.chooseCompletion` records for
     // a picked candidate (`pages/TaskPage.tsx`), including this task as the
     // owner, so a reference can never be read as another task's file.
@@ -600,6 +654,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     });
   };
   const removeFileReference = (id: string) => setReferences((current) => {
+    setReferenceProblems((problems) => problems.filter((entry) => entry.id !== id));
+    setReferenceReport(null);
     const next = current.filter((entry) => entry.id !== id);
     if (valid && connected && !invalidated) queueDraftSave({ text: draft, references: next });
     return next;
@@ -785,6 +841,13 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   useEffect(() => {
     if (initialSessionId !== undefined) setActiveSessionId((current) => (current === initialSessionId ? current : initialSessionId));
   }, [initialSessionId]);
+  /**
+   * [Pencil T10] #145 切换会话后把焦点放回输入区（键盘流程不因切换而中断）：
+   * 每个会话自己的草稿照常从 Host 恢复，焦点不跟随上一个会话残留。
+   */
+  useEffect(() => {
+    messageInput.current?.focus();
+  }, [sessionId]);
   const sessions = sessionList.phase === "read" ? sessionList.list.sessions : [];
   const activeSession = sessions.find((session) => session.id === sessionId) ?? null;
   /**
@@ -801,6 +864,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     draftSave.current.pending = undefined;
     setDraft(receipt.receipt?.text ?? "");
     setReferences([]);
+    setReferenceProblems([]);
+    setReferenceReport(null);
     setAttachments([]);
     setAttachmentReport(null);
     setDraftError(null);
@@ -869,6 +934,17 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const result = await deleteSession(taskId, id);
     setSessionBusy(false);
     applySessionWrite(result);
+    // [Pencil T10] #145 删除会话要连带它的草稿与待确认记录：Host 侧会话记录随
+    // 会话一起消失，本机这条会话的 pending receipt 也必须删掉，否则下一次读取会
+    // 把已删除会话的文字当成"还没核验的请求"提示出来。
+    if (result.ok) {
+      useDraftStore.getState().forget(taskId, id);
+      const pending = readReceipt(taskId, id);
+      if (pending.receipt !== null) {
+        try { clearReceipt(taskId, id, pending.receipt.requestId); }
+        catch { setNotice("会话已删除，但本机待确认请求记录无法清除；请核验本机数据"); }
+      }
+    }
     if (result.ok && id === sessionId) {
       const next = result.list.activeSessionId;
       if (next !== null) resetForSession(next);
@@ -1096,22 +1172,39 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     <section aria-label="SDK 对话历史" className="mx-auto w-full max-w-[820px] min-w-0 space-y-3 px-3 py-4">
       <p className="text-xs text-muted">SDK JSONL 已确认历史 · 最近最多 80 条</p>
       {snapshot && !snapshot.messages.length && <p className="py-8 text-center text-sm text-muted">尚未开始 · 无 SDK 会话记录</p>}
-      {snapshot?.messages.map((message, index) => <article key={index} className="min-w-0 text-sm">
+      {snapshot?.messages.map((message, index) => {
+        // [Pencil T10] #145 历史里的来源芯片：Host 拼在提示词末尾的身份清单单独
+        // 渲染为芯片，正文不再把这段尾注当作用户打字。无法解析时整条消息原样显示。
+        const parsed = message.role === "user" ? splitPromptContext(message.text) : { text: message.text, references: [] };
+        return (<article key={index} className="min-w-0 text-sm">
         <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
           {message.role === "user" ? <LocalUserAvatar /> : <BrandMark size="sm" />}
           <span className="font-semibold text-ink">{message.role === "user" ? "你" : "Pi"}</span>
           <span>实现与验证</span>
         </div>
         <div className={`min-w-0 rounded-[10px] border px-3 py-2 ${message.role === "user" ? "border-line bg-paper" : "border-line bg-paper"}`}>
-          <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.text}</p>
+          <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{parsed.text}</p>
         </div>
+        {parsed.references.length > 0 && <div data-testid="history-references" className="mt-1 min-w-0">
+          <ul className="flex min-w-0 flex-wrap gap-1.5">
+            {parsed.references.map((entry, entryIndex) => <li key={entryIndex} data-testid="history-reference" data-reference-kind={entry.kind} title={[entry.source, entry.detail].filter(Boolean).join(" · ")} className="flex min-w-0 flex-wrap items-baseline gap-1.5 rounded-full border border-line bg-soft px-2 py-0.5 text-[11px]">
+              <span className="shrink-0 text-muted">{REFERENCE_KIND_TEXT[entry.kind as Reference["kind"]] ?? entry.kind}</span>
+              <span className="min-w-0 break-all font-mono text-ink">{entry.label}</span>
+              {entry.source && <span className="min-w-0 break-all text-muted">{entry.source}</span>}
+              {entry.detail && <span className="min-w-0 break-all text-muted">{entry.detail}</span>}
+            </li>)}
+          </ul>
+          <p className="mt-1 text-[11px] text-muted">本条消息附带以上来源；Host 附带的是身份清单，内容由 Agent 用工具读取。</p>
+        </div>}
         {message.usage && <p className="mt-1 text-xs text-muted">SDK 用量 · 输入 {message.usage.input} / 输出 {message.usage.output} / 缓存读取 {message.usage.cacheRead} / 写入 {message.usage.cacheWrite}</p>}
-      </article>)}
+      </article>);
+      })}
       {stream && <article className="min-w-0 border-l-2 border-ink pl-3 text-sm"><p className="mb-1 text-xs text-muted">暂存回复 · 尚未核验</p><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stream}</p></article>}
     </section>
     </div>
     <div className="shrink-0 border-t border-line bg-paper px-3 py-3"><div className="mx-auto max-w-[820px] min-w-0">
       {draftError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{draftError}</p>}
+      {referenceReport && <p role="alert" data-testid="composer-reference-refusal" className="mb-2 break-words text-xs text-[#ad4545]">{referenceReport}</p>}
       {receiptError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{receiptError}</p>}
       {notice && <p role="status" className="mb-2 break-words text-xs text-muted">{notice}</p>}
       <div className="mb-2 flex flex-wrap gap-2">{invalidated ? <Button type="button" onClick={onBack}>返回任务列表</Button> : (!connected || !valid) && <Button type="button" onClick={() => setConnectionKey((key) => key + 1)}>重新连接</Button>}
@@ -1119,19 +1212,27 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         {attempt?.phase === "unknown" && <Button type="button" disabled={!valid} onClick={() => void start(true)}>按原 ID 重试</Button>}
         {attempt?.phase === "accepted" && <Button type="button" onClick={() => void stop()}><Icon name="stop" />停止</Button>}
       </div>
-      <form onSubmit={submit} className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
+      {/* [Pencil T10] #145 S01/S06 的浮动 Composer：S01 内联对话里与紧凑窗口共用
+          这一个输入区（同一份文字、引用、模型与推理、权限、发送/停止逻辑），没有
+          第二份实现；它就是该列底部钉住的最后一格，900 与 560 高度都可达。 */}
+      <form onSubmit={submit} data-testid="desktop-composer" data-surface="floating" className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
         {references.length > 0 && <div className="mb-2 min-w-0" data-testid="composer-file-references">
           <ul className="flex min-w-0 flex-wrap gap-1.5">
-            {references.map((reference) => (
-              <li key={reference.id} data-testid={`composer-file-reference-${reference.id}`} data-source-kind={reference.sourceKind ?? "none"} title={describeReferenceChip(reference)} className="flex min-w-0 flex-wrap items-baseline gap-1.5 rounded-full border border-line bg-soft px-2 py-0.5 text-[11px]">
+            {references.map((reference) => {
+              const problem = referenceProblems.find((entry) => entry.id === reference.id);
+              return (
+              <li key={reference.id} data-testid={`composer-file-reference-${reference.id}`} data-source-kind={reference.sourceKind ?? "none"} data-reference-state={problem ? "invalid" : "ok"} title={problem ? problem.message : describeReferenceChip(reference)} className={`flex min-w-0 flex-wrap items-baseline gap-1.5 rounded-full border px-2 py-0.5 text-[11px] ${problem ? "border-[#e0b4b4] bg-[#fdf3f3]" : "border-line bg-soft"}`}>
                 <span className="min-w-0 break-all font-mono text-ink">引用 · {reference.label}</span>
+                <span className="shrink-0 text-muted">{REFERENCE_KIND_TEXT[reference.kind]}</span>
                 <span className="shrink-0 text-muted">{referenceSourceLabel(reference)}</span>
                 <span className="min-w-0 break-all text-muted">{reference.detail}</span>
+                {problem && <span data-testid={`composer-file-reference-problem-${reference.id}`} role="status" className="min-w-0 break-words text-[#ad4545]">{problem.message}</span>}
                 <button type="button" aria-label={`移除引用 ${reference.label}`} onClick={() => removeFileReference(reference.id)} className="shrink-0 text-muted">×</button>
               </li>
-            ))}
+              );
+            })}
           </ul>
-          <p className="mt-1 text-[11px] text-muted">引用随消息提交：Host 会把类型、来源与路径附在提示词末尾，供 Agent 定位；引用不读取也不写入文件，文件内容不在提示词里。</p>
+          <p className="mt-1 text-[11px] text-muted">引用随消息提交：Host 会把类型、来源与路径附在提示词末尾，供 Agent 定位；发送前会重检来源身份（失效／越界按名字提示重新选择）。引用不把文件内容伪装成正文：内容由 Agent 用工具读取，Host 不改写来源。</p>
         </div>}
         {attachmentReport && <p role="status" data-testid="desktop-composer-attachment-report" className="mb-2 border-l-2 border-[#dfc99f] pl-2 text-[11px] text-[#9a6032]">{attachmentReport}</p>}
         {attachments.length > 0 && <div className="mb-2 min-w-0" data-testid="desktop-composer-attachments">
@@ -1146,7 +1247,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           </ul>
           <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件。</p>
         </div>}
-        <textarea aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
+        <textarea ref={messageInput} aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
             <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="text-muted"><Icon name="plus" /></Button>
