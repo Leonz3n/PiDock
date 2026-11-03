@@ -1347,7 +1347,7 @@ export function validateHostTaskOp(
     return { ok: true };
   }
   if (op === "task/sessionArchive" || op === "task/sessionRestore" || op === "task/sessionDelete" ||
-      op === "task/sessionActivate" || op === "task/sessionReadout") {
+      op === "task/sessionStop" || op === "task/sessionActivate" || op === "task/sessionReadout") {
     if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
     if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
       return { ok: false, error: `invalid-payload: ${op}.sessionId must be a non-empty string` };
