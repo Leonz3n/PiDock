@@ -57,10 +57,32 @@ export async function performCreationOperation(
       return service.commit(request.id);
     }
     case "abandon": {
-      exact(request, ["op", "id", "confirmed"]);
+      // [Pencil T08] #143: `cleanup` is optional so a caller that predates it
+      // keeps the old keep-everything behaviour; `owned` is the explicit choice
+      // that removes only identity-confirmed resources of this creation.
+      exactOptional(request, ["op", "id", "confirmed"], ["cleanup"]);
       if (typeof request.id !== "string" || !/^[0-9a-f-]{36}$/i.test(request.id)) throw new TrustDomainViolation("invalid-payload", "invalid creation ID");
       if (request.confirmed !== true) throw new TrustDomainViolation("invalid-payload", "abandon requires explicit confirmation");
-      return service.abandon(request.id, true);
+      if (request.cleanup !== undefined && request.cleanup !== "keep" && request.cleanup !== "owned") {
+        throw new TrustDomainViolation("invalid-payload", "invalid abandon cleanup scope");
+      }
+      return service.abandon(request.id, true, request.cleanup === "owned" ? "owned" : "keep");
+    }
+    case "status": {
+      // Read-only per-repository recovery state (no root pick, no attestation).
+      exact(request, ["op"]);
+      return service.status();
+    }
+    case "retry": {
+      // Retry ONLY the failing repositories; `adoptOrphanBranches` is the
+      // explicit adopt choice for a task branch that exists without a worktree.
+      exactOptional(request, ["op", "id"], ["adoptOrphanBranches"]);
+      if (typeof request.id !== "string" || !/^[0-9a-f-]{36}$/i.test(request.id)) throw new TrustDomainViolation("invalid-payload", "invalid creation ID");
+      if (request.adoptOrphanBranches !== undefined && typeof request.adoptOrphanBranches !== "boolean") {
+        throw new TrustDomainViolation("invalid-payload", "invalid orphan adoption flag");
+      }
+      reattest();
+      return service.retry(request.id, request.adoptOrphanBranches === true);
     }
     default: throw new TrustDomainViolation("invalid-payload", "unknown creation operation");
   }
