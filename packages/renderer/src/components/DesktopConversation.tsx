@@ -28,6 +28,7 @@ import { BrandMark, LocalUserAvatar } from "./ui";
 import { hostText } from "../data/workspaceFiles";
 import { REFERENCE_KIND_TEXT, referenceIssues, referenceRootFacts, referenceSendRefusal, rootReferenceIssue, type ReferenceIssue } from "../data/referenceGuard";
 import { splitPromptContext } from "../data/historyReferences";
+import { useDraftStore } from "../stores/drafts";
 
 type Turn = { taskId: string; sessionId: string; requestId: string; turnId: string; state: "accepted" | "done" | "cancelled" | "failed" | "interrupted"; error?: string; needsResync: boolean };
 type Message = SdkMessage;
@@ -933,6 +934,17 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const result = await deleteSession(taskId, id);
     setSessionBusy(false);
     applySessionWrite(result);
+    // [Pencil T10] #145 删除会话要连带它的草稿与待确认记录：Host 侧会话记录随
+    // 会话一起消失，本机这条会话的 pending receipt 也必须删掉，否则下一次读取会
+    // 把已删除会话的文字当成"还没核验的请求"提示出来。
+    if (result.ok) {
+      useDraftStore.getState().forget(taskId, id);
+      const pending = readReceipt(taskId, id);
+      if (pending.receipt !== null) {
+        try { clearReceipt(taskId, id, pending.receipt.requestId); }
+        catch { setNotice("会话已删除，但本机待确认请求记录无法清除；请核验本机数据"); }
+      }
+    }
     if (result.ok && id === sessionId) {
       const next = result.list.activeSessionId;
       if (next !== null) resetForSession(next);
@@ -1200,7 +1212,10 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         {attempt?.phase === "unknown" && <Button type="button" disabled={!valid} onClick={() => void start(true)}>按原 ID 重试</Button>}
         {attempt?.phase === "accepted" && <Button type="button" onClick={() => void stop()}><Icon name="stop" />停止</Button>}
       </div>
-      <form onSubmit={submit} className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
+      {/* [Pencil T10] #145 S01/S06 的浮动 Composer：S01 内联对话里与紧凑窗口共用
+          这一个输入区（同一份文字、引用、模型与推理、权限、发送/停止逻辑），没有
+          第二份实现；它就是该列底部钉住的最后一格，900 与 560 高度都可达。 */}
+      <form onSubmit={submit} data-testid="desktop-composer" data-surface="floating" className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
         {references.length > 0 && <div className="mb-2 min-w-0" data-testid="composer-file-references">
           <ul className="flex min-w-0 flex-wrap gap-1.5">
             {references.map((reference) => {

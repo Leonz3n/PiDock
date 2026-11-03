@@ -4,6 +4,7 @@ import { DesktopConversation } from "../components/DesktopConversation";
 import type { PidockBridge } from "../data/shellBridge";
 // The SHIPPED Host composer builds the identity block this suite parses, so the
 // history chips and the Host's own format cannot drift apart silently.
+import { useDraftStore } from "../stores/drafts";
 import { composePromptContext } from "../../../shell/src/host/sdk-prompt-context.js";
 
 /**
@@ -36,7 +37,7 @@ function setup(options: { draftReference?: boolean; rootIds?: string[] } = {}) {
   const rootIds = options.rootIds ?? ["repo-a"];
   const snapshot = (messages: unknown[] = []) => ({ source: "sdk-jsonl", sessionId: "main", messages, pending: false, interrupted: false });
   const envelope = (taskId: string, op: string, inner: Record<string, unknown>) => ({ ok: true as const, payload: { workspaceId: "w", taskId, op, payload: inner } });
-  const taskOp = vi.fn(async (taskId: string, op: string, payload: Record<string, unknown> = {}) => {
+  const taskOp = vi.fn(async (taskId: string, op: string, _payload: Record<string, unknown> = {}) => {
     if (op === "task/readDraft") {
       return envelope(taskId, op, { sessionId: "main", draft: options.draftReference ? { text: "看一下这个接口", references: [REFERENCE] } : null });
     }
@@ -59,6 +60,13 @@ function setup(options: { draftReference?: boolean; rootIds?: string[] } = {}) {
     }
     if (op === "task/sessionReadout") {
       return envelope(taskId, op, { modelId: "m", reasoningLevel: "medium", reasoningLevels: ["low", "high"], context: { used: null, window: 200000, source: "unknown" }, usage: null, turns: 0, pending: false, interrupted: false });
+    }
+    if (op === "task/sessionDelete") {
+      return envelope(taskId, op, {
+        activeSessionId: "main",
+        sessions: [{ id: "main", name: "实现", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z", archived: false, permission: "default", binding: null }],
+        provider: null,
+      });
     }
     if (op === "task/executionState" || op === "task/listApprovals") return envelope(taskId, op, op === "task/listApprovals" ? { approvals: [] } : { execution: null });
     return { ok: false as const, error: `unexpected ${op}` };
@@ -171,6 +179,52 @@ describe("[Pencil T10] #145 焦点与会话草稿", () => {
     fireEvent.click(await screen.findByTestId("session-tab-s-2"));
     const next = await screen.findByRole("textbox", { name: "消息" });
     await waitFor(() => expect(next).toHaveFocus());
+    expect(fixture.calls.filter((request) => request.action === "start")).toEqual([]);
+  });
+});
+
+describe("[Pencil T10] #145 删除会话时连带草稿", () => {
+  it("drops the deleted session's local draft record and its pending receipt", async () => {
+    const fixture = setup();
+    const receiptKey = "pidock-sdk-pending-v1:task-a:s-2";
+    localStorage.setItem(receiptKey, JSON.stringify({ schema: 1, taskId: TASK_ID, sessionId: "s-2", requestId: "22222222-2222-2222-2222-222222222222", text: "未核验的请求" }));
+    useDraftStore.getState().restore(TASK_ID, "s-2", { text: "会话二的草稿", references: [] });
+    mount();
+    await screen.findByTestId("session-tab-s-2");
+    fireEvent.click(screen.getByTestId("session-all"));
+    const row = await screen.findByTestId("session-row-s-2");
+    fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(localStorage.getItem(receiptKey)).toBeNull());
+    // No empty record is left behind for a session the Host no longer has.
+    expect(useDraftStore.getState().getDraft(TASK_ID, "s-2")).toEqual({ text: "", references: [] });
+    expect(fixture.calls.filter((request) => request.action === "start")).toEqual([]);
+  });
+});
+
+describe("[Pencil T10] #145 浮动 Composer 与紧凑窗口", () => {
+  it("keeps one pinned composer surface at 1440x900 and 720x560", async () => {
+    const fixture = setup();
+    const mountAt = async (width: number, height: number) => {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+      window.dispatchEvent(new Event("resize"));
+      mount();
+      await screen.findByTestId("desktop-composer");
+    };
+    await mountAt(1440, 900);
+    const wide = screen.getByTestId("desktop-composer");
+    expect(screen.getAllByRole("textbox", { name: "消息" })).toHaveLength(1);
+    expect(wide).toHaveAttribute("data-surface", "floating");
+    // The composer is the last pinned row of the column, not part of the scrolling history.
+    expect(wide.closest("section[aria-label='SDK 对话历史']")).toBeNull();
+    cleanup();
+
+    await mountAt(720, 560);
+    const compact = screen.getByTestId("desktop-composer");
+    expect(screen.getAllByRole("textbox", { name: "消息" })).toHaveLength(1);
+    expect(compact).toHaveAttribute("data-surface", "floating");
+    // The compact window keeps the same controls: send, model, reasoning, attachment.
+    for (const name of ["发送", "添加附件", "推理档位"]) expect(within(compact).getByRole(name === "推理档位" ? "group" : "button", { name })).toBeInTheDocument();
     expect(fixture.calls.filter((request) => request.action === "start")).toEqual([]);
   });
 });
