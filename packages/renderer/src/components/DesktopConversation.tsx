@@ -10,6 +10,7 @@ import { readHostDraft, saveHostDraft } from "../data/draftStore";
 import { executionStateThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
 import { executionStateFromHost, runRecordFromExecutionState, runStateOfExecution, type SessionExecutionView } from "../data/executionLedger";
 import { executionLabel, executionStepLabel } from "../pages/executionView";
+import { TurnStream } from "../data/turnStream";
 import {
   activateSession, archiveSession, createSession, deleteSession, readSessionReadout, readTaskSessions,
   REASONING_LEVEL_TEXT, renameSession, restoreSession, setSessionReasoning, switchSessionModel,
@@ -257,7 +258,11 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const [connected, setConnected] = useState(false);
   const [invalidated, setInvalidated] = useState(false);
   const generation = useRef(0);
-  const sequence = useRef(new Map<string, number>());
+  /**
+   * [#138] 暂存回复的顺序闸门：ACK 之前的增量先按回合暂存，ACK 时回放并按首条增量
+   * 锚定基线；重复/回退丢弃且不清空暂存，只有真正的缺口才 resync。
+   */
+  const turnStream = useRef(new TurnStream());
   const busy = useRef(false);
   const composing = useRef(false);
   const rootsRef = useRef(roots);
@@ -303,7 +308,11 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const turn = result ? parseTurn(result.turn, taskId, sessionId, requestId!) : null;
     const projection = parseSnapshot((await request("projection")), sessionId);
     if (epoch !== generation.current || attemptRef.current?.requestId !== requestId) return;
-    sequence.current.clear(); streamRef.current = ""; setStream(""); setSnapshot(projection);
+    // [#138] A projection read is a resync, not a reason to drop the staging of
+    // the SAME live turn: the deltas that already arrived are still unverified
+    // text. A different (or no) turn starts with nothing staged.
+    streamRef.current = turnStream.current.resync(turn?.state === "accepted" ? turn.turnId : null);
+    setStream(streamRef.current); setSnapshot(projection);
     if (requestId && turn && attemptRef.current) {
       if (turn.state !== "accepted") {
         try { clearReceipt(taskId, sessionId, requestId); setReceiptError(null); }
@@ -399,14 +408,14 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const active = () => generation.current === epoch;
     const disconnect = (reason: string) => {
       if (!active()) return;
-      setValid(false); setConnected(false); streamRef.current = ""; setStream(""); sequence.current.clear(); setNotice(reason);
+      setValid(false); setConnected(false); streamRef.current = ""; setStream(""); turnStream.current.reset(); setNotice(reason);
       off?.(); off = undefined;
       if (subscribed) void request("unsubscribe").catch(() => {});
     };
     const onEvent = (raw: unknown) => {
       if (!active() || !object(raw)) return;
       if (raw.kind === "needs-resync") {
-        if (raw.taskId === taskId && raw.sessionId === sessionId) { streamRef.current = ""; setStream(""); void reconcile(epoch, attemptRef.current?.requestId).catch(() => disconnect("连接中断，请重新连接")); }
+        if (raw.taskId === taskId && raw.sessionId === sessionId) { turnStream.current.reset(); streamRef.current = ""; setStream(""); void reconcile(epoch, attemptRef.current?.requestId).catch(() => disconnect("连接中断，请重新连接")); }
         return;
       }
       if (raw.kind === "sdk-turn-status" && object(raw.turn)) {
@@ -417,19 +426,19 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       }
       if (raw.kind !== "sdk-turn-event" || !object(raw.event)) return;
       const event = raw.event;
-      const current = attemptRef.current;
-      if (event.taskId !== taskId || event.sessionId !== sessionId || !current?.turnId || current.turnId !== event.turnId || current.phase !== "accepted") return;
-      const last = sequence.current.get(current.turnId) ?? 0;
-      if (!Number.isSafeInteger(event.sequence) || event.sequence !== last + 1 || last >= 256) {
-        streamRef.current = ""; setStream(""); void reconcile(epoch, current.requestId).catch(() => disconnect("事件缺口，请重新连接")); return;
-      }
-      sequence.current.set(current.turnId, event.sequence as number);
-      if (event.type === "delta") {
-        if (typeof event.text !== "string" || event.text.length > 16384) { void reconcile(epoch, current.requestId).catch(() => disconnect("事件异常，请重新连接")); return; }
-        const next = streamRef.current + event.text;
-        if (next.length > 16384) {
-          streamRef.current = ""; setStream(""); void reconcile(epoch, current.requestId).catch(() => disconnect("事件超限，请重新连接"));
-        } else { streamRef.current = next; setStream(next); }
+      if (event.taskId !== taskId || event.sessionId !== sessionId || typeof event.turnId !== "string") return;
+      // [#138] The ACK and the Host's deltas travel two different IPC paths: a
+      // delta can arrive before `start` has written `turnId`. The gate buffers
+      // those pre-ACK deltas for the turn the ACK will name, anchors the first
+      // accepted delta of a turn (a late subscription starts at 3, not at 1),
+      // drops duplicates/replays without clearing the staging, and asks for a
+      // projection re-read only on a real sequence gap.
+      const outcome = turnStream.current.ingest({ turnId: event.turnId, sequence: event.sequence, type: event.type, text: event.text });
+      if (outcome.kind === "staged") { streamRef.current = outcome.text; setStream(outcome.text); }
+      else if (outcome.kind === "resync") {
+        turnStream.current.reset();
+        streamRef.current = ""; setStream("");
+        void reconcile(epoch, attemptRef.current?.requestId).catch(() => disconnect(`事件${outcome.reason === "gap" ? "缺口" : "异常"}，请重新连接`));
       }
     };
     const connect = async () => {
@@ -501,7 +510,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         ? { ...attemptRef.current, phase: "starting" }
         : { requestId: crypto.randomUUID(), text, phase: "starting", ...(carriesContext ? { context } : {}) };
       saveReceipt(taskId, sessionId, current.requestId, current.text);
-      setCurrent(current); setNotice("等待 Host 确认请求"); streamRef.current = ""; setStream(""); sequence.current.clear();
+      setCurrent(current); setNotice("等待 Host 确认请求"); streamRef.current = ""; setStream(""); turnStream.current.reset();
       let result;
       try { result = await request("start", { requestId: current.requestId, text: current.text, ...(carriesContext ? context : {}) }); }
       catch (error) {
@@ -515,6 +524,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       if (epoch !== generation.current) return;
       const turn = parseTurn(result.turn, taskId, sessionId, current.requestId);
       if (!turn) throw new Error("SDK ACK 缺少请求身份");
+      // [#138] Replay the deltas that beat the ACK, then keep staging from there.
+      const staged = turnStream.current.ack(turn.state === "accepted" ? turn.turnId : null);
+      streamRef.current = staged.text; setStream(staged.text);
       setCurrent({ ...current, turnId: turn.turnId, phase: turn.state === "accepted" ? "accepted" : "terminal", state: turn.state });
       setNotice(turn.state === "accepted" ? "正在等待模型" : "正在核验 SDK 历史");
       if (turn.state === "accepted" && !reuse) {
@@ -720,7 +732,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     setDraftError(null);
     setReceiptError(receipt.error);
     setCurrent(receipt.receipt ? { ...receipt.receipt, phase: "unknown" } : null);
-    streamRef.current = ""; setStream(""); sequence.current.clear();
+    streamRef.current = ""; setStream(""); turnStream.current.reset();
     setSnapshot(null); setInvalidated(false); setConnected(false); setValid(false);
     setNotice("正在连接 SDK 会话");
     picked.current = true;
@@ -857,7 +869,15 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       : `本会话最近一次请求的提示词占用 ${readout.context.used === null ? "未报告（未知）" : `${readout.context.used} tokens`} · 绑定模型窗口 ${readout.context.window === null ? "未知" : `${readout.context.window} tokens`} · 来源 ${readout.context.source}；SDK 未报告时保持未知，不按 0 显示`;
 
   return <TooltipProvider><main data-testid="desktop-conversation" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
-    <div className="shrink-0 border-b border-line bg-paper px-4 pt-3 below-mid:px-3">
+    {/* [#138] 720×560 裁切：面板只有 ~239px 高（breadcrumb + 汇总条后），旧结构把
+        任务头、会话条、执行卡当作 `shrink-0` 兄弟节点，历史区的 `flex-1` 被压到 0，
+        输入框被 `overflow-hidden` 裁掉且没有可滚动祖先能到达。现在面板自己拥有滚动：
+        消息区（连同它上面的任务头/会话/执行状态）在一个 `overflow-y-auto` 区域里滚动，
+        composer 作为该列最后一个 `shrink-0` 行钉在底部，900 与 560 高度都可达。 */}
+    <div className="flex min-h-0 min-w-0 flex-1">
+    <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${activeTool && !toolDockCollapsed ? "below-narrow:hidden" : ""}`}>
+    <div data-testid="desktop-conversation-scroll" className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+    <div className="border-b border-line bg-paper px-4 pt-3 below-mid:px-3">
       {/* #49: the shell column is 280-380px when a task page is open, and the
           prototype wraps the task header below 1180px (`.taskheader
           .between{flex-wrap:wrap}`) and stacks it below 720px. Without the wrap
@@ -981,72 +1001,10 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         </Button>
       </div>
     )}
-    {archivePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
-      <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
-        <h2 className="text-base font-semibold">归档当前任务</h2>
-        <p className="mt-3 text-xs leading-6 text-muted">归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止。未执行确认会失效、定时任务暂停，代码和历史保留。恢复后服务与定时任务不会自动启动，清理需要单独处理。</p>
-        {blocked && !archiveError && <p role="status" className="mt-3 text-xs text-muted">会话尚未连接、正在执行或请求状态未核验；请先完成核验或停止执行。</p>}
-        {archiveError && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{archiveError}</p>}
-        <div className="mt-5 flex justify-end gap-2">
-          {invalidated && <Button type="button" variant="outline" onClick={onArchived}>查看归档状态</Button>}
-          <Button ref={archiveCancelRef} type="button" variant="outline" disabled={archiveBusy} onClick={() => setArchivePrompt(false)}>取消</Button>
-          <Button type="button" disabled={archiveBusy || blocked} onClick={() => void archive()}>{archiveBusy ? "归档中…" : "确认归档"}</Button>
-        </div>
-      </div>
-    </div>}
-    {sourcesOpen && bridge?.appendTaskRepos ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
-      <DesktopTaskSources
-        taskId={taskId}
-        bridge={bridge}
-        onClose={() => setSourcesOpen(false)}
-        onAppended={() => onSourcesChanged?.()}
-      />
-    </div> : null}
-    {sessionsOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="全部会话" data-testid="session-panel">
-      <div className="max-h-[80vh] w-[min(560px,100%)] overflow-y-auto rounded-[10px] border border-line bg-paper p-4 shadow-lg">
-        <div className="flex items-start gap-2">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-[14px] font-semibold">全部会话</h2>
-            <p className="mt-0.5 text-[11px] text-muted">一个任务可有多个会话，共享同一工作区与仓库；每个会话有自己的上下文、模型绑定与 SDK JSONL。</p>
-          </div>
-          <Button type="button" size="sm" variant="ghost" aria-label="关闭会话列表" onClick={() => { setSessionsOpen(false); setRenaming(null); }}>×</Button>
-        </div>
-        {sessionNotice && <p role="alert" data-testid="session-notice" className="mt-2 rounded-[6px] border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-[11px] leading-5 break-words text-[#ad4545]">{sessionNotice}</p>}
-        <ul className="mt-3 space-y-1.5">
-          {sessions.length === 0 && <li className="text-[11px] text-muted">本任务还没有会话。</li>}
-          {sessions.map((session) => <li key={session.id} data-testid={`session-row-${session.id}`} className={`rounded-[7px] border p-2 ${session.id === sessionId ? "border-accent bg-soft" : "border-line"}`}>
-            {renaming?.id === session.id ? <form className="flex min-w-0 items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); void renameOne(); }}>
-              <input aria-label="会话名称" value={renaming.name} maxLength={40} autoFocus className="min-w-0 flex-1 rounded-[5px] border border-line bg-bg px-1.5 py-1 text-[12px]" onChange={(event) => setRenaming({ id: session.id, name: event.target.value })} />
-              <Button type="submit" size="sm" disabled={sessionBusy || !renaming.name.trim() || renaming.name === session.name}>保存</Button>
-              <Button type="button" size="sm" variant="ghost" onClick={() => setRenaming(null)}>取消</Button>
-            </form> : <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <span className="min-w-0 flex-1 truncate text-[12px] font-semibold">{session.name}</span>
-              {session.id === sessionId && <Badge variant="soft">当前</Badge>}
-              {session.archived && <Badge variant="soft">已归档</Badge>}
-              <span className="text-[10px] text-muted">{session.binding?.modelId ?? "跟随任务模型"} · {session.id}</span>
-            </div>}
-            <div className="mt-1 flex flex-wrap items-center gap-1">
-              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy || session.archived || session.id === sessionId} onClick={() => void switchToSession(session)}>{session.id === sessionId ? "当前会话" : "继续对话"}</Button>
-              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => setRenaming({ id: session.id, name: session.name })}>重命名</Button>
-              {session.archived
-                ? <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void restoreOne(session.id)}>恢复</Button>
-                : <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void archiveOne(session.id)}>归档</Button>}
-              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void deleteOne(session.id)}>删除</Button>
-            </div>
-          </li>)}
-        </ul>
-        <div className="mt-3 flex items-center gap-2">
-          <Button type="button" size="sm" disabled={sessionBusy || sessions.length >= 50} onClick={() => void newSession()}><Icon name="plus" />新建会话</Button>
-          <span className="text-[10px] text-muted">新会话从零开始：不复用任何会话的历史。删除会话会同时删除它的 SDK 记录，无法恢复。</span>
-        </div>
-      </div>
-    </div>}
-    {unwired && <p role="status" data-testid="desktop-unwired-tool" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 text-[11px] text-muted">
+    {unwired && <p role="status" data-testid="desktop-unwired-tool" className="border-b border-line bg-soft px-4 py-1.5 text-[11px] text-muted">
       {unwired}面板未接线：{DESKTOP_TOOLS_UNWIRED.find((entry) => entry.label === unwired)?.reason ?? "生产读取路径尚未接线"}（不显示样例数据）
     </p>}
-    <div className="flex min-h-0 min-w-0 flex-1">
-    <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${activeTool && !toolDockCollapsed ? "below-narrow:hidden" : ""}`}>
-    <section aria-label="SDK 对话历史" className="mx-auto w-full max-w-[820px] min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto px-3 py-4">
+    <section aria-label="SDK 对话历史" className="mx-auto w-full max-w-[820px] min-w-0 space-y-3 px-3 py-4">
       <p className="text-xs text-muted">SDK JSONL 已确认历史 · 最近最多 80 条</p>
       {snapshot && !snapshot.messages.length && <p className="py-8 text-center text-sm text-muted">尚未开始 · 无 SDK 会话记录</p>}
       {snapshot?.messages.map((message, index) => <article key={index} className="min-w-0 text-sm">
@@ -1062,6 +1020,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       </article>)}
       {stream && <article className="min-w-0 border-l-2 border-ink pl-3 text-sm"><p className="mb-1 text-xs text-muted">暂存回复 · 尚未核验</p><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stream}</p></article>}
     </section>
+    </div>
     <div className="shrink-0 border-t border-line bg-paper px-3 py-3"><div className="mx-auto max-w-[820px] min-w-0">
       {draftError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{draftError}</p>}
       {receiptError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{receiptError}</p>}
@@ -1155,5 +1114,65 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       onReferenceFile={addFileReference}
     />
     </div>
+    {archivePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
+      <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
+        <h2 className="text-base font-semibold">归档当前任务</h2>
+        <p className="mt-3 text-xs leading-6 text-muted">归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止。未执行确认会失效、定时任务暂停，代码和历史保留。恢复后服务与定时任务不会自动启动，清理需要单独处理。</p>
+        {blocked && !archiveError && <p role="status" className="mt-3 text-xs text-muted">会话尚未连接、正在执行或请求状态未核验；请先完成核验或停止执行。</p>}
+        {archiveError && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{archiveError}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          {invalidated && <Button type="button" variant="outline" onClick={onArchived}>查看归档状态</Button>}
+          <Button ref={archiveCancelRef} type="button" variant="outline" disabled={archiveBusy} onClick={() => setArchivePrompt(false)}>取消</Button>
+          <Button type="button" disabled={archiveBusy || blocked} onClick={() => void archive()}>{archiveBusy ? "归档中…" : "确认归档"}</Button>
+        </div>
+      </div>
+    </div>}
+    {sourcesOpen && bridge?.appendTaskRepos ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
+      <DesktopTaskSources
+        taskId={taskId}
+        bridge={bridge}
+        onClose={() => setSourcesOpen(false)}
+        onAppended={() => onSourcesChanged?.()}
+      />
+    </div> : null}
+    {sessionsOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="全部会话" data-testid="session-panel">
+      <div className="max-h-[80vh] w-[min(560px,100%)] overflow-y-auto rounded-[10px] border border-line bg-paper p-4 shadow-lg">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[14px] font-semibold">全部会话</h2>
+            <p className="mt-0.5 text-[11px] text-muted">一个任务可有多个会话，共享同一工作区与仓库；每个会话有自己的上下文、模型绑定与 SDK JSONL。</p>
+          </div>
+          <Button type="button" size="sm" variant="ghost" aria-label="关闭会话列表" onClick={() => { setSessionsOpen(false); setRenaming(null); }}>×</Button>
+        </div>
+        {sessionNotice && <p role="alert" data-testid="session-notice" className="mt-2 rounded-[6px] border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-[11px] leading-5 break-words text-[#ad4545]">{sessionNotice}</p>}
+        <ul className="mt-3 space-y-1.5">
+          {sessions.length === 0 && <li className="text-[11px] text-muted">本任务还没有会话。</li>}
+          {sessions.map((session) => <li key={session.id} data-testid={`session-row-${session.id}`} className={`rounded-[7px] border p-2 ${session.id === sessionId ? "border-accent bg-soft" : "border-line"}`}>
+            {renaming?.id === session.id ? <form className="flex min-w-0 items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); void renameOne(); }}>
+              <input aria-label="会话名称" value={renaming.name} maxLength={40} autoFocus className="min-w-0 flex-1 rounded-[5px] border border-line bg-bg px-1.5 py-1 text-[12px]" onChange={(event) => setRenaming({ id: session.id, name: event.target.value })} />
+              <Button type="submit" size="sm" disabled={sessionBusy || !renaming.name.trim() || renaming.name === session.name}>保存</Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setRenaming(null)}>取消</Button>
+            </form> : <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="min-w-0 flex-1 truncate text-[12px] font-semibold">{session.name}</span>
+              {session.id === sessionId && <Badge variant="soft">当前</Badge>}
+              {session.archived && <Badge variant="soft">已归档</Badge>}
+              <span className="text-[10px] text-muted">{session.binding?.modelId ?? "跟随任务模型"} · {session.id}</span>
+            </div>}
+            <div className="mt-1 flex flex-wrap items-center gap-1">
+              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy || session.archived || session.id === sessionId} onClick={() => void switchToSession(session)}>{session.id === sessionId ? "当前会话" : "继续对话"}</Button>
+              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => setRenaming({ id: session.id, name: session.name })}>重命名</Button>
+              {session.archived
+                ? <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void restoreOne(session.id)}>恢复</Button>
+                : <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void archiveOne(session.id)}>归档</Button>}
+              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void deleteOne(session.id)}>删除</Button>
+            </div>
+          </li>)}
+        </ul>
+        <div className="mt-3 flex items-center gap-2">
+          <Button type="button" size="sm" disabled={sessionBusy || sessions.length >= 50} onClick={() => void newSession()}><Icon name="plus" />新建会话</Button>
+          <span className="text-[10px] text-muted">新会话从零开始：不复用任何会话的历史。删除会话会同时删除它的 SDK 记录，无法恢复。</span>
+        </div>
+      </div>
+    </div>}
   </main></TooltipProvider>;
 }
