@@ -750,10 +750,12 @@ it("keeps a cancelled loopback stream free of the credential and raw error text"
  *
  * Pi 1.4 evidence for this area was "new version writes, then recovers"; this is
  * the 1.5 write-failure evidence, measured on the real `SessionManager`.
+ *
+ * Root can append to a 0400 file, so the refusal this test needs cannot be
+ * produced there: it is SKIPPED there rather than returning early inside the
+ * body, because a body that silently asserts nothing is not evidence.
  */
-it("keeps memory and disk in one parent chain when the SDK session write fails", async () => {
-  // Root can append to a 0400 file, so the failure this test needs would not happen.
-  if (process.getuid?.() === 0) return;
+it.skipIf(process.getuid?.() === 0)("keeps memory and disk in one parent chain when the SDK session write fails", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pidock-sdk-session-write-"));
   roots.push(dir);
   const file = join(dir, "session.jsonl");
@@ -787,8 +789,9 @@ it("keeps memory and disk in one parent chain when the SDK session write fails",
   expect(reopened.getEntry(secondId)?.parentId).toBe(firstId);
 });
 
-it("fails a turn whose JSONL write is refused and reopens without a dangling parent or a replayed prompt", async () => {
-  if (process.getuid?.() === 0) return;
+// Same guard as above: as root the refused write never happens, so this case is
+// reported as skipped instead of passing without asserting anything.
+it.skipIf(process.getuid?.() === 0)("fails a turn whose JSONL write is refused and reopens without a dangling parent or a replayed prompt", async () => {
   const dir = task("task-sdk-write-failure");
   const fake = await kernel(dir, (texts) => `reply-${texts.filter((x) => x !== "assistant").length}`);
   const opened = await fake.instance.open("main");
