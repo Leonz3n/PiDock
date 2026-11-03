@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { protectApplicationProfile, type TaskPathProtection } from "../host/protected-application-path.js";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
@@ -10,7 +10,13 @@ import type { WorkspaceMode } from "./workspace-files.js";
 import { createDirectoryLink, linkTargetMatches } from "./directory-link.js";
 import { buildLinkName, buildRepoChildName, checkLinkNameCollisions, REMOTE_NAME } from "./multi-repo-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
-import { buildTaskBranch, normalizeTaskPath, TASK_BRANCH_EXISTS_NO_WORKTREE } from "./task-provision.js";
+import { buildTaskBranch, normalizeTaskPath } from "./task-provision.js";
+import {
+  createdRepoCount, deriveRepoState, summarizeCleanup, summarizePartialFailure,
+  type CleanupResourceResult, type RepoFailure, type RepoFailureCode, type RepoObservation,
+  type RepoProvisionState, type RepoSeed,
+} from "./creation-repo-state.js";
+import { describeFetchFailure } from "./task-append.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { WorktreeMetadataLock, type WorktreeLockAcquisition, type WorktreeLockOwner } from "./worktree-metadata-lock.js";
 
@@ -28,7 +34,42 @@ export interface CreationIntent {
    * (worktree with repos, plain-directory without) instead of failing them.
    */
   workspaceMode?: WorkspaceMode;
+  /**
+   * [Pencil T08] #143: per-repository provisioning state, keyed by `repoDir`.
+   * Optional so an intent written before it existed is still readable (and is
+   * migrated by `validate`), and so a plain `pending`/`complete` intent that
+   * never failed carries no empty object.
+   */
+  repoStates?: Record<string, RepoProvisionState>;
 }
+
+/** One repository as the recovery surface reads it ([Pencil T08] #143). */
+export interface CreationRepoStatus extends RepoProvisionState {
+  repoDir: string;
+  /** Phase label the renderer shows without re-deriving anything. */
+  label: string;
+  /** Set when the task branch exists but no worktree holds it. */
+  orphan?: { commit: string; adoptable: boolean };
+}
+
+/** Read-only per-repository recovery status of the current creation intent. */
+export interface CreationStatus {
+  intent: { id: string; taskId: string; name: string; taskDir: string; root: string; branch: string;
+    state: "pending" | "complete" | "abandoned"; workspaceMode: WorkspaceMode } | null;
+  repos: CreationRepoStatus[];
+  directories: { id: string; name: string; path: string; linkName: string; linkPresent: boolean }[];
+  /** True when at least one repository is really failing (the retry set). */
+  canRetry: boolean;
+  /** True when an adoptable orphan task branch was observed (explicit adopt). */
+  canAdoptOrphans: boolean;
+  /** Number of repositories whose worktree really exists (retry never re-creates them). */
+  createdRepos: number;
+  message: string;
+}
+
+/** Frees only identity-confirmed repositories that belong to this creation. */
+export type AbandonCleanup = "keep" | "owned";
+
 export interface CreationRequest {
   projectId: string; name: string;
   repositories: { sourceId: string; remote: string; remoteBranch: string }[];
@@ -102,6 +143,65 @@ function git(cwd: string, args: string[]): string {
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }, stdio: ["ignore", "pipe", "pipe"] }).trim(); }
   catch { throw new Error("Git 获取或工作树创建失败，请检查远程、分支与本机仓库后重试"); }
 }
+/** Same invocation, but the failed call hands back stderr so a refusal can be named. */
+function tryGit(cwd: string, args: string[]): { ok: true; stdout: string } | { ok: false; stderr: string } {
+  try {
+    return { ok: true, stdout: execFileSync("git", args, { cwd, encoding: "utf8", timeout: 30000, maxBuffer: 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }, stdio: ["ignore", "pipe", "pipe"] }).trim() };
+  } catch (error) {
+    const stderr = (error as { stderr?: unknown }).stderr;
+    return { ok: false, stderr: typeof stderr === "string" ? stderr.trim().slice(0, 400) : "" };
+  }
+}
+/** `lstat` that treats "a parent is not a directory" as absent, for cleanup paths. */
+function safelyPresent(target: string): boolean {
+  try { lstatSync(target); return true; }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+/** One repository's failure, carried as a code so the state can be persisted. */
+class RepoFailureError extends Error {
+  constructor(readonly code: RepoFailureCode, message: string) { super(message); }
+}
+function asRepoFailure(error: unknown, repo: Repo, fallback: RepoFailureCode, label: string): RepoFailure {
+  if (error instanceof RepoFailureError) return { code: error.code, detail: error.message };
+  const detail = error instanceof Error ? error.message : String(error);
+  return { code: fallback, detail: `${label} ${repo.repoDir}：${detail}` };
+}
+/**
+ * Worktrees of one source checkout that currently hold `branch`. A task branch
+ * checked out elsewhere is never adopted: that would take another task's (or a
+ * hand-made) checkout away.
+ */
+function worktreeHolders(cwd: string, branch: string): string[] {
+  const holders: string[] = [];
+  let current: string | null = null;
+  for (const line of git(cwd, ["worktree", "list", "--porcelain"]).split("\n")) {
+    if (line.startsWith("worktree ")) current = line.slice("worktree ".length);
+    else if (line === `branch refs/heads/${branch}`) { if (current) holders.push(current); }
+    else if (line.trim() === "") current = null;
+  }
+  return holders;
+}
+/** The branch a registered worktree path is on, or null when it is not registered. */
+function registeredWorktreeBranch(cwd: string, target: string): string | null {
+  let wanted: string;
+  try { wanted = realpathSync(target); } catch { return null; }
+  const lines = git(cwd, ["worktree", "list", "--porcelain"]).split("\n");
+  let current: string | null = null;
+  for (const line of lines) {
+    if (line.startsWith("worktree ")) current = line.slice("worktree ".length);
+    else if (line.startsWith("branch refs/heads/") && current !== null) {
+      let real: string | null = null;
+      try { real = realpathSync(current); } catch { real = null; }
+      if (real === wanted) return line.slice("branch refs/heads/".length);
+    } else if (line.trim() === "") current = null;
+  }
+  return null;
+}
 /**
  * [Pencil T07] #142: the one fetch a worktree creation makes for one repo.
  * A failure is named by repository and branch, and states the two things the
@@ -110,13 +210,13 @@ function git(cwd: string, args: string[]): string {
  * a cached local ref on this path.
  */
 function fetchPinnedBaseline(repo: Repo): void {
-  try {
-    execFileSync("git", ["fetch", "--no-tags", repo.remote, `refs/heads/${repo.remoteBranch}`], {
-      cwd: repo.path, encoding: "utf8", timeout: 30000, maxBuffer: 1024 * 1024,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }, stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch {
-    throw new Error(`获取失败：仓库 ${repo.repoDir} 的 ${repo.remote}/${repo.remoteBranch} 未获取成功，已保留本次创建意图以便重试；未使用旧基线，也不会改用已有 Git 目录模式`);
+  const fetched = tryGit(repo.path, ["fetch", "--no-tags", repo.remote, `refs/heads/${repo.remoteBranch}`]);
+  if (!fetched.ok) {
+    // [Pencil T08] #143: the same reason classification the append/resume path
+    // uses (deleted branch / auth / unreachable) so the user can tell "fix the
+    // branch" from "fix the credential". Unknown stderr stays generic.
+    throw new RepoFailureError("WORKTREE_FETCH_FAILED",
+      `获取失败（${describeFetchFailure(fetched.stderr)}）：仓库 ${repo.repoDir} 的 ${repo.remote}/${repo.remoteBranch} 未获取成功，已保留本次创建意图以便重试；未使用旧基线，也不会改用已有 Git 目录模式`);
   }
 }
 function optionalGit(cwd: string, args: string[]): string | null {
@@ -153,15 +253,17 @@ function strict(value: unknown, fields: string[]): Record<string, unknown> {
 }
 function validate(value: unknown): CreationIntent {
   const intentFields = ["id", "taskId", "name", "projectId", "projectSnapshot", "root", "rootDevice", "rootInode", "rootRealPath", "taskDir", "branch", "repos", "directories", "sharedWriteConfirmed", "state"];
-  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value).sort().join() : "";
-  // [Pencil T02] #137 migration: an intent written before the mode existed has
-  // no `workspaceMode` key. It is accepted and migrated below (worktree when it
-  // has repos, plain-directory when it has none) instead of being called
-  // damaged, so an interrupted creation from the previous build is recoverable.
-  const legacy = keys === [...intentFields].sort().join();
-  const current = keys === [...intentFields, "workspaceMode"].sort().join();
-  if (!legacy && !current) throw new Error("创建意图损坏");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("创建意图损坏");
   const row = value as Record<string, unknown>;
+  const keys = Object.keys(row);
+  // [Pencil T02] #137 / [Pencil T08] #143 migration: `workspaceMode` and
+  // `repoStates` are optional additions. An intent written before them has no
+  // such key and is accepted (mode migrated below, states re-derived from the
+  // disk) instead of being called damaged, so an interrupted creation from an
+  // earlier build stays recoverable.
+  const allowed = new Set([...intentFields, "workspaceMode", "repoStates"]);
+  if (keys.some((key) => !allowed.has(key)) || intentFields.some((field) => !keys.includes(field))) throw new Error("创建意图损坏");
+  const legacy = !keys.includes("workspaceMode");
   const workspaceMode: WorkspaceMode = legacy
     ? (Array.isArray(row.repos) && row.repos.length > 0 ? "worktree" : "plain-dirs")
     : row.workspaceMode as WorkspaceMode;
@@ -188,7 +290,43 @@ function validate(value: unknown): CreationIntent {
   if (row.directories.length && !row.sharedWriteConfirmed) throw new Error("共享写入未经确认");
   const repos = row.repos as unknown[];
   if ((workspaceMode === "plain-dirs" && repos.length > 0) || (workspaceMode !== "plain-dirs" && repos.length === 0)) throw new Error("创建意图与工作区模式不符");
-  return { ...(value as CreationIntent), workspaceMode };
+  // [Pencil T08] #143: the persisted per-repository state must keep its exact
+  // shape. A failed repository must carry a named code; a created one must not
+  // keep a stale failure that would read as "still failing".
+  let repoStates: Record<string, RepoProvisionState> | undefined;
+  if (row.repoStates !== undefined) {
+    if (!row.repoStates || typeof row.repoStates !== "object" || Array.isArray(row.repoStates)) throw new Error("仓库状态损坏");
+    const fields = ["repoRoot", "branch", "baseCommit", "worktreePath", "phase", "managed", "createdByPidock"];
+    const codes = new Set<string>(["WORKTREE_FETCH_FAILED", "WORKTREE_BASE_CHANGED", "WORKTREE_BRANCH_ORPHANED", "WORKTREE_BRANCH_DIVERGED",
+      "WORKTREE_BRANCH_HELD_ELSEWHERE", "WORKTREE_ADD_FAILED", "WORKTREE_IDENTITY_MISMATCH", "WORKTREE_SOURCE_CHANGED"]);
+    const parsed: Record<string, RepoProvisionState> = {};
+    for (const [repoDir, raw] of Object.entries(row.repoStates as Record<string, unknown>)) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("仓库状态损坏");
+      const state = raw as Record<string, unknown>;
+      const stateKeys = Object.keys(state);
+      if (stateKeys.some((key) => !fields.includes(key) && key !== "failure" && key !== "previousFailure" && key !== "repoDir") ||
+          fields.some((field) => !stateKeys.includes(field))) throw new Error("仓库状态损坏");
+      // `repoDir` is the map key; when the state carries it too it must agree.
+      if (state.repoDir !== undefined && state.repoDir !== repoDir) throw new Error("仓库状态损坏");
+      if (!["pending", "created", "failed"].includes(String(state.phase)) ||
+          typeof state.managed !== "boolean" || typeof state.createdByPidock !== "boolean") throw new Error("仓库状态损坏");
+      path(state.repoRoot); path(state.worktreePath); string(state.branch);
+      if (!/^[a-f0-9]{40}$/.test(String(state.baseCommit))) throw new Error("仓库状态损坏");
+      if (state.phase === "failed") {
+        const failure = strict(state.failure, ["code", "detail"]);
+        if (!codes.has(String(failure.code))) throw new Error("仓库失败代码损坏");
+        string(failure.detail);
+        if (state.previousFailure !== undefined) {
+          const previous = strict(state.previousFailure, ["code", "detail"]);
+          if (!codes.has(String(previous.code))) throw new Error("仓库失败代码损坏");
+          string(previous.detail);
+        }
+      } else if (state.failure !== undefined || state.previousFailure !== undefined) throw new Error("仓库状态损坏");
+      parsed[repoDir] = state as unknown as RepoProvisionState;
+    }
+    repoStates = parsed;
+  }
+  return { ...(value as CreationIntent), workspaceMode, ...(repoStates ? { repoStates } : {}) };
 }
 
 /** One main instance owns this file; first-write backup witnesses an initialized store. */
@@ -199,6 +337,8 @@ export class CreationIntentStore {
     this.protection.assert(path);
   }
   constructor(private readonly userData: string) {}
+  /** The application data directory this store writes its receipts into. */
+  userDataPath(): string { return this.userData; }
   read(): CreationIntent | null {
     const file = join(this.userData, FILE);
     const regular = (name: string) => { try { if (!lstatSync(name).isFile()) throw new Error("创建意图文件已链接或损坏"); return true; }
@@ -311,9 +451,12 @@ export class ProjectTaskCreation {
     }
     return intent;
   }
-  abandon(id: string, confirmed: boolean): Promise<{ taskId: string; abandoned: true; message: string }> {
+  abandon(id: string, confirmed: boolean, cleanup: AbandonCleanup = "keep"): Promise<{ taskId: string; abandoned: true; message: string;
+    /** Present only for an `owned` cleanup: one row per resource, really touched or really kept. */
+    cleanup?: CleanupResourceResult[] }> {
     return this.run(async () => {
       if (confirmed !== true) throw new Error("放弃本次创建需要显式确认");
+      if (cleanup !== "keep" && cleanup !== "owned") throw new Error("放弃创建的清理范围无效");
       const intent = this.store.read();
       if (!intent || intent.id !== id) throw new Error("创建意图已改变，请重新读取");
       if (intent.state === "complete") throw new Error("已完成任务不能放弃");
@@ -336,10 +479,137 @@ export class ProjectTaskCreation {
           throw new Error("任务归属身份需要人工修复，未能放弃本次创建");
         }
       }
+      // [Pencil T08] #143: the ownership proof is captured BEFORE the receipt
+      // and the `.pidock-creation` marker are written away, so a cleanup can
+      // only ever touch resources this creation really made.
+      const ownedTaskDir = this.ownsTaskDir(intent);
       await this.store.abandon(intent);
-      return { taskId: intent.taskId, abandoned: true,
-        message: "本次创建已放弃。已产生的任务目录、工作区、链接与会话均已保留；如任务记录已存在，该任务现为未归属任务。" };
+      const cleanupResults = cleanup === "owned" ? this.removeOwnedResources(intent, ownedTaskDir) : [];
+      if (cleanup === "owned") this.writeCleanupReceipt(intent, cleanupResults);
+      return { taskId: intent.taskId, abandoned: true, ...(cleanup === "owned" ? { cleanup: cleanupResults } : {}),
+        message: summarizeCleanup(cleanupResults, cleanup) };
     });
+  }
+  /**
+   * Ownership of the task folder itself: the `.pidock-creation` marker is a
+   * regular file whose content is THIS intent's id. Anything else (another
+   * creation's marker, a symlink, a real user folder in the way) is not ours,
+   * and every cleanup below is refused for it.
+   */
+  private ownsTaskDir(intent: CreationIntent): boolean {
+    try { return matchesMarker(intent.taskDir, ".pidock-creation", intent.id); }
+    catch { return false; }
+  }
+  /**
+   * Remove only resources whose ownership AND identity are confirmed: a
+   * worktree registered in this source repository at this task path and on the
+   * task branch, the task branch itself only while it sits on the pinned
+   * commit and no worktree holds it, an in-task link whose target is still the
+   * recorded source, the task folder only when only owned files remain, and
+   * the created root only when it is empty. The user's source checkout is
+   * never a target: every path is inside the task folder or the root.
+   *
+   * A per-resource failure is reported and does not abort the rest: the state
+   * stays explainable (which resource is left, and why).
+   */
+  private removeOwnedResources(intent: CreationIntent, ownedTaskDir: boolean): CleanupResourceResult[] {
+    const results: CleanupResourceResult[] = [];
+    if (!ownedTaskDir) {
+      return [{ resource: "任务目录", path: intent.taskDir, action: "kept", reason: "任务创建标记不匹配，拒绝清理任何资源" }];
+    }
+    if (intent.workspaceMode !== "existing-git") {
+      for (const repo of intent.repos) {
+        const target = join(intent.taskDir, repo.repoDir);
+        const worktreeResource = `工作树 ${repo.repoDir}`;
+        if (!safelyPresent(target)) continue;
+        const registered = (() => { try { return registeredWorktreeBranch(repo.path, target); } catch { return null; } })();
+        if (registered !== intent.branch) {
+          // A failed `worktree add` can leave an EMPTY folder behind. It is
+          // inside this creation's own task folder and holds nothing, so it is
+          // removed; anything else at that path is kept and named.
+          try {
+            if (readdirSync(target).length === 0) { rmdirSync(target); results.push({ resource: worktreeResource, path: target, action: "removed" }); continue; }
+          } catch { /* fall through to the kept row */ }
+          results.push({ resource: worktreeResource, path: target, action: "kept", reason: "未登记在来源仓库的任务分支上，无法确认归属" });
+          continue;
+        }
+        const removed = tryGit(repo.path, ["worktree", "remove", target]);
+        if (!removed.ok) {
+          results.push({ resource: worktreeResource, path: target, action: "failed",
+            reason: `${removed.stderr || "工作树含未提交改动"}；可人工处理后重试清理` });
+          continue;
+        }
+        results.push({ resource: worktreeResource, path: target, action: "removed" });
+        const branchResource = `任务分支 ${intent.branch}`;
+        const ref = optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]);
+        if (ref === null) continue;
+        if (ref !== repo.commit) {
+          results.push({ resource: branchResource, path: repo.path, action: "kept", reason: "分支已不在固定提交上（可能含用户提交）" });
+          continue;
+        }
+        if (worktreeHolders(repo.path, intent.branch).length > 0) {
+          results.push({ resource: branchResource, path: repo.path, action: "kept", reason: "分支仍被工作树占用" });
+          continue;
+        }
+        const deleted = tryGit(repo.path, ["branch", "-D", intent.branch]);
+        results.push(deleted.ok
+          ? { resource: branchResource, path: repo.path, action: "removed" }
+          : { resource: branchResource, path: repo.path, action: "failed", reason: deleted.stderr || "删除任务分支失败" });
+      }
+    }
+    for (const dir of intent.directories) {
+      const target = join(intent.taskDir, dir.linkName);
+      const resource = `目录链接 ${dir.linkName}`;
+      try {
+        if (!lstatSync(target).isSymbolicLink()) { results.push({ resource, path: target, action: "kept", reason: "不是本应用建立的链接" }); continue; }
+        if (!linkTargetMatches(readlinkSync(target), dir.path)) { results.push({ resource, path: target, action: "kept", reason: "链接目标已改变" }); continue; }
+        unlinkSync(target);
+        results.push({ resource, path: target, action: "removed" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        results.push({ resource, path: target, action: "failed", reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    // The task folder is removed only when nothing but this creation's own
+    // marker remains: a folder still holding a worktree that could not be
+    // removed (or a task record) is left and named.
+    try {
+      const remaining = readdirSync(intent.taskDir).filter((name) => name !== ".pidock-creation");
+      if (remaining.length > 0) {
+        results.push({ resource: "任务目录", path: intent.taskDir, action: "kept", reason: `仍含 ${remaining.length} 个未清理项：${remaining.slice(0, 5).join("、")}` });
+      } else {
+        // The abandon receipt already removed the ownership marker; only an
+        // empty task folder is removed here, never one that still holds work.
+        rmSync(join(intent.taskDir, ".pidock-creation"), { force: true });
+        rmdirSync(intent.taskDir);
+        results.push({ resource: "任务目录", path: intent.taskDir, action: "removed" });
+        if (intent.rootDevice !== null && matchesMarker(intent.root, CREATED_ROOT_MARKER, intent.id)) {
+          try {
+            if (readdirSync(intent.root).length === 0) { rmdirSync(intent.root); results.push({ resource: "任务根", path: intent.root, action: "removed" }); }
+            else results.push({ resource: "任务根", path: intent.root, action: "kept", reason: "任务根内仍有其它内容" });
+          } catch { /* the root is not this cleanup's problem */ }
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        results.push({ resource: "任务目录", path: intent.taskDir, action: "failed", reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return results;
+  }
+  /** Per-resource cleanup receipt, so a partial cleanup stays explainable after a restart. */
+  private writeCleanupReceipt(intent: CreationIntent, results: CleanupResourceResult[]): void {
+    const file = join(this.store.userDataPath(), `task-creation-cleanup-${intent.id}.json`);
+    const payload = JSON.stringify({ version: 1, intentId: intent.id, taskId: intent.taskId,
+      removed: results.filter((row) => row.action === "removed").map((row) => row.resource),
+      kept: results.filter((row) => row.action === "kept").map((row) => ({ resource: row.resource, reason: row.reason ?? "" })),
+      failed: results.filter((row) => row.action === "failed").map((row) => ({ resource: row.resource, reason: row.reason ?? "" })),
+      partialFailure: results.some((row) => row.action === "failed"), at: new Date().toISOString() });
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    const fd = openSync(tmp, "wx", 0o600);
+    try { writeFileSync(fd, payload); fsyncSync(fd); } finally { closeSync(fd); }
+    renameSync(tmp, file);
+    syncDirectory(this.store.userDataPath());
   }
   prepare(input: CreationRequest, selectedRoot?: string): Promise<CreationIntent> {
     return this.run(async () => {
@@ -437,6 +707,108 @@ export class ProjectTaskCreation {
     return this.run(async () => {
       const intent = this.store.read();
       if (!intent || intent.id !== id) throw new Error("创建意图已改变，请重新读取");
+      return this.commitIntent(intent, false);
+    });
+  }
+  /**
+   * [Pencil T08] #143 recovery entry point: retry the repositories that are
+   * still failing. The retry set is proven from the disk (a repository whose
+   * worktree already exists and matches is `created` and is NOT touched), so a
+   * retry never re-creates a successful copy. `adoptOrphanBranches` is the
+   * explicit choice for a task branch that exists without a worktree; without
+   * it the orphan stays a named refusal with both options spelled out.
+   */
+  retry(id: string, adoptOrphanBranches = false): Promise<{ taskId: string; projectId: string; retried: string[] }> {
+    return this.run(async () => {
+      const intent = this.store.read();
+      if (!intent || intent.id !== id) throw new Error("创建意图已改变，请重新读取");
+      const status = this.statusOf(intent);
+      if (!status.canRetry) throw new Error("当前创建的所有仓库都已创建，无需重试；请直接提交或放弃本次创建");
+      const retried = status.repos.filter((row) => row.phase === "failed").map((row) => row.repoDir);
+      const result = await this.commitIntent(intent, adoptOrphanBranches);
+      return { ...result, retried };
+    });
+  }
+  /** Read-only per-repository recovery state of the pending creation. */
+  status(): Promise<CreationStatus> {
+    return this.run(async () => {
+      const intent = this.store.read();
+      if (!intent) {
+        return { intent: null, repos: [], directories: [], canRetry: false, canAdoptOrphans: false, createdRepos: 0, message: "没有待重建的任务" };
+      }
+      return this.statusOf(intent);
+    });
+  }
+  /**
+   * Derive every repository's state from what the disk really says now, with the
+   * persisted state as the restart fallback. Nothing is fabricated: a repository
+   * that was never attempted stays `pending`, one whose worktree was made stays
+   * `created`, and one that failed keeps its named code after a restart.
+   */
+  private statusOf(intent: CreationIntent): CreationStatus {
+    const seed = (repo: Repo): RepoSeed => ({ repoDir: repo.repoDir, repoRoot: repo.path, branch: intent.branch,
+      baseCommit: repo.commit, worktreePath: join(intent.taskDir, repo.repoDir), createdByPidock: true });
+    const observations = new Map<string, RepoObservation>();
+    for (const repo of intent.repos) observations.set(repo.repoDir, this.observeRepo(intent, repo));
+    const repos: CreationRepoStatus[] = intent.repos.map((repo) => {
+      const observation = observations.get(repo.repoDir);
+      const recorded = intent.repoStates?.[repo.repoDir];
+      const state = deriveRepoState(seed(repo), recorded, observation);
+      return { ...state,
+        ...(recorded?.previousFailure && recorded.previousFailure.code !== state.failure?.code
+          ? { previousFailure: recorded.previousFailure } : {}), repoDir: repo.repoDir, label: state.phase === "created" ? "已创建" : state.phase === "failed" ? "失败" : "待准备",
+        ...(observation?.orphan ? { orphan: observation.orphan } : {}) };
+    });
+    // An interrupted creation (a crash before any repository was attempted) and
+    // a partial one (some repositories failed) both have work left: `canRetry`
+    // means "not every repository is created", never "at least one failed".
+    const canRetry = repos.some((row) => row.phase !== "created");
+    const anyFailed = repos.some((row) => row.phase === "failed");
+    const canAdoptOrphans = repos.some((row) => row.orphan?.adoptable === true);
+    return {
+      intent: { id: intent.id, taskId: intent.taskId, name: intent.name, taskDir: intent.taskDir, root: intent.root,
+        branch: intent.branch, state: intent.state, workspaceMode: intent.workspaceMode ?? "worktree" },
+      repos,
+      directories: intent.directories.map((dir) => ({ id: dir.id, name: dir.name, path: dir.path, linkName: dir.linkName,
+        linkPresent: (() => { try { return lstatSync(join(intent.taskDir, dir.linkName)).isSymbolicLink(); } catch { return false; } })() })),
+      canRetry,
+      canAdoptOrphans,
+      createdRepos: createdRepoCount(repos),
+      message: anyFailed
+        ? summarizePartialFailure(repos.map((row) => ({ repoDir: row.repoDir, state: row })))
+        : canRetry ? "创建被中断：仓库工作副本尚未全部准备，可继续创建" : "本次创建的仓库工作副本均已准备好",
+    };
+  }
+  /** Real, read-only observation of one repository's worktree/branch state. */
+  private observeRepo(intent: CreationIntent, repo: Repo): RepoObservation {
+    if (intent.workspaceMode === "existing-git") return { worktreeIdentityOk: true };
+    const target = join(intent.taskDir, repo.repoDir);
+    if (pathPresent(target)) {
+      try {
+        if (!lstatSync(target).isDirectory() || realpathSync(target) !== join(realpathSync(intent.taskDir), repo.repoDir) ||
+            git(target, ["merge-base", "--is-ancestor", repo.commit, "HEAD"]) !== "" ||
+            git(target, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${intent.branch}` || gitCommonDir(target) !== repo.commonDir) {
+          return { worktreeIdentityOk: false, failure: { code: "WORKTREE_IDENTITY_MISMATCH",
+            detail: `工作树 ${target} 与固定任务提交或来源不同，需要明确修复` } };
+        }
+        return { worktreeIdentityOk: true };
+      } catch (error) {
+        return { worktreeIdentityOk: false, failure: { code: "WORKTREE_IDENTITY_MISMATCH",
+          detail: `工作树 ${target} 不可读取：${error instanceof Error ? error.message : String(error)}` } };
+      }
+    }
+    const ref = optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]);
+    if (ref === null) return { worktreeIdentityOk: false };
+    let holders: string[] = [];
+    try { holders = worktreeHolders(repo.path, intent.branch); } catch { holders = []; }
+    if (holders.length > 0) {
+      return { worktreeIdentityOk: false, failure: { code: "WORKTREE_BRANCH_HELD_ELSEWHERE",
+        detail: `任务分支已存在（${intent.branch}）且已被工作树 ${holders.join("、")} 占用，拒绝接管` } };
+    }
+    return { worktreeIdentityOk: false, orphan: { commit: ref, adoptable: ref === repo.commit } };
+  }
+  private async commitIntent(intent: CreationIntent, adoptOrphanBranches: boolean): Promise<{ taskId: string; projectId: string }> {
+    {
       if (intent.state === "abandoned") throw new Error("创建意图已放弃；本次没有删除任务目录、工作区、链接或会话，已有任务记录现为未归属任务。请重新创建任务");
       this.store.assertTaskPath(intent.taskDir);
       for (const source of [...intent.repos, ...intent.directories]) this.store.assertTaskPath(source.path);
@@ -506,32 +878,95 @@ export class ProjectTaskCreation {
         // Validate every missing repository's fresh fetch before creating any new worktree.
         // Existing-Git-dir mode has no worktree phase at all: it never creates
         // `.worktrees/`, a task branch or a checkout in the original.
+        // [Pencil T08] #143: each repository is its own unit. A repository whose
+        // worktree already exists and matches is `created` and is never fetched
+        // or re-created; the failing ones carry a named code. Phase 1 validates
+        // every missing repository's fresh fetch, pin and task-branch state
+        // before ANY new worktree is made (a fetch failure still creates
+        // nothing), phase 2 makes the worktrees independently so one failure
+        // leaves the successful copies in place.
+        const worktreeRepos = intent.workspaceMode === "existing-git" ? [] : intent.repos;
+        const repoStates: Record<string, RepoProvisionState> = { ...(intent.repoStates ?? {}) };
+        const seedOf = (repo: Repo): RepoSeed => ({ repoDir: repo.repoDir, repoRoot: repo.path, branch: intent.branch,
+          baseCommit: repo.commit, worktreePath: join(intent.taskDir, repo.repoDir), createdByPidock: true });
+        const failures: RepoFailure[] = [];
+        const recordFailure = (repo: Repo, failure: RepoFailure): void => {
+          failures.push(failure);
+          // A different failure on a retry is recorded ALONGSIDE the earlier
+          // one: the original evidence is never silently replaced.
+          const prior = repoStates[repo.repoDir]?.failure;
+          repoStates[repo.repoDir] = { ...seedOf(repo), phase: "failed", failure,
+            ...(prior && prior.code !== failure.code ? { previousFailure: prior } : {}), managed: true, createdByPidock: true };
+        };
+        const recordCreated = (repo: Repo): void => {
+          repoStates[repo.repoDir] = { ...seedOf(repo), phase: "created", managed: true, createdByPidock: true };
+        };
+        const refuseIfFailed = (): void => {
+          if (failures.length === 0) return;
+          intent.repoStates = repoStates;
+          this.store.write(intent);
+          throw new Error(summarizePartialFailure(worktreeRepos.map((repo) => ({ repoDir: repo.repoDir,
+            state: repoStates[repo.repoDir] ?? deriveRepoState(seedOf(repo), undefined, undefined) }))));
+        };
         const missingRepos: Repo[] = [];
-        for (const repo of (intent.workspaceMode === "existing-git" ? [] : intent.repos)) {
+        const adoptableOrphans: Repo[] = [];
+        for (const repo of worktreeRepos) {
           const target = join(intent.taskDir, repo.repoDir);
           if (existsSync(target)) {
-            if (!lstatSync(target).isDirectory() || realpathSync(target) !== join(realpathSync(intent.taskDir), repo.repoDir) ||
-                git(target, ["merge-base", "--is-ancestor", repo.commit, "HEAD"]) !== "" ||
-                git(target, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${intent.branch}` || gitCommonDir(target) !== repo.commonDir) {
-              throw new Error("工作树与固定任务提交不符");
-            }
-            continue;
+            try {
+              if (!lstatSync(target).isDirectory() || realpathSync(target) !== join(realpathSync(intent.taskDir), repo.repoDir) ||
+                  git(target, ["merge-base", "--is-ancestor", repo.commit, "HEAD"]) !== "" ||
+                  git(target, ["symbolic-ref", "--quiet", "HEAD"]) !== `refs/heads/${intent.branch}` || gitCommonDir(target) !== repo.commonDir) {
+                throw new RepoFailureError("WORKTREE_IDENTITY_MISMATCH", `工作树与固定任务提交不符（${repo.repoDir}）`);
+              }
+              recordCreated(repo);
+              continue;
+            } catch (error) { recordFailure(repo, asRepoFailure(error, repo, "WORKTREE_IDENTITY_MISMATCH", "工作树校验失败")); continue; }
           }
-          fetchPinnedBaseline(repo);
-          if (git(repo.path, ["rev-parse", "FETCH_HEAD"]) !== repo.commit) throw new Error("远程分支已变化，不使用旧基线");
-          if (optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]) !== null) throw new Error(TASK_BRANCH_EXISTS_NO_WORKTREE);
-          missingRepos.push(repo);
+          try {
+            fetchPinnedBaseline(repo);
+            if (git(repo.path, ["rev-parse", "FETCH_HEAD"]) !== repo.commit) {
+              throw new RepoFailureError("WORKTREE_BASE_CHANGED", `远程分支已变化，不使用旧基线（${repo.repoDir} 的 ${repo.remote}/${repo.remoteBranch}）`);
+            }
+            const existing = optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]);
+            if (existing !== null) {
+              if (existing !== repo.commit) {
+                throw new RepoFailureError("WORKTREE_BRANCH_DIVERGED", `任务分支已存在（${intent.branch}）但不在固定提交 ${repo.commit} 上（实际 ${existing}），拒绝接管`);
+              }
+              const holders = worktreeHolders(repo.path, intent.branch);
+              if (holders.length > 0) {
+                throw new RepoFailureError("WORKTREE_BRANCH_HELD_ELSEWHERE", `任务分支已存在（${intent.branch}）且已被工作树 ${holders.join("、")} 占用，拒绝接管`);
+              }
+              if (adoptOrphanBranches !== true) {
+                throw new RepoFailureError("WORKTREE_BRANCH_ORPHANED", `任务分支已存在（${intent.branch}）但工作树不在 ${target}；可显式接管该分支（同一固定提交）、或放弃本次创建并清理该分支，不会自动接管`);
+              }
+              adoptableOrphans.push(repo);
+              continue;
+            }
+            missingRepos.push(repo);
+          } catch (error) { recordFailure(repo, asRepoFailure(error, repo, "WORKTREE_FETCH_FAILED", "获取或校验失败")); }
         }
+        refuseIfFailed();
         for (const repo of missingRepos) {
-          git(repo.path, ["worktree", "add", "-b", intent.branch, join(intent.taskDir, repo.repoDir), repo.commit]);
+          try { git(repo.path, ["worktree", "add", "-b", intent.branch, join(intent.taskDir, repo.repoDir), repo.commit]); }
+          catch (error) { recordFailure(repo, asRepoFailure(error, repo, "WORKTREE_ADD_FAILED", "工作树创建失败")); }
         }
+        for (const repo of adoptableOrphans) {
+          try { git(repo.path, ["worktree", "add", join(intent.taskDir, repo.repoDir), intent.branch]); }
+          catch (error) { recordFailure(repo, asRepoFailure(error, repo, "WORKTREE_ADD_FAILED", "接管已有任务分支失败")); }
+        }
+        refuseIfFailed();
         // [Pencil T07] #142: read back the checkout THIS creation produced (or
         // verified on a retry) and keep that observation for the record. Read
         // inside the lock so no competing creation can swap the checkout
         // between `worktree add` and the recorded identity.
-        for (const repo of (intent.workspaceMode === "existing-git" ? [] : intent.repos)) {
-          checkoutIdentities[repo.repoDir] = observeCheckout(join(intent.taskDir, repo.repoDir), intent.branch);
+        for (const repo of worktreeRepos) {
+          if (repoStates[repo.repoDir]?.phase === "failed") continue;
+          try { checkoutIdentities[repo.repoDir] = observeCheckout(join(intent.taskDir, repo.repoDir), intent.branch); recordCreated(repo); }
+          catch (error) { recordFailure(repo, asRepoFailure(error, repo, "WORKTREE_IDENTITY_MISMATCH", "工作副本身份不符")); }
         }
+        refuseIfFailed();
+        if (Object.keys(repoStates).length > 0) intent.repoStates = repoStates;
       } finally {
         // Released on success, on refusal and on every throw; a crash leaves the
         // named stale-lock policy (`worktree-metadata-lock.ts`) to clear it.
@@ -623,6 +1058,6 @@ export class ProjectTaskCreation {
       else if (association.state !== "assigned" || association.projectId !== intent.projectId) throw new Error("任务归属身份冲突，需要人工修复");
       intent.state = "complete"; this.store.write(intent);
       return { taskId: intent.taskId, projectId: intent.projectId };
-    });
+    }
   }
 }

@@ -35,12 +35,16 @@ const VERIFICATION_LABELS: Record<WorkspaceVerificationView["state"], string> = 
   missing: "来源缺失",
   mismatch: "身份不符",
   "repair-required": "待修复",
+  "branch-mismatch": "分支不符 · 需修复",
+  "base-mismatch": "基线不符 · 需修复",
 };
 const VERIFICATION_STYLE: Record<WorkspaceVerificationView["state"], string> = {
   ready: "border-line text-muted",
   missing: "border-[#e6c9c3] text-[#ad4545]",
   mismatch: "border-[#e6c9c3] text-[#ad4545]",
   "repair-required": "border-[#dfc99f] text-[#9a6032]",
+  "branch-mismatch": "border-[#e6c9c3] text-[#ad4545]",
+  "base-mismatch": "border-[#e6c9c3] text-[#ad4545]",
 };
 
 function rootBadge(root: WorkspaceRootView): string {

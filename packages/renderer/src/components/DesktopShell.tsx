@@ -28,7 +28,7 @@ import { Icon, type IconName } from "./Icon";
 import { BrandMark, LocalUserAvatar } from "./ui";
 import { desktopSummarySegments, type DesktopSummarySegment } from "../data/desktopShellSummary";
 import { hostText } from "../data/workspaceFiles";
-import { readTaskSessions, type SessionList } from "../data/taskSessions";
+import { readTaskSessions, subscribeSessionWrites, type SessionList } from "../data/taskSessions";
 
 export interface DesktopShellTask {
   taskId: string;
@@ -141,6 +141,17 @@ function TaskNavCard({ task, selected, onSelect }: { task: DesktopShellTask; sel
  */
 function TaskSessionRows({ taskId, activeSessionId, onOpen }: { taskId: string; activeSessionId: string | null; onOpen: (sessionId: string) => void }) {
   const [state, setState] = useState<{ phase: "reading" } | { phase: "read"; list: SessionList } | { phase: "failed"; error: string }>({ phase: "reading" });
+  /**
+   * [#139] Re-read after every session write, not only when `taskId` changes.
+   * The evidence caught a new session missing from these rows until the task was
+   * re-selected. `taskSessions` announces each accepted write (create / rename /
+   * archive / restore / delete / activate) and this row list — which is not the
+   * writer — reloads the Host's index on that signal.
+   */
+  const [writeRevision, setWriteRevision] = useState(0);
+  useEffect(() => subscribeSessionWrites((written) => {
+    if (written === taskId) setWriteRevision((value) => value + 1);
+  }), [taskId]);
   useEffect(() => {
     let live = true;
     setState({ phase: "reading" });
@@ -149,7 +160,7 @@ function TaskSessionRows({ taskId, activeSessionId, onOpen }: { taskId: string; 
       setState(result.ok ? { phase: "read", list: result.list } : { phase: "failed", error: result.error });
     });
     return () => { live = false; };
-  }, [taskId]);
+  }, [taskId, writeRevision]);
   if (state.phase === "reading") return <p className="mb-1 ml-[27px] text-[10px] text-muted">正在读取会话…</p>;
   if (state.phase === "failed") return <p role="status" className="mb-1 ml-[27px] text-[10px] text-[#9a6032]">会话列表读取失败：{state.error}</p>;
   const visible = state.list.sessions.filter((session) => !session.archived);

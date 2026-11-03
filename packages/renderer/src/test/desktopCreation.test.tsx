@@ -43,6 +43,54 @@ describe("Desktop task creation", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project.id, intent.taskId));
     expect(createTask.mock.calls.filter(([request]) => request.op === "commit")).toHaveLength(1);
   });
+  it("shows the persisted per-repository failure, adopts only on request, and abandons with an explicit cleanup scope", async () => {
+    const baseCommit = "b".repeat(40);
+    const createTask = vi.fn(async (request: { op: string; id?: string; cleanup?: string; adoptOrphanBranches?: boolean }) => {
+      if (request.op === "current") return { ok: true, payload: null };
+      if (request.op === "prepare") return { ok: true, payload: { canceled: false, intent } };
+      if (request.op === "commit") return { ok: false, error: "部分仓库创建失败：repo-web 已创建（保留）；repo-docs 失败：WORKTREE_BRANCH_ORPHANED" };
+      if (request.op === "status") return { ok: true, payload: {
+        intent: { id: intent.id, taskId: intent.taskId, name: intent.name, taskDir: intent.taskDir, root: intent.root,
+          branch: intent.branch, state: "pending", workspaceMode: "worktree" },
+        repos: [
+          { repoDir: "repo-web", phase: "created", label: "已创建", branch: "task/abc", baseCommit, worktreePath: `${intent.taskDir}/repo-web`,
+            managed: true, createdByPidock: true },
+          { repoDir: "repo-docs", phase: "failed", label: "失败", branch: "task/abc", baseCommit, worktreePath: `${intent.taskDir}/repo-docs`,
+            managed: true, createdByPidock: true, orphan: { commit: baseCommit, adoptable: true },
+            failure: { code: "WORKTREE_BRANCH_ORPHANED", detail: "任务分支已存在但工作树不在原位置" },
+            previousFailure: { code: "WORKTREE_FETCH_FAILED", detail: "远程分支不存在或已删除" } },
+        ],
+        directories: [], canRetry: true, canAdoptOrphans: true, createdRepos: 1,
+        message: "部分仓库创建失败：repo-web 已创建（保留）；repo-docs 失败",
+      } };
+      if (request.op === "retry") return { ok: true, payload: { taskId: intent.taskId, projectId: project.id, retried: ["repo-docs"] } };
+      return { ok: true, payload: { taskId: intent.taskId, projectId: project.id, abandoned: true, message: "本次创建已放弃。" } };
+    });
+    render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={async () => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "任务" }));
+    fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "Work" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Web" }));
+    fireEvent.change(screen.getByLabelText("远程名称"), { target: { value: "origin" } });
+    fireEvent.change(screen.getByLabelText("远程分支"), { target: { value: "main" } });
+    fireEvent.click(screen.getByRole("button", { name: "固定基线并预览路径" }));
+    await screen.findByText(intent.taskDir);
+    fireEvent.click(screen.getByRole("button", { name: "确认创建 / 恢复" }));
+    // The refusal is shown verbatim and the real state is read back with the
+    // exact-key `status` operation.
+    expect((await screen.findAllByText(/部分仓库创建失败/)).length).toBeGreaterThan(0);
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "status" }));
+    const states = await screen.findByRole("region", { name: "仓库准备状态" });
+    expect(states).toHaveTextContent("repo-web · 已创建");
+    expect(states).toHaveTextContent("repo-docs · 失败");
+    expect(states).toHaveTextContent("WORKTREE_BRANCH_ORPHANED");
+    expect(states).toHaveTextContent("上一次 WORKTREE_FETCH_FAILED");
+    expect(states).toHaveTextContent("可显式接管");
+    expect(states).toHaveTextContent("已创建 1/2");
+    // The adopt choice is explicit: retry carries it only when checked.
+    fireEvent.click(screen.getByRole("button", { name: "只重试失败仓库" }));
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith({ op: "retry", id: intent.id, adoptOrphanBranches: false }));
+  });
+
   it("names a blank field in the path preview instead of printing an empty path segment", async () => {
     // `parse` in `desktopCreation.ts` requires the intent's own `name` to be
     // non-empty and type-checks (only) a repo's `commit`/`repoDir`/`name` and a

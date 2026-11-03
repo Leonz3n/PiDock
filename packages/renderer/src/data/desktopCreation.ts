@@ -65,8 +65,16 @@ export async function prepareCreation(bridge: PidockBridge, input: CreationInput
  * and sessions stay). The caller shows that sentence: the user has to know the
  * half-made workspace is still there before creating a replacement.
  */
-export async function abandonCreation(bridge: PidockBridge, id: string): Promise<string> {
-  const value = await request(bridge, { op: "abandon", id, confirmed: true });
+/**
+ * [Pencil T08]: which resources an abandon touches. `keep` is the
+ * historical behaviour (nothing is deleted); `owned` removes only resources
+ * whose ownership and identity main confirms and never the user's source.
+ */
+export type AbandonCleanupView = "keep" | "owned";
+export async function abandonCreation(bridge: PidockBridge, id: string, cleanup: AbandonCleanupView = "keep"): Promise<string> {
+  // `cleanup` is sent only when it changes the default: a keep abandon keeps
+  // the exact request surface it always had.
+  const value = await request(bridge, { op: "abandon", id, confirmed: true, ...(cleanup === "owned" ? { cleanup } : {}) });
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("放弃创建结果返回异常，请重读确认");
   const row = value as Record<string, unknown>;
   if (row.abandoned !== true || typeof row.message !== "string" || !row.message) throw new Error("放弃创建结果返回异常，请重读确认");
@@ -76,4 +84,103 @@ export async function commitCreation(bridge: PidockBridge, id: string): Promise<
   const value = await request(bridge, { op: "commit", id });
   if (!value || typeof value !== "object" || !("taskId" in value) || typeof value.taskId !== "string") throw new Error("本机任务创建结果返回异常，请重读确认");
   return value.taskId;
+}
+
+/** [Pencil T08]: one repository's real provisioning state. */
+export type RepoPhaseView = "pending" | "created" | "failed";
+export interface CreationRepoStatusView {
+  repoDir: string;
+  phase: RepoPhaseView;
+  label: string;
+  branch: string;
+  baseCommit: string;
+  worktreePath: string;
+  managed: boolean;
+  createdByPidock: boolean;
+  failure?: { code: string; detail: string };
+  previousFailure?: { code: string; detail: string };
+  orphan?: { commit: string; adoptable: boolean };
+}
+export interface CreationStatusView {
+  intent: { id: string; taskId: string; name: string; taskDir: string; root: string; branch: string;
+    state: "pending" | "complete" | "abandoned"; workspaceMode: WorkspaceModeView } | null;
+  repos: CreationRepoStatusView[];
+  directories: { id: string; name: string; path: string; linkName: string; linkPresent: boolean }[];
+  canRetry: boolean;
+  canAdoptOrphans: boolean;
+  createdRepos: number;
+  message: string;
+}
+function repoStatus(value: unknown): CreationRepoStatusView {
+  const row = value as Record<string, unknown>;
+  if (!row || typeof row !== "object" || typeof row.repoDir !== "string" || !row.repoDir ||
+      (row.phase !== "pending" && row.phase !== "created" && row.phase !== "failed") ||
+      typeof row.branch !== "string" || typeof row.worktreePath !== "string" || typeof row.baseCommit !== "string" ||
+      typeof row.managed !== "boolean" || typeof row.createdByPidock !== "boolean") {
+    throw new Error("任务准备状态返回异常");
+  }
+  // A failed row MUST carry its named code: an unnamed failure is a broken
+  // payload, never a bare "失败" the surface would have to guess about.
+  const failure = row.phase === "failed" ? failureView(row.failure) : undefined;
+  if (row.phase === "failed" && !failure) throw new Error("任务准备状态返回异常");
+  return {
+    repoDir: row.repoDir as string, phase: row.phase as RepoPhaseView,
+    label: typeof row.label === "string" && row.label ? row.label : row.phase,
+    branch: row.branch as string, baseCommit: row.baseCommit as string, worktreePath: row.worktreePath as string,
+    managed: row.managed as boolean, createdByPidock: row.createdByPidock as boolean,
+    ...(failure ? { failure } : {}),
+    ...(failureView(row.previousFailure) ? { previousFailure: failureView(row.previousFailure)! } : {}),
+    ...(orphanView(row.orphan) ? { orphan: orphanView(row.orphan)! } : {}),
+  };
+}
+function failureView(value: unknown): { code: string; detail: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.code !== "string" || !row.code || typeof row.detail !== "string" || !row.detail) return undefined;
+  return { code: row.code, detail: row.detail };
+}
+function orphanView(value: unknown): { commit: string; adoptable: boolean } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.commit !== "string" || typeof row.adoptable !== "boolean") return undefined;
+  return { commit: row.commit, adoptable: row.adoptable };
+}
+/** Read-only per-repository recovery state; never derived from the page. */
+export async function creationStatus(bridge: PidockBridge): Promise<CreationStatusView> {
+  const value = await request(bridge, { op: "status" });
+  const row = value as Record<string, unknown> | null;
+  if (!row || typeof row !== "object" || Array.isArray(row) || !Array.isArray(row.repos) ||
+      typeof row.canRetry !== "boolean" || typeof row.canAdoptOrphans !== "boolean" ||
+      typeof row.createdRepos !== "number" || typeof row.message !== "string" || row.message.length === 0) {
+    throw new Error("任务准备状态返回异常");
+  }
+  const intent = row.intent === null ? null : row.intent as Record<string, unknown>;
+  if (intent !== null && (typeof intent !== "object" || typeof intent.taskId !== "string" || typeof intent.taskDir !== "string")) {
+    throw new Error("任务准备状态返回异常");
+  }
+  return {
+    intent: intent === null ? null : { id: String(intent.id), taskId: String(intent.taskId), name: String(intent.name),
+      taskDir: String(intent.taskDir), root: String(intent.root), branch: String(intent.branch),
+      state: (intent.state === "complete" || intent.state === "abandoned" ? intent.state : "pending"),
+      workspaceMode: (intent.workspaceMode === "existing-git" || intent.workspaceMode === "plain-dirs" ? intent.workspaceMode : "worktree") },
+    repos: row.repos.map((entry) => repoStatus(entry)),
+    directories: Array.isArray(row.directories) ? row.directories.map((entry) => {
+      const dir = entry as Record<string, unknown>;
+      return { id: String(dir.id), name: String(dir.name), path: String(dir.path), linkName: String(dir.linkName), linkPresent: dir.linkPresent === true };
+    }) : [],
+    canRetry: row.canRetry, canAdoptOrphans: row.canAdoptOrphans, createdRepos: row.createdRepos, message: row.message,
+  };
+}
+/**
+ * Retry ONLY the failing repositories (main proves the set from the disk).
+ * `adoptOrphanBranches` is the explicit adopt choice for a task branch that
+ * exists without a worktree; main never adopts one on its own.
+ */
+export async function retryCreation(bridge: PidockBridge, id: string, adoptOrphanBranches = false): Promise<{ taskId: string; retried: string[] }> {
+  const value = await request(bridge, { op: "retry", id, adoptOrphanBranches });
+  const row = value as Record<string, unknown>;
+  if (!row || typeof row !== "object" || typeof row.taskId !== "string" || !Array.isArray(row.retried)) {
+    throw new Error("任务准备恢复结果返回异常，请重读确认");
+  }
+  return { taskId: row.taskId, retried: row.retried.filter((entry): entry is string => typeof entry === "string") };
 }

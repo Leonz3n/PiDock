@@ -50,7 +50,7 @@ export interface PidockBridge {
    */
   projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer" | "status" | "recover" | "verifySources" | "blockers"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string; confirmed?: boolean }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   serviceCatalogOp?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
-  createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string; confirmed?: boolean }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon" | "status" | "retry"; input?: unknown; id?: string; confirmed?: boolean; cleanup?: "keep" | "owned"; adoptOrphanBranches?: boolean }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
    * [PiDock 03] (#6) production append for an existing task. The page names
    * project repository ids, remote names and baseline branches only: main
