@@ -433,5 +433,7 @@ describe("#149 settings round trip on the production shell", () => {
     expect(screen.getByTestId("desktop-shell")).toBeInTheDocument();
     // No 未接线 placeholder and no forbidden management entry on the way back.
     expect(screen.queryByText(/Extensions|Computer Use|Browser/)).toBeNull();
-  });
+    // A whole-app render plus the production route: this one test mounts the
+    // real shell, so it gets its own bound instead of the 5s unit default.
+  }, 20_000);
 });
