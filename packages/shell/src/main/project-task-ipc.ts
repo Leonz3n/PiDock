@@ -7,9 +7,21 @@ function object(value: unknown): value is Record<string, unknown> {
 function exact(value: Record<string, unknown>, fields: string[]): void {
   if (Object.keys(value).sort().join() !== [...fields].sort().join()) throw new TrustDomainViolation("invalid-payload", "invalid creation operation");
 }
+function exactOptional(value: Record<string, unknown>, required: string[], optional: string[]): void {
+  const keys = Object.keys(value);
+  if (keys.some((key) => !required.includes(key) && !optional.includes(key)) ||
+      required.some((key) => !keys.includes(key))) throw new TrustDomainViolation("invalid-payload", "invalid creation operation");
+}
 function input(value: unknown): CreationRequest {
   if (!object(value)) throw new TrustDomainViolation("invalid-payload", "invalid creation input");
-  exact(value, ["projectId", "name", "repositories", "directoryIds", "sharedWriteConfirmed", "override"]);
+  // [Pencil T02] #137: `workspaceMode` is optional so a legacy caller keeps the
+  // previous auto-worktree behaviour; when present it must be one of the three
+  // real modes (a renderer-only string is refused here, before main).
+  exactOptional(value, ["projectId", "name", "repositories", "directoryIds", "sharedWriteConfirmed", "override"], ["workspaceMode"]);
+  if (value.workspaceMode !== undefined &&
+      value.workspaceMode !== "worktree" && value.workspaceMode !== "existing-git" && value.workspaceMode !== "plain-dirs") {
+    throw new TrustDomainViolation("invalid-payload", "invalid workspace mode");
+  }
   if (typeof value.projectId !== "string" || typeof value.name !== "string" ||
       typeof value.override !== "boolean" || typeof value.sharedWriteConfirmed !== "boolean" ||
       !Array.isArray(value.repositories) || !Array.isArray(value.directoryIds) ||

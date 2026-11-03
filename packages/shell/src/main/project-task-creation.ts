@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { protectApplicationProfile, type TaskPathProtection } from "../host/protected-application-path.js";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { readTaskRecordOnDisk } from "../host/task-store.js";
 import type { HostTaskResult } from "../rpc/protocol.js";
+import { remoteDigest } from "./remote-identity.js";
+import type { WorkspaceMode } from "./workspace-files.js";
 import { createDirectoryLink, linkTargetMatches } from "./directory-link.js";
 import { buildLinkName, buildRepoChildName, checkLinkNameCollisions, REMOTE_NAME } from "./multi-repo-provision.js";
 import type { ProjectRegistry } from "./project-registry.js";
@@ -20,11 +22,19 @@ export interface CreationIntent {
   root: string; rootDevice: string | null; rootInode: string | null; rootRealPath: string | null;
   taskDir: string; branch: string; repos: Repo[]; directories: Directory[];
   sharedWriteConfirmed: boolean; state: "pending" | "complete" | "abandoned";
+  /**
+   * [Pencil T02] #137: how this task treats its Git sources. Optional only for
+   * intents written before the mode existed; `validate`/`current` migrate those
+   * (worktree with repos, plain-directory without) instead of failing them.
+   */
+  workspaceMode?: WorkspaceMode;
 }
 export interface CreationRequest {
   projectId: string; name: string;
   repositories: { sourceId: string; remote: string; remoteBranch: string }[];
   directoryIds: string[]; sharedWriteConfirmed: boolean; override: boolean;
+  /** Absent only on a legacy caller; derived from the selected sources then. */
+  workspaceMode?: WorkspaceMode;
 }
 export interface CreationHost {
   routeTaskOp(params: { taskId: string; op: "task/provision"; payload: Record<string, unknown> }): Promise<HostTaskResult>;
@@ -95,31 +105,6 @@ function git(cwd: string, args: string[]): string {
 function optionalGit(cwd: string, args: string[]): string | null {
   try { return git(cwd, args); } catch { return null; }
 }
-function remoteDigest(url: string): string {
-  if (/^(?:ext::|[^:/]+::|-)/i.test(url) || /[\r\n\0]/.test(url)) throw new Error("不支持的远程传输方式");
-  let transport: string;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
-    let parsed: URL;
-    try { parsed = new URL(url); }
-    catch { throw new Error("不支持的远程传输方式"); }
-    if (!["https:", "http:", "ssh:", "git:", "file:"].includes(parsed.protocol)) throw new Error("不支持的远程传输方式");
-    if (url.includes("?") || url.includes("#")) throw new Error("远程地址含查询或片段参数，无法固定来源身份");
-    const authority = url.match(/^[^:]+:\/\/([^/?#]*)/)?.[1] ?? "";
-    const userinfo = authority.includes("@") ? authority.slice(0, authority.lastIndexOf("@")) : "";
-    // SSH account names select a remote identity; HTTP userinfo and encoded/colon SSH userinfo may carry secrets.
-    if ((parsed.protocol !== "ssh:" && userinfo) || /[:%]/.test(userinfo) || parsed.password) {
-      throw new Error("远程地址含凭据，无法安全固定来源身份");
-    }
-    // URL serialization removes dot segments before Git resolves symlinked path components.
-    transport = url;
-  } else if (/^(?:[^@:]+@)?[^/:]+:.+/.test(url) && !/^[a-z]:[\\/]/i.test(url)) {
-    if (/[?#]/.test(url)) throw new Error("远程地址含查询或片段参数，无法固定来源身份");
-    const account = url.match(/^([^@:]+)@[^/:]+:.+/)?.[1];
-    if (account?.includes("%")) throw new Error("远程地址含凭据，无法安全固定来源身份");
-    transport = url;
-  } else transport = url;
-  return createHash("sha256").update(transport).digest("hex");
-}
 function gitCommonDir(path: string): string {
   return realpathSync(resolve(path, git(path, ["rev-parse", "--git-common-dir"])));
 }
@@ -134,7 +119,20 @@ function strict(value: unknown, fields: string[]): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 function validate(value: unknown): CreationIntent {
-  const row = strict(value, ["id", "taskId", "name", "projectId", "projectSnapshot", "root", "rootDevice", "rootInode", "rootRealPath", "taskDir", "branch", "repos", "directories", "sharedWriteConfirmed", "state"]);
+  const intentFields = ["id", "taskId", "name", "projectId", "projectSnapshot", "root", "rootDevice", "rootInode", "rootRealPath", "taskDir", "branch", "repos", "directories", "sharedWriteConfirmed", "state"];
+  const keys = value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value).sort().join() : "";
+  // [Pencil T02] #137 migration: an intent written before the mode existed has
+  // no `workspaceMode` key. It is accepted and migrated below (worktree when it
+  // has repos, plain-directory when it has none) instead of being called
+  // damaged, so an interrupted creation from the previous build is recoverable.
+  const legacy = keys === [...intentFields].sort().join();
+  const current = keys === [...intentFields, "workspaceMode"].sort().join();
+  if (!legacy && !current) throw new Error("创建意图损坏");
+  const row = value as Record<string, unknown>;
+  const workspaceMode: WorkspaceMode = legacy
+    ? (Array.isArray(row.repos) && row.repos.length > 0 ? "worktree" : "plain-dirs")
+    : row.workspaceMode as WorkspaceMode;
+  if (workspaceMode !== "worktree" && workspaceMode !== "existing-git" && workspaceMode !== "plain-dirs") throw new Error("创建意图损坏");
   if (!UUID.test(string(row.id)) || !UUID.test(string(row.projectId)) || !/^task-[a-f0-9]{8}$/.test(string(row.taskId)) ||
       row.taskDir !== join(path(row.root), row.taskId as string) || !["pending", "complete", "abandoned"].includes(String(row.state)) ||
       typeof row.projectSnapshot !== "string" || row.projectSnapshot.length > 65536 || typeof row.sharedWriteConfirmed !== "boolean" ||
@@ -155,7 +153,9 @@ function validate(value: unknown): CreationIntent {
     string(item.name); path(item.path); path(item.realPath); string(item.device); string(item.inode);
   }
   if (row.directories.length && !row.sharedWriteConfirmed) throw new Error("共享写入未经确认");
-  return value as CreationIntent;
+  const repos = row.repos as unknown[];
+  if ((workspaceMode === "plain-dirs" && repos.length > 0) || (workspaceMode !== "plain-dirs" && repos.length === 0)) throw new Error("创建意图与工作区模式不符");
+  return { ...(value as CreationIntent), workspaceMode };
 }
 
 /** One main instance owns this file; first-write backup witnesses an initialized store. */
@@ -316,9 +316,18 @@ export class ProjectTaskCreation {
       const project = this.projects.get(input.projectId);
       if (!project) throw new Error("项目已删除或不可读取");
       if (!Array.isArray(input.repositories) || input.repositories.length > 30 ||
-          !Array.isArray(input.directoryIds) || input.directoryIds.length > 30 ||
-          (!input.repositories.length && !input.directoryIds.length)) throw new Error("当前创建流程至少需要选择一个仓库或目录");
+          !Array.isArray(input.directoryIds) || input.directoryIds.length > 30) throw new Error("当前创建流程至少需要选择一个仓库或目录");
       if (input.directoryIds.length && input.sharedWriteConfirmed !== true) throw new Error("请确认普通目录的共享写入风险");
+      // [Pencil T02] #137: the task workspace mode is enforced HERE, in main.
+      // A UI that never selected a mode keeps the legacy default, but an
+      // explicit mode is validated against the selected sources: plain-dirs
+      // refuses Git repos, and the two Git modes refuse an empty repo list.
+      const mode: WorkspaceMode = input.workspaceMode ?? (input.repositories.length > 0 ? "worktree" : "plain-dirs");
+      if (mode !== "worktree" && mode !== "existing-git" && mode !== "plain-dirs") throw new Error("任务工作区模式无效");
+      if (mode === "plain-dirs" && input.repositories.length > 0) throw new Error("仅普通目录模式不接受 Git 仓库来源，请改用独立 Worktree 或已有 Git 目录模式");
+      if (mode === "existing-git" && input.repositories.length === 0) throw new Error("已有 Git 目录模式至少需要一个已登记的 Git 仓库来源");
+      if (mode === "worktree" && input.repositories.length === 0) throw new Error("独立 Worktree 模式至少需要一个已登记的 Git 仓库来源；仅普通目录请选择「仅普通目录」模式");
+      if (!input.repositories.length && !input.directoryIds.length) throw new Error("当前创建流程至少需要选择一个仓库或目录");
       if (input.override !== (selectedRoot !== undefined)) throw new Error("任务根选择结果与请求不符");
       const name = string(input.name), root = path(selectedRoot ?? this.defaultRoot);
       this.store.assertTaskPath(root);
@@ -339,14 +348,30 @@ export class ProjectTaskCreation {
         repoIds.add(selection.sourceId);
         const source = project.repositories.find((row) => row.id === selection.sourceId);
         if (!source) throw new Error("项目仓库已改变");
-        const remote = string(selection.remote), remoteBranch = string(selection.remoteBranch);
+        const remote = string(selection.remote);
         if (!REMOTE_NAME.test(remote)) throw new Error("远程名称无效");
-        git(source.path, ["check-ref-format", `refs/heads/${remoteBranch}`]);
-        const repo: Repo = { ...source, ...diskIdentity(source.path), remote, remoteBranch,
+        const repo: Repo = { ...source, ...diskIdentity(source.path), remote, remoteBranch: "",
           commonDir: gitCommonDir(source.path), remoteDigest: remoteDigest(git(source.path, ["remote", "get-url", remote])),
           commit: "0".repeat(40), repoDir: buildRepoChildName(source.id) };
         if (commonDirs.has(repo.commonDir)) throw new Error("所选仓库属于同一 Git 仓库，请仅选择一个工作树");
         commonDirs.add(repo.commonDir);
+        if (mode === "existing-git") {
+          // Existing-Git-dir mode ([Pencil T02] #137) uses the registered
+          // checkout IN PLACE: no fetch, no `ls-remote`, no worktree, no task
+          // branch. The recorded facts are the checkout's real current branch
+          // and observed HEAD; uncommitted work stays exactly as it is.
+          const branch = optionalGit(source.path, ["symbolic-ref", "--short", "-q", "HEAD"]);
+          if (branch === null || branch.length === 0) throw new Error("已有 Git 目录不在任何本地分支上（分离头指针或空仓库），无法记录任务分支");
+          const head = optionalGit(source.path, ["rev-parse", "--verify", "HEAD"]);
+          if (head === null || !/^[a-f0-9]{40}$/.test(head)) throw new Error("已有 Git 目录没有可记录的提交");
+          repo.remoteBranch = branch;
+          repo.commit = head;
+          verifyRepo(repo);
+          return repo;
+        }
+        const remoteBranch = string(selection.remoteBranch);
+        git(source.path, ["check-ref-format", `refs/heads/${remoteBranch}`]);
+        repo.remoteBranch = remoteBranch;
         verifyRepo(repo);
         const [commit, ref] = git(repo.path, ["ls-remote", "--exit-code", repo.remote, `refs/heads/${remoteBranch}`]).split(/\s+/);
         if (!/^[a-f0-9]{40}$/.test(commit ?? "") || ref !== `refs/heads/${remoteBranch}`) throw new Error("远程分支不可用");
@@ -370,7 +395,7 @@ export class ProjectTaskCreation {
       const intent: CreationIntent = { id: randomUUID(), taskId, name, projectId: project.id, projectSnapshot: JSON.stringify(project),
         root, rootDevice: rootIdentity?.device ?? null, rootInode: rootIdentity?.inode ?? null, rootRealPath: rootIdentity?.realPath ?? null,
         taskDir: join(root, taskId), branch: branch.branch, repos, directories,
-        sharedWriteConfirmed: input.sharedWriteConfirmed === true, state: "pending" };
+        sharedWriteConfirmed: input.sharedWriteConfirmed === true, state: "pending", workspaceMode: mode };
       this.store.write(intent);
       return intent;
     });
@@ -420,7 +445,20 @@ export class ProjectTaskCreation {
         }
         const rootIdentity = diskIdentity(intent.root);
         if (rootIdentity.device !== intent.rootDevice || rootIdentity.inode !== intent.rootInode || rootIdentity.realPath !== intent.rootRealPath) throw new Error("任务根身份已改变");
-        for (const repo of intent.repos) verifyRepo(repo);
+        for (const repo of intent.repos) {
+          verifyRepo(repo);
+          if (intent.workspaceMode === "existing-git") {
+            // Re-verify the source binding before anything is recorded: the
+            // branch must be the one prepared against, and the HEAD snapshot is
+            // re-read (a commit made in the meantime is legitimate observed
+            // work, never rewritten). No fetch/pull/merge/reset/stash ever runs.
+            const branch = optionalGit(repo.path, ["symbolic-ref", "--short", "-q", "HEAD"]);
+            if (branch !== repo.remoteBranch) throw new Error("已有 Git 目录的当前分支在准备后已改变，无法按原来源创建；请重新创建任务");
+            const head = optionalGit(repo.path, ["rev-parse", "--verify", "HEAD"]);
+            if (head === null || !/^[a-f0-9]{40}$/.test(head)) throw new Error("已有 Git 目录的 HEAD 不可读取，无法记录任务事实");
+            repo.commit = head;
+          }
+        }
         const taskRealPath = join(realpathSync(intent.root), intent.taskId);
         checkWorkspaceOverlap(taskRealPath, intent.repos, intent.directories);
         for (const dir of intent.directories) checkSource(dir);
@@ -430,8 +468,10 @@ export class ProjectTaskCreation {
           throw new Error("任务目录已占用或创建标记不匹配");
         }
         // Validate every missing repository's fresh fetch before creating any new worktree.
+        // Existing-Git-dir mode has no worktree phase at all: it never creates
+        // `.worktrees/`, a task branch or a checkout in the original.
         const missingRepos: Repo[] = [];
-        for (const repo of intent.repos) {
+        for (const repo of (intent.workspaceMode === "existing-git" ? [] : intent.repos)) {
           const target = join(intent.taskDir, repo.repoDir);
           if (existsSync(target)) {
             if (!lstatSync(target).isDirectory() || realpathSync(target) !== join(realpathSync(intent.taskDir), repo.repoDir) ||
@@ -469,12 +509,26 @@ export class ProjectTaskCreation {
       if (!previous) {
         try { lstatSync(join(intent.taskDir, "task.json")); throw new Error("现有任务记录损坏或链接，不能覆盖"); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        const mode = intent.workspaceMode ?? "worktree";
+        const existingGit = mode === "existing-git";
         const first = intent.repos[0];
         const result = await this.host.routeTaskOp({ taskId: intent.taskId, op: "task/provision", payload: {
           name: intent.name, dirId: intent.taskId, rootOverride: intent.root,
-          remoteBranch: first?.remoteBranch ?? "", fetchedCommit: first?.commit ?? "",
-          repoSelections: intent.repos.map((repo) => ({ repoDir: repo.repoDir, remote: repo.remote, remoteBranch: repo.remoteBranch, mainCheckoutDir: repo.path })),
-          fetchedCommits: Object.fromEntries(intent.repos.map((repo) => [repo.repoDir, repo.commit])),
+          workspaceMode: mode,
+          remoteBranch: existingGit ? "" : (first?.remoteBranch ?? ""), fetchedCommit: existingGit ? "" : (first?.commit ?? ""),
+          ...(existingGit ? {
+            // The Host records the real checkout path, the branch observed at
+            // prepare and the HEAD observed at commit. No repoSelections /
+            // fetchedCommits: nothing is fetched or pinned in this mode.
+            sharedRepos: intent.repos.map((repo) => ({ rootId: repo.repoDir, sourcePath: repo.realPath, remote: repo.remote,
+              remoteBranch: repo.remoteBranch, headCommit: repo.commit, commonDir: repo.commonDir, remoteDigest: repo.remoteDigest,
+              sourceDevice: repo.device, sourceInode: repo.inode })),
+          } : {
+            repoSelections: intent.repos.map((repo) => ({ repoDir: repo.repoDir, remote: repo.remote, remoteBranch: repo.remoteBranch, mainCheckoutDir: repo.path })),
+            fetchedCommits: Object.fromEntries(intent.repos.map((repo) => [repo.repoDir, repo.commit])),
+            repoIdentities: Object.fromEntries(intent.repos.map((repo) => [repo.repoDir, { sourcePath: repo.path, sourceRealPath: repo.realPath,
+              sourceDevice: repo.device, sourceInode: repo.inode, commonDir: repo.commonDir, remoteDigest: repo.remoteDigest }])),
+          }),
           plainDirs: intent.directories.map((dir) => ({ directoryId: dir.id, sourcePath: dir.path })),
         } });
         if (result.taskId !== intent.taskId) throw new Error("Host 任务身份不符");
@@ -484,10 +538,21 @@ export class ProjectTaskCreation {
       // which production derives with `previewTaskPaths` (`<native root>/task-…`), so
       // the intent and the record spell the same folder with different separators.
       // Compare the canonical key; a record naming another folder still differs.
+      const mode = intent.workspaceMode ?? "worktree";
+      const expectedRepoCount = mode === "existing-git" ? 0 : intent.repos.length;
+      // Existing-Git-dir mode records the shared checkout in `sharedRepos`
+      // (real source path, branch, observed HEAD) and has no worktree folders;
+      // worktree mode records one `repoSources` entry per repo. Neither shape
+      // may silently stand in for the other.
+      const repoRecordOk = mode === "existing-git"
+        ? (record?.sharedRepos?.length ?? 0) === intent.repos.length &&
+          intent.repos.every((repo) => record?.sharedRepos?.some((entry) => entry.rootId === repo.repoDir &&
+            (entry.sourceRealPath ?? entry.sourcePath) === repo.realPath && entry.remoteBranch === repo.remoteBranch))
+        : !intent.repos.some((repo) => !record?.repoSources?.some((entry) => entry.repoDir === repo.repoDir && entry.remote === repo.remote && entry.remoteBranch === repo.remoteBranch && entry.baseCommit === repo.commit));
       if (!record || record.taskId !== intent.taskId || record.dirId !== intent.taskId || record.root !== intent.root ||
           normalizeTaskPath(record.taskDir) !== normalizeTaskPath(intent.taskDir) ||
-          record.branch !== intent.branch || record.name !== intent.name || record.repos.length !== intent.repos.length ||
-          intent.repos.some((repo) => !record.repoSources?.some((entry) => entry.repoDir === repo.repoDir && entry.remote === repo.remote && entry.remoteBranch === repo.remoteBranch && entry.baseCommit === repo.commit)) ||
+          record.branch !== intent.branch || record.name !== intent.name || record.repos.length !== expectedRepoCount ||
+          (record.workspaceMode ?? "worktree") !== mode || !repoRecordOk ||
           (record.dirLinks?.length ?? 0) !== intent.directories.length || intent.directories.some((dir) => !record.dirLinks?.some((entry) => entry.directoryId === dir.id && entry.linkName === dir.linkName && entry.sourcePath === dir.path))) {
         throw new Error("任务磁盘记录与创建意图不符");
       }

@@ -437,7 +437,9 @@ function TreeList({
 function ViewAttribution({ label, attribution, testId }: { label: string; attribution: WorkspaceAttributionView; testId: string }) {
   const identity = attribution.rootKind === "worktree"
     ? `仓库 ${hostText(attribution.repo, "Host 未上报仓库身份")}`
-    : `普通目录链接 ${hostText(attribution.directoryId, "Host 未上报链接目录身份")}`;
+    : attribution.rootKind === "existing-git"
+      ? `已有 Git 目录（共享原检出） ${hostText(attribution.repo, "Host 未上报来源身份")}`
+      : `普通目录链接 ${hostText(attribution.directoryId, "Host 未上报链接目录身份")}`;
   return (
     <div className="text-[10px] text-muted" data-testid={testId} data-root-kind={attribution.rootKind}>
       <p>
@@ -832,7 +834,7 @@ function FilesTool({ taskId, onReferenceFile }: { taskId: string; onReferenceFil
    * The name of a root kind, in the renderer's own vocabulary.
    */
   const rootKindText = (kind: WorkspaceRootView["kind"] | undefined) =>
-    kind === "worktree" ? "工作树" : kind === "shared-dir" ? "普通目录链接" : "尚未选定的根";
+    kind === "worktree" ? "工作树" : kind === "shared-dir" ? "普通目录链接" : kind === "existing-git" ? "已有 Git 目录（共享原检出）" : "尚未选定的根";
   const deliveryTargetIsShown = delivery !== null && selectedRoot?.kind === "worktree" && delivery.attribution.rootKind === "worktree";
   /**
    * The refusal NAMES the side the panel believes, as a three-way on the

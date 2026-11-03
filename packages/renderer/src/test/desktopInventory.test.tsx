@@ -199,4 +199,52 @@ describe("Desktop inventory pending creation recovery", () => {
     expect(within(row).queryByRole("button", { name: "恢复完成" })).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: "放弃创建" })).not.toBeInTheDocument();
   });
+
+  it("lands on the new task's workspace facts after a successful creation", async () => {
+    const createdTaskId = "task-created01";
+    const sourceProject = { id: PROJECT_ID, name: "默认工作空间", description: "",
+      repositories: [{ id: "source-1", name: "Web", path: "/local/web" }], directories: [],
+      environment: [], branchTemplate: "feature/{task-name}" };
+    const created = { id: "creation-intent-2", taskId: createdTaskId, name: "Web work", projectId: PROJECT_ID,
+      taskDir: `/tasks/${createdTaskId}`, root: "/tasks", branch: `task/${createdTaskId}`, state: "pending" as const,
+      workspaceMode: "existing-git" as const,
+      repos: [{ id: "source-1", name: "Web", remote: "origin", remoteBranch: "main", commit: "a".repeat(40), repoDir: "repo-web", path: "/local/web" }],
+      directories: [] };
+    const createdTasks = [...tasks, { taskId: createdTaskId, name: "Web work", branch: `task/${createdTaskId}`, repoCount: 0, updatedAt: "2026-10-21" }];
+    const createTask = vi.fn(async (request: { op: string }) => {
+      if (request.op === "current") return { ok: true, payload: null };
+      if (request.op === "prepare") return { ok: true, payload: { canceled: false, intent: created } };
+      return { ok: true, payload: { taskId: createdTaskId, projectId: PROJECT_ID } };
+    });
+    const bridge = {
+      listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: createdTasks, roots } })),
+      projectOp: vi.fn(async (request: { op: string }) => request.op === "list"
+        ? { ok: true, payload: { initialized: true, projects: [sourceProject] } }
+        : { ok: true, payload: { roots, tasks: createdTasks.map((task) => ({ taskId: task.taskId, projectId: PROJECT_ID, state: "assigned" })) } }),
+      taskOp: vi.fn(async (id: string, op: string) => op === "task/fileRoots"
+        ? { ok: true, payload: { taskDir: `/tasks/${id}`, workspaceMode: "existing-git", roots: [{
+            id: "repo-web", kind: "existing-git", label: "web", path: "/local/web", baselineBranch: "main", sharedOriginal: true,
+            workingBranch: { state: "observed", value: "main" }, headCommit: { state: "observed", value: "a".repeat(40) },
+            verification: { state: "ready", reason: "已核验：来源身份与记录一致" } }] } }
+        : { ok: true, payload: { lifecycle: { taskId: id, archived: false, archivedAt: null } } }),
+      createTask,
+    } as PidockBridge;
+    window.pidock = bridge;
+    render(<DesktopInventory />);
+    await screen.findByTestId("desktop-project-overview");
+    fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
+    fireEvent.click(await screen.findByRole("button", { name: "任务" }));
+    fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "Web work" } });
+    fireEvent.click(screen.getByRole("radio", { name: "已有 Git 目录" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Web" }));
+    fireEvent.change(screen.getByLabelText("远程名称"), { target: { value: "origin" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取原检出并预览" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认创建 / 恢复" }));
+    // The task view (facts + conversation) replaces the project management page.
+    expect(await screen.findByTestId("desktop-task-facts")).toBeInTheDocument();
+    // The mode badge only exists once the Host facts read resolved: await it,
+    // never assert it synchronously (the section renders while loading).
+    expect(await screen.findByTestId("task-facts-mode")).toHaveTextContent("已有 Git 目录 · 共享原检出");
+    expect(screen.queryByTestId("desktop-inventory")).not.toBeInTheDocument();
+  });
 });

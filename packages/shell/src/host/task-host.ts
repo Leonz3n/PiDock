@@ -16,6 +16,7 @@
  * unit tests inject an in-memory store instead of the filesystem.
  */
 
+import { join } from "node:path";
 import { shutdownDeadline } from "./shutdown-deadline.js";
 import type { TaskPathProtection } from "./protected-application-path.js";
 import { PiSessionChannel, type PiPermission, type PiReportedUsage, type PiRunState, type PiSessionDraft, type PiSessionSnapshot, type PiTurnInput, type PiModelSwitchEvent, type PiSessionContextView, type PiUsageSource } from "../main/pi-session.js";
@@ -59,6 +60,7 @@ import {
   planWorktreeCreation,
   previewTaskPaths,
   assertProvisionPlanSafe,
+  isSafeTaskChildName,
   isSafeTaskBranchRef,
   normalizeTaskPath,
   planResumeBranch,
@@ -519,6 +521,38 @@ export interface ProvisionTaskInput {
    * another repo's commit or the task-level `fetchedCommit`.
    */
   fetchedCommits?: Readonly<Record<string, string>>;
+  /**
+   * [Pencil T02] #137: the explicit task workspace mode. Absent on legacy
+   * callers; `existing-git` carries `sharedRepos` and no worktree repos,
+   * `plain-dirs` carries no repos at all.
+   */
+  workspaceMode?: "worktree" | "existing-git" | "plain-dirs";
+  /**
+   * [Pencil T02] #137: existing registered Git checkouts used in place. Each
+   * entry records the real source path, current branch, observed HEAD and the
+   * identity the facts surface re-verifies on open. Never copied or rewritten.
+   */
+  sharedRepos?: readonly {
+    rootId: string;
+    sourcePath: string;
+    remote: string;
+    remoteBranch: string;
+    headCommit: string;
+    commonDir: string;
+    remoteDigest: string;
+  }[];
+  /**
+   * [Pencil T02] #137: recorded identity of each worktree source checkout,
+   * keyed by `repoDir`. Optional; a record without it is `待修复` on reopen.
+   */
+  repoIdentities?: Readonly<Record<string, {
+    sourcePath: string;
+    sourceRealPath?: string;
+    sourceDevice?: string;
+    sourceInode?: string;
+    commonDir?: string;
+    remoteDigest?: string;
+  }>>;
   now?: string;
 }
 
@@ -1513,8 +1547,28 @@ export class TaskWorkspaceHost {
     if (!branched.ok) throw new Error(`${branched.error.code}: ${branched.error.message}`);
     const hasRepos = (input.repoSelections && input.repoSelections.length > 0) || (input.repos && input.repos.length > 0);
     const hasPlainDirs = input.plainDirs && input.plainDirs.length > 0;
+    const hasSharedRepos = input.sharedRepos !== undefined && input.sharedRepos.length > 0;
+    // [Pencil T02] #137: the mode is enforced here, in the Host record owner.
+    // `existing-git` records shared checkouts and no worktrees; `plain-dirs`
+    // records no Git repo at all; `worktree` is the default/legacy shape.
+    const workspaceMode: "worktree" | "existing-git" | "plain-dirs" =
+      input.workspaceMode ?? (hasRepos ? "worktree" : "plain-dirs");
+    if (workspaceMode !== "worktree" && workspaceMode !== "existing-git" && workspaceMode !== "plain-dirs") {
+      throw new Error("invalid-payload: task/provision.workspaceMode must be a known mode");
+    }
+    if (workspaceMode === "plain-dirs" && hasRepos) {
+      throw new Error("invalid-payload: plain-dirs mode cannot carry Git repositories");
+    }
+    if (workspaceMode === "existing-git" && (!hasSharedRepos || hasRepos)) {
+      throw new Error("invalid-payload: existing-git mode requires sharedRepos and no worktree repositories");
+    }
+    if (workspaceMode !== "existing-git" && hasSharedRepos) {
+      throw new Error("invalid-payload: sharedRepos require existing-git mode");
+    }
     let pinned: { ok: true; remoteBranch: string; commit: string };
-    if (hasRepos || !hasPlainDirs || (input.remoteBranch && input.remoteBranch.length > 0) || (input.fetchedCommit && input.fetchedCommit.length > 0)) {
+    const requiresRemotePin = workspaceMode !== "existing-git" &&
+      (hasRepos || !hasPlainDirs || (input.remoteBranch && input.remoteBranch.length > 0) || (input.fetchedCommit && input.fetchedCommit.length > 0));
+    if (requiresRemotePin) {
       const pinResult = pinBaseline(input.remoteBranch ?? "", input.fetchedCommit ?? "");
       if (!pinResult.ok) throw new Error(`${pinResult.error.code}: ${pinResult.error.message} (form kept, retry fetch)`);
       pinned = pinResult;
@@ -1579,6 +1633,38 @@ export class TaskWorkspaceHost {
         linkSnapshots.push(snap.snapshot);
       }
     }
+    // [Pencil T02] #137: snapshot each existing checkout's identity (a shared
+    // original, never a copy). The Host reads the device/inode itself; the
+    // branch/HEAD/common-dir/remote digest come from the caller's verified read.
+    let sharedSnapshots: {
+      rootId: string; sourcePath: string; sourceRealPath: string; remote: string; remoteBranch: string;
+      headCommit: string; commonDir: string; remoteDigest: string;
+      sourceDevice: string; sourceInode: string; snapshotAt: string;
+    }[] | null = null;
+    if (input.sharedRepos !== undefined) {
+      sharedSnapshots = [];
+      const seenRoots = new Set<string>();
+      for (const entry of input.sharedRepos) {
+        if (!isSafeTaskChildName(entry.rootId) || seenRoots.has(entry.rootId)) {
+          throw new Error("invalid-payload: task/provision.sharedRepos rootId must be a unique safe task child name");
+        }
+        seenRoots.add(entry.rootId);
+        if (!isAbsoluteTaskRoot(entry.sourcePath)) {
+          throw new Error("invalid-payload: task/provision.sharedRepos sourcePath must be absolute");
+        }
+        if (!entry.remote || !entry.remoteBranch || !/^[a-f0-9]{40}$/.test(entry.headCommit) || !entry.commonDir || !/^[a-f0-9]{64}$/.test(entry.remoteDigest)) {
+          throw new Error("invalid-payload: task/provision.sharedRepos identity is incomplete");
+        }
+        const identity = this.plainDirSourceIdentity(entry.sourcePath);
+        if (identity === undefined) {
+          throw new Error("source-identity-unreadable: 已有 Git 目录来源身份不可读取，未创建任务记录");
+        }
+        sharedSnapshots.push({ rootId: entry.rootId, sourcePath: entry.sourcePath, sourceRealPath: entry.sourcePath,
+          remote: entry.remote, remoteBranch: entry.remoteBranch, headCommit: entry.headCommit, commonDir: entry.commonDir,
+          remoteDigest: entry.remoteDigest, sourceDevice: identity.device, sourceInode: identity.inode,
+          snapshotAt: input.now ?? this.now() });
+      }
+    }
     const repos = pinnedRepos !== null ? pinnedRepos.map((repo) => repo.repoDir) : [...(input.repos ?? [])];
     const paths = previewTaskPaths(resolved.root, input.dirId, repos, []);
     // #52: two code paths build this same path with different separators on
@@ -1607,13 +1693,36 @@ export class TaskWorkspaceHost {
       repos,
       repoSources:
         pinnedRepos !== null
-          ? pinnedRepos.map((repo) => ({
-              repoDir: repo.repoDir,
-              remote: repo.remote,
-              remoteBranch: repo.remoteBranch,
-              baseCommit: repo.commit,
-            }))
+          ? pinnedRepos.map((repo) => {
+              const recorded = input.repoIdentities?.[repo.repoDir];
+              // The worktree folder's own identity is read here (it exists by
+              // the time a real creation provisions); an absent target identity
+              // is left unstored and reported as `待修复`, never guessed.
+              const target = this.plainDirSourceIdentity(join(this.taskDir, repo.repoDir));
+              return {
+                repoDir: repo.repoDir,
+                remote: repo.remote,
+                remoteBranch: repo.remoteBranch,
+                baseCommit: repo.commit,
+                ...(recorded?.sourcePath !== undefined ? { sourcePath: recorded.sourcePath } : {}),
+                ...(recorded?.sourceRealPath !== undefined ? { sourceRealPath: recorded.sourceRealPath } : {}),
+                ...(recorded?.sourceDevice !== undefined && recorded.sourceInode !== undefined
+                  ? { sourceDevice: recorded.sourceDevice, sourceInode: recorded.sourceInode } : {}),
+                ...(recorded?.commonDir !== undefined ? { commonDir: recorded.commonDir } : {}),
+                ...(recorded?.remoteDigest !== undefined ? { remoteDigest: recorded.remoteDigest } : {}),
+                ...(target !== undefined ? { targetDevice: target.device, targetInode: target.inode } : {}),
+              };
+            })
           : undefined,
+      workspaceMode,
+      sharedRepos: sharedSnapshots !== null
+        ? sharedSnapshots.map((repo) => ({
+            rootId: repo.rootId, sourcePath: repo.sourcePath, sourceRealPath: repo.sourceRealPath,
+            remote: repo.remote, remoteBranch: repo.remoteBranch, headCommit: repo.headCommit,
+            commonDir: repo.commonDir, remoteDigest: repo.remoteDigest,
+            sourceDevice: repo.sourceDevice, sourceInode: repo.sourceInode, snapshotAt: repo.snapshotAt,
+          }))
+        : undefined,
       dirLinks:
         linkSnapshots !== null
           ? linkSnapshots.map((link) => ({
@@ -1647,6 +1756,10 @@ export class TaskWorkspaceHost {
       }
       if (pinnedRepos === null && previous.repoSources !== undefined) record.repoSources = previous.repoSources;
       if (linkSnapshots === null && previous.dirLinks !== undefined) record.dirLinks = previous.dirLinks;
+      // [Pencil T02] #137: a re-provision that does not name a mode or shared
+      // checkouts keeps the recorded ones (append/resume never drops them).
+      if (input.workspaceMode === undefined && previous.workspaceMode !== undefined) record.workspaceMode = previous.workspaceMode;
+      if (sharedSnapshots === null && previous.sharedRepos !== undefined) record.sharedRepos = previous.sharedRepos;
       // #6 recovery: a re-provision must not erase a still-unresolved
       // per-repo prepare error (resume is the only flow that clears it).
       if (previous.repoPrepareErrors !== undefined) record.repoPrepareErrors = [...previous.repoPrepareErrors];
@@ -1719,6 +1832,14 @@ export class TaskWorkspaceHost {
     const stored = this.store.readTask(this.taskDir);
     if (!stored) throw new Error("unknown task: no task record; provision the task before appending");
     if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    // [Pencil T02] #137: a task whose workspace mode is not `worktree` has no
+    // independent worktrees. Appending one would contradict the recorded mode
+    // (and the record parser refuses it), so this fails closed by name instead
+    // of corrupting a shared-checkout / plain-directory task.
+    const storedMode = stored.workspaceMode ?? ((stored.sharedRepos?.length ?? 0) > 0 ? "existing-git" : stored.repos.length > 0 ? "worktree" : "plain-dirs");
+    if (storedMode !== "worktree") {
+      throw new Error("workspace-mode-refusal: 该任务不是独立 Worktree 模式（已有 Git 目录 / 仅普通目录），不能追加独立 Worktree 仓库；请新建独立 Worktree 任务");
+    }
     const validated = validateRepoSelections(input.repoSelections);
     if (!validated.ok) {
       const error: MultiRepoError = validated.error;
@@ -1807,6 +1928,11 @@ export class TaskWorkspaceHost {
         })),
       ],
       dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      // [Pencil T02] #137: a record rewrite carries the workspace mode and the
+      // shared checkouts it holds. Dropping them would silently re-derive the
+      // task's shape instead of keeping what the user created.
+      ...(stored.workspaceMode !== undefined ? { workspaceMode: stored.workspaceMode } : {}),
+      ...(stored.sharedRepos !== undefined ? { sharedRepos: stored.sharedRepos } : {}),
       repoPrepareErrors:
         stored.repoPrepareErrors !== undefined ? [...stored.repoPrepareErrors] : undefined,
       now: at,
@@ -1913,6 +2039,11 @@ export class TaskWorkspaceHost {
       repos: stored.repos,
       repoSources: stored.repoSources,
       dirLinks: [...existingLinks, ...appended],
+      // [Pencil T02] #137: appending a plain directory must not drop the task's
+      // recorded mode or its existing-Git sources — otherwise an `existing-git`
+      // task would silently lose its shared checkout binding on this write.
+      ...(stored.workspaceMode !== undefined ? { workspaceMode: stored.workspaceMode } : {}),
+      ...(stored.sharedRepos !== undefined ? { sharedRepos: stored.sharedRepos } : {}),
       repoPrepareErrors: stored.repoPrepareErrors,
       now: at,
     });
@@ -2279,6 +2410,8 @@ export class TaskWorkspaceHost {
       repos: [...stored.repos],
       repoSources: stored.repoSources !== undefined ? [...stored.repoSources] : undefined,
       dirLinks: stored.dirLinks !== undefined ? [...stored.dirLinks] : undefined,
+      ...(stored.workspaceMode !== undefined ? { workspaceMode: stored.workspaceMode } : {}),
+      ...(stored.sharedRepos !== undefined ? { sharedRepos: stored.sharedRepos } : {}),
       repoPrepareErrors: nextErrors.length > 0 ? nextErrors : undefined,
       now: this.now(),
     });

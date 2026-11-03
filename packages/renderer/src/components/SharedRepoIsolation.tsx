@@ -265,7 +265,7 @@ function RootGroup({ rootId, rows, changes, links }: { rootId: string; rows: rea
   return (
     <div className="mt-3" data-testid={root.kind === "shared-dir" ? "shared-dir-group" : "worktree-group"} data-root={rootId}>
       <h3 className="text-[12px] font-semibold text-ink">
-        {root.kind === "shared-dir" ? "普通目录链接" : "仓库"} <span className="font-mono">{hostText(rootId, "Host 未上报根标识")}</span>
+        {root.kind === "shared-dir" ? "普通目录链接" : root.kind === "existing-git" ? "已有 Git 目录（共享原检出）" : "仓库"} <span className="font-mono">{hostText(rootId, "Host 未上报根标识")}</span>
       </h3>
       {shared && root.kind === "worktree" && (
         <p className="mt-1 text-[11px] text-muted" data-testid={`worktree-group-note-${rootId}`}>

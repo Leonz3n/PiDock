@@ -2,16 +2,25 @@ import type { PidockBridge } from "./shellBridge";
 
 export const CREATION_RETENTION_NOTICE = "磁盘上的任务目录、工作区、链接与会话都会保留（不会替你删除）";
 
+/** How the task treats its Git sources ([Pencil T02] #137). */
+export type WorkspaceModeView = "worktree" | "existing-git" | "plain-dirs";
+export const WORKSPACE_MODE_LABELS: Record<WorkspaceModeView, string> = {
+  worktree: "独立 Worktree（默认）",
+  "existing-git": "已有 Git 目录",
+  "plain-dirs": "仅普通目录",
+};
 export interface CreationIntentView {
   id: string; taskId: string; name: string; projectId: string; taskDir: string; root: string; branch: string;
   state: "pending" | "complete";
-  repos: { id: string; name: string; remote: string; remoteBranch: string; commit: string; repoDir: string }[];
+  workspaceMode: WorkspaceModeView;
+  repos: { id: string; name: string; remote: string; remoteBranch: string; commit: string; repoDir: string; path?: string }[];
   directories: { id: string; name: string; linkName: string; path: string }[];
 }
 export interface CreationInput {
   projectId: string; name: string;
   repositories: { sourceId: string; remote: string; remoteBranch: string }[];
   directoryIds: string[]; sharedWriteConfirmed: boolean; override: boolean;
+  workspaceMode: WorkspaceModeView;
 }
 function parse(value: unknown): CreationIntentView {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("本机任务创建意图返回异常");
@@ -19,11 +28,19 @@ function parse(value: unknown): CreationIntentView {
   for (const key of ["id", "taskId", "name", "projectId", "taskDir", "root", "branch"])
     if (typeof row[key] !== "string" || !row[key]) throw new Error("本机任务创建意图返回异常");
   if ((row.state !== "pending" && row.state !== "complete") || !Array.isArray(row.repos) || !Array.isArray(row.directories) ||
-      !row.repos.every((repo) => repo && typeof repo === "object" && typeof repo.commit === "string" && typeof repo.repoDir === "string" && typeof repo.name === "string") ||
+      !row.repos.every((repo) => repo && typeof repo === "object" && typeof repo.commit === "string" && typeof repo.repoDir === "string" && typeof repo.name === "string" &&
+        (repo.path === undefined || typeof repo.path === "string")) ||
       !row.directories.every((dir) => dir && typeof dir === "object" && typeof dir.linkName === "string" && typeof dir.path === "string" && typeof dir.name === "string")) {
     throw new Error("本机任务创建意图返回异常");
   }
-  return value as CreationIntentView;
+  // A legacy intent written before the mode existed is migrated by main; a
+  // payload that still has no mode is named by its sources, never guessed from
+  // the UI. An unknown mode is a broken answer, not a default.
+  const mode = row.workspaceMode === undefined
+    ? ((row.repos as unknown[]).length > 0 ? "worktree" : "plain-dirs")
+    : row.workspaceMode;
+  if (mode !== "worktree" && mode !== "existing-git" && mode !== "plain-dirs") throw new Error("本机任务创建意图返回异常");
+  return { ...(value as CreationIntentView), workspaceMode: mode };
 }
 async function request(bridge: PidockBridge, input: Parameters<NonNullable<PidockBridge["createTask"]>>[0]): Promise<unknown> {
   if (typeof bridge.createTask !== "function") throw new Error("桌面壳真实任务创建接口不可用，请重启应用");

@@ -486,6 +486,38 @@ export function validateHostTaskOp(
         ok: false,
         error: "invalid-payload: task/provision requires a payload object",
       };
+    // [Pencil T02] #137 workspace mode + existing-Git-dir sources. Optional
+    // shapes; semantic consistency (mode vs selected sources) is enforced in
+    // `TaskWorkspaceHost.provision`/main. Unknown shapes fail closed.
+    if (payload["workspaceMode"] !== undefined &&
+        payload["workspaceMode"] !== "worktree" && payload["workspaceMode"] !== "existing-git" && payload["workspaceMode"] !== "plain-dirs") {
+      return { ok: false, error: "invalid-payload: task/provision.workspaceMode must be a known mode" };
+    }
+    if (payload["sharedRepos"] !== undefined) {
+      const value = payload["sharedRepos"];
+      if (!Array.isArray(value) || !value.every((entry) =>
+        typeof entry === "object" && entry !== null && !Array.isArray(entry) &&
+        typeof (entry as Record<string, unknown>)["rootId"] === "string" &&
+        typeof (entry as Record<string, unknown>)["sourcePath"] === "string" &&
+        typeof (entry as Record<string, unknown>)["remote"] === "string" &&
+        typeof (entry as Record<string, unknown>)["remoteBranch"] === "string" &&
+        typeof (entry as Record<string, unknown>)["headCommit"] === "string" &&
+        typeof (entry as Record<string, unknown>)["commonDir"] === "string" &&
+        typeof (entry as Record<string, unknown>)["remoteDigest"] === "string")) {
+        return { ok: false, error: "invalid-payload: task/provision.sharedRepos must be an array of {rootId, sourcePath, remote, remoteBranch, headCommit, commonDir, remoteDigest}" };
+      }
+    }
+    if (payload["repoIdentities"] !== undefined) {
+      const value = payload["repoIdentities"];
+      if (
+        typeof value !== "object" || value === null || Array.isArray(value) ||
+        !Object.values(value as Record<string, unknown>).every((entry) =>
+          typeof entry === "object" && entry !== null && !Array.isArray(entry) &&
+          typeof (entry as Record<string, unknown>)["sourcePath"] === "string")
+      ) {
+        return { ok: false, error: "invalid-payload: task/provision.repoIdentities must map repo names to identity objects" };
+      }
+    }
     // #6 multi-repo + plain-dir fields (all optional, shape-checked here;
     // semantic validation — per-repo pin gates, link snapshots — runs in
     // `TaskWorkspaceHost.provision`). Unknown shapes fail closed.
@@ -558,6 +590,7 @@ export function validateHostTaskOp(
     const hasRepos = (Array.isArray(payload["repoSelections"]) && payload["repoSelections"].length > 0) ||
       (Array.isArray(payload["repos"]) && payload["repos"].length > 0);
     const hasPlainDirs = Array.isArray(payload["plainDirs"]) && payload["plainDirs"].length > 0;
+    const hasSharedRepos = Array.isArray(payload["sharedRepos"]) && payload["sharedRepos"].length > 0;
     const name = payload["name"];
     if (typeof name !== "string" || name.trim().length === 0) {
       return {
@@ -565,7 +598,8 @@ export function validateHostTaskOp(
         error: "invalid-payload: task/provision.name must be a non-empty string",
       };
     }
-    if (hasRepos || !hasPlainDirs) {
+    // Existing-Git-dir mode pins no remote commit: it uses the checkout as-is.
+    if (payload["workspaceMode"] !== "existing-git" && (hasRepos || (!hasPlainDirs && !hasSharedRepos))) {
       for (const key of ["remoteBranch", "fetchedCommit"] as const) {
         const value = payload[key];
         if (typeof value !== "string" || value.trim().length === 0) {

@@ -1136,9 +1136,45 @@ async function performTaskOp(
         if (dirs === null) {
           return { ok: false, error: "invalid-payload: task/provision.plainDirs must be an array of {directoryId, sourcePath}" };
         }
+        // [Pencil T02] #137 workspace mode + existing-Git-dir sources.
+        const workspaceMode = record["workspaceMode"];
+        if (workspaceMode !== undefined && workspaceMode !== "worktree" && workspaceMode !== "existing-git" && workspaceMode !== "plain-dirs") {
+          return { ok: false, error: "invalid-payload: task/provision.workspaceMode must be a known mode" };
+        }
+        const sharedRepos = record["sharedRepos"];
+        type SharedInput = { rootId: string; sourcePath: string; remote: string; remoteBranch: string; headCommit: string; commonDir: string; remoteDigest: string };
+        const shared =
+          sharedRepos === undefined
+            ? undefined
+            : Array.isArray(sharedRepos) &&
+                sharedRepos.every((entry) => {
+                  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
+                  const row = entry as Record<string, unknown>;
+                  return ["rootId", "sourcePath", "remote", "remoteBranch", "headCommit", "commonDir", "remoteDigest"].every((key) => typeof row[key] === "string");
+                })
+              ? (sharedRepos as SharedInput[])
+              : null;
+        if (shared === null) {
+          return { ok: false, error: "invalid-payload: task/provision.sharedRepos must be an array of {rootId, sourcePath, remote, remoteBranch, headCommit, commonDir, remoteDigest}" };
+        }
+        const repoIdentities = record["repoIdentities"];
+        type RepoIdentityInput = { sourcePath: string; sourceRealPath?: string; sourceDevice?: string; sourceInode?: string; commonDir?: string; remoteDigest?: string };
+        const identities =
+          repoIdentities === undefined
+            ? undefined
+            : typeof repoIdentities === "object" && repoIdentities !== null && !Array.isArray(repoIdentities) &&
+                Object.values(repoIdentities as Record<string, unknown>).every((entry) =>
+                  typeof entry === "object" && entry !== null && !Array.isArray(entry) && typeof (entry as Record<string, unknown>)["sourcePath"] === "string",
+                )
+              ? (repoIdentities as Record<string, RepoIdentityInput>)
+              : null;
+        if (identities === null) {
+          return { ok: false, error: "invalid-payload: task/provision.repoIdentities must map repo names to identity objects" };
+        }
         const hasRepos = (selections !== undefined && selections.length > 0) || (repos !== undefined && repos.length > 0);
         const hasPlainDirs = dirs !== undefined && dirs.length > 0;
-        if (hasRepos || !hasPlainDirs) {
+        const hasSharedRepos = shared !== undefined && shared.length > 0;
+        if (workspaceMode !== "existing-git" && (hasRepos || (!hasPlainDirs && !hasSharedRepos))) {
           if (!remoteBranch || !fetchedCommit) {
             return { ok: false, error: "invalid-payload: task/provision requires name/dirId/remoteBranch/fetchedCommit" };
           }
@@ -1159,6 +1195,9 @@ async function performTaskOp(
           repoSelections: selections,
           fetchedCommits: commits,
           plainDirs: dirs,
+          ...(workspaceMode !== undefined ? { workspaceMode } : {}),
+          ...(shared !== undefined ? { sharedRepos: shared } : {}),
+          ...(identities !== undefined ? { repoIdentities: identities } : {}),
         });
         return { ok: true, payload: { ...saved, plan } };
       }
@@ -1921,7 +1960,7 @@ async function performTaskOp(
           // branch and uncommitted state (`observedRoots`) and keeps the pinned
           // baseline branch as a separate declared field, so two tasks sharing
           // one repo can never read as the same branch.
-          return { ok: true, payload: { roots: files.observedRoots(), taskDir: files.taskDir } };
+          return { ok: true, payload: { roots: files.facts(), taskDir: files.taskDir, workspaceMode: files.workspaceMode() } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
