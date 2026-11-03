@@ -7,7 +7,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
 import { readHostDraft, saveHostDraft } from "../data/draftStore";
-import { executionStateThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
+import { executionStateThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
+import { DesktopApprovalCard, type ApprovalRead } from "./DesktopApprovalCard";
+import { approvalFailureText, approvalRequest, parseTaskApprovals, type ApprovalDecision, type TaskApproval } from "../data/toolApproval";
 import { executionStateFromHost, runRecordFromExecutionState, runStateOfExecution, type SessionExecutionView } from "../data/executionLedger";
 import { executionLabel, executionStepLabel } from "../pages/executionView";
 import { TurnStream } from "../data/turnStream";
@@ -332,11 +334,15 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const [unwired, setUnwired] = useState<string | null>(null);
   const [readoutRead, setReadoutRead] = useState<ReadoutRead>({ phase: "reading" });
   const [executionRead, setExecutionRead] = useState<ExecutionRead>({ phase: "reading" });
+  // [Pencil T05] #140 本会话真实的确认记录（`task/listApprovals`）：待批准的工具调用
+  // 只有从这里来。`reading`/`failed` 是各自具名的状态，读取失败不渲染成「无待确认」。
+  const [approvalRead, setApprovalRead] = useState<ApprovalRead>({ phase: "reading" });
   const [modelOpen, setModelOpen] = useState(false);
   const [thinkingError, setThinkingError] = useState<string | null>(null);
   const [thinkingBusy, setThinkingBusy] = useState(false);
   const readoutAttempt = useRef(0);
   const executionReadAttempt = useRef(0);
+  const approvalReadAttempt = useRef(0);
   const [taskMenu, setTaskMenu] = useState(false);
   const [archivePrompt, setArchivePrompt] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -687,6 +693,45 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     // [#139] The execution readout is per SESSION: switching sessions re-reads it.
   }, [attemptPhase, sessionId, taskId]);
   /**
+   * [Pencil T05] #140 本会话的确认记录。和上面同一条既有读取节奏：挂载、会话切换、
+   * 回合阶段变化时各读一次，不自己开定时器。批准/拒绝之后由 `resolveToolApproval`
+   * 直接重读一次，因此卡片上看到的是 Host 结算后的状态，而不是本页的乐观猜测。
+   */
+  const loadApprovals = useCallback(async () => {
+    const attempt = ++approvalReadAttempt.current;
+    const result = await listApprovalsThroughShell({ taskId, sessionId });
+    if (approvalReadAttempt.current !== attempt) return;
+    if (!result.ok) { setApprovalRead({ phase: "failed", error: result.error ?? "" }); return; }
+    const approvals = parseTaskApprovals(result.payload, taskId, sessionId);
+    if (approvals === null) {
+      setApprovalRead({ phase: "failed", error: `Host 返回的确认记录无法解析：${hostAnswerText(result.payload)}` });
+      return;
+    }
+    setApprovalRead({ phase: "read", approvals });
+  }, [sessionId, taskId]);
+  useEffect(() => {
+    void loadApprovals();
+    return () => { approvalReadAttempt.current += 1; };
+  }, [attemptPhase, loadApprovals]);
+  /**
+   * 一次决定：`task/approve` 或 `task/reject`，载荷只有 `{sessionId, approvalId}`。
+   * 成功返回 `null`，失败返回具名原因（Host 自己的文本 + 一句可行动说明）；本页不
+   * 把失败当成已处理，也不重试同一确认。执行读数一并重读：批准的操作用一条新的
+   * Host 记录出现，而不是本页写上的「已执行」。
+   */
+  const resolveToolApproval = async (approval: TaskApproval, decision: ApprovalDecision): Promise<string | null> => {
+    const request = approvalRequest(approval, decision);
+    const result = await resolveApprovalThroughShell({ taskId, op: request.op, ...request.payload });
+    if (!result.ok) return approvalFailureText(result.error);
+    await loadApprovals();
+    const execution = await executionStateThroughShell({ taskId, sessionId });
+    if (execution.ok) {
+      const view = executionStateFromHost(execution.payload);
+      if (view !== null) setExecutionRead({ phase: "read", view });
+    }
+    return null;
+  };
+  /**
    * [#139] The session list is the page's only session truth. It is read once
    * per task (and after every session write), and a failed read is a named state:
    * the page then keeps addressing the migrated `main` session, which the Host
@@ -985,6 +1030,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       </div>
     </div>
     <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} />
+    {/* [Pencil T05] #140 S01 的审批位：只呈现 Host 已记录的确认，批准/拒绝走
+        `task/approve|reject`。没有待确认时也说明「记录为空」，不把空读数当成功。 */}
+    <DesktopApprovalCard read={approvalRead} onResolve={resolveToolApproval} />
     {/* [Pencil T07] ticket 142: a created task lands on its `main` conversation entry
         even when no Provider/model is configured. The entry names that missing
         configuration and routes to 能力管理 → Providers; it never picks a

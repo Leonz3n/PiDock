@@ -884,6 +884,40 @@ export async function executionStateThroughShell(input: {
 }
 
 /**
+ * [Pencil T05] #140 本会话真实的确认记录：Host 持久化的 `PiApproval` 行（工具、
+ * 目标、真实际命令、载荷版本、状态、是否已执行）。只读，不改写任何状态；读取
+ * 失败是 `{ok:false}` 信封，页面据此显示具名读取失败而不是「无待确认」。
+ */
+export async function listApprovalsThroughShell(input: {
+  taskId: string;
+  sessionId: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/listApprovals", { sessionId: input.sessionId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [Pencil T05] #140 批准或拒绝一次确认。载荷只有 `{sessionId, approvalId}` 两个键：
+ * Host 的批准路径会重新校验（路径仍在任务内、目标未变、操作未执行）并最多执行一次，
+ * 多带的字段不会被 Host 记录，因此这里不发。
+ */
+export async function resolveApprovalThroughShell(input: {
+  taskId: string;
+  op: "task/approve" | "task/reject";
+  sessionId: string;
+  approvalId: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, input.op, { sessionId: input.sessionId, approvalId: input.approvalId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * [PiDock 17] (#19 box 5) 读取完成清除未读: the Host clears only the unread ids and
  * returns the 待处理 ones it kept.
  */
