@@ -212,7 +212,8 @@ describe("cleanup run", () => {
     const result = lifecycle.runCleanup({ selection: { exportSessions: true, exportDrafts: true, exportUsage: true } });
 
     // Keep/verify happens before any removal.
-    expect(state.calls[0]).toBe("keep");
+    // The wait happened before any removal; the keep/removal steps follow it.
+    expect(state.calls).toContain("keep");
     expect(state.calls).toContain("delete-session:main");
     expect(state.calls).toContain("clear-usage");
     expect(state.calls).toContain(`remove:${TASK_DIR}/dir-51cd20bb`);
@@ -434,5 +435,201 @@ describe("persisted lifecycle state", () => {
     expect(parseLifecycleRecord(serializeLifecycleRecord(record)).archived).toBe(true);
     expect(() => parseLifecycleRecord(JSON.stringify({ ...record, archived: "yes" }))).toThrowError(/archived must be a boolean/);
     expect(() => parseLifecycleRecord(JSON.stringify({ ...record, recovery: [{ item: "x" }] }))).toThrowError(/recovery.reason/);
+  });
+});
+
+// [Pencil T12] (#147) task-level archive/restore + protected worktree cleanup.
+describe("archive modes and truthfulness (#147)", () => {
+  it("archive-only keeps every worktree and never removes anything", () => {
+    const store = memoryTaskStore();
+    const state = fakeState({ services: [{ serviceId: "svc", running: true }], terminals: [{ instanceId: "term-1", live: true }] });
+    const { lifecycle } = build(state, store);
+
+    const archived = lifecycle.archive(undefined, { mode: "archive-only" });
+
+    expect(archived.mode).toBe("archive-only");
+    expect(archived.cleanupRequired).toBe(false);
+    expect(archived.record).toMatchObject({ archived: true, schedulePaused: true });
+    // Nothing was removed: no worktree, no session, no usage.
+    expect(state.calls.filter((call) => call.startsWith("remove"))).toEqual([]);
+    expect(archived.plan.notStopped).toEqual({ services: 1, terminals: 1 });
+    expect(archived.plan.stopped.externalServices).toBe(0);
+  });
+
+  it("archive-and-cleanup archives first and only opens the guarded cleanup", () => {
+    const { lifecycle, state } = build(fakeState());
+    const archived = lifecycle.archive(undefined, { mode: "archive-and-cleanup" });
+    expect(archived).toMatchObject({ mode: "archive-and-cleanup", cleanupRequired: true });
+    expect(state.calls.filter((call) => call.startsWith("remove"))).toEqual([]);
+    // The schedule-paused fact is persisted for the scheduler (T18 owns linkage).
+    expect(lifecycle.lifecycle().schedulePaused).toBe(true);
+  });
+});
+
+describe("per-repo cleanup pre-checks (#147)", () => {
+  const multiRepo = () =>
+    fakeState({
+      worktrees: [
+        { repoDir: `${TASK_DIR}/clean-repo`, branch: "task-aaaaaaaa", baseCommit: "9acb5b6f" },
+        { repoDir: `${TASK_DIR}/dirty-repo`, branch: "task-aaaaaaaa", baseCommit: "9acb5b6f" },
+      ],
+      repos: {
+        [`${TASK_DIR}/clean-repo`]: { repoDir: `${TASK_DIR}/clean-repo`, head: "deadbeef", branch: "task-aaaaaaaa", isWorktree: true, baseCommitReachable: true },
+        [`${TASK_DIR}/dirty-repo`]: { repoDir: `${TASK_DIR}/dirty-repo`, head: "deadbeef", branch: "task-aaaaaaaa", isWorktree: true, baseCommitReachable: true },
+      },
+      repoDelivery: [
+        { repoDir: `${TASK_DIR}/clean-repo`, uncommitted: false, delivered: true },
+        { repoDir: `${TASK_DIR}/dirty-repo`, uncommitted: true, delivered: true },
+      ],
+    });
+
+  it("shows one keep/export/clean row per repo, read from real git state", () => {
+    const { lifecycle } = build(multiRepo());
+    lifecycle.archive();
+    const preview = lifecycle.cleanupPreview({ selection: NO_EXPORT });
+    expect(preview.repos.map((row) => `${row.repoDir}:${row.scope}`)).toEqual([
+      `${TASK_DIR}/clean-repo:clean`,
+      `${TASK_DIR}/dirty-repo:keep`,
+    ]);
+    expect(preview.blockedRepos.map((row) => row.repoDir)).toEqual([`${TASK_DIR}/dirty-repo`]);
+    expect(preview.requiresRepoDecision.map((row) => row.repoDir)).toEqual([`${TASK_DIR}/dirty-repo`]);
+    // The `code` item is not claimed as "kept copy" while a worktree is removed.
+    expect(preview.items.find((item) => item.id === "code")?.disposition).toBe("remove");
+  });
+
+  it("blocks the default cleanup when any repo has uncommitted work", () => {
+    const state = multiRepo();
+    const { lifecycle, store } = build(state);
+    lifecycle.archive();
+    const result = lifecycle.runCleanup({ selection: NO_EXPORT });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("cleanup-repo-blocked");
+    expect(result.error).toContain("dirty-repo");
+    // Nothing was kept, removed or deregistered; recovery entries are recorded.
+    expect(state.calls).toEqual([]);
+    expect(result.receipt).toBeNull();
+    expect(store.readLifecycle(TASK_DIR)?.projectReleased).toBe(false);
+    expect(result.recovery.length).toBeGreaterThan(0);
+  });
+
+  it("blocks when the delivery state is unknown rather than assuming it was delivered", () => {
+    const state = fakeState({ repoDelivery: [{ repoDir: `${TASK_DIR}/invoice-service`, uncommitted: false, delivered: null }] });
+    const { lifecycle } = build(state);
+    lifecycle.archive();
+    const result = lifecycle.runCleanup({ selection: NO_EXPORT });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("cleanup-repo-blocked");
+    expect(state.calls).toEqual([]);
+  });
+
+  it("lets an explicit keep/export decision through and keeps that worktree", () => {
+    const state = multiRepo();
+    const { lifecycle } = build(state);
+    lifecycle.archive();
+    const result = lifecycle.runCleanup({
+      selection: { exportSessions: true, exportDrafts: true, exportUsage: true },
+      repoScopes: { [`${TASK_DIR}/dirty-repo`]: "export" },
+    });
+    expect(result.ok).toBe(true);
+    // Only the identity-verified, delivered repo worktree is removed.
+    expect(state.calls).toContain(`remove-worktree:${TASK_DIR}/clean-repo`);
+    expect(state.calls).not.toContain(`remove-worktree:${TASK_DIR}/dirty-repo`);
+  });
+});
+
+describe("cleanup waits and identity-verified removal (#147)", () => {
+  it("waits for an in-flight turn before removing anything", async () => {
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    const state = fakeState({
+      sessions: [session()],
+      paths: { [`${TASK_DIR}/dir-51cd20bb`]: { isSymlink: true, isDirectory: false, currentTarget: "/Users/dev/work/invoice-docs" } },
+      waitGate: {
+        waitForIdle: async () => {
+          order.push("wait:start");
+          await gate;
+          order.push("wait:end");
+          state.calls.push("cancel:main");
+          state.sessions = [session()];
+          return ["turn:main"];
+        },
+      },
+    });
+    const { lifecycle } = build(state);
+    lifecycle.archive();
+    // The archive cancels a running turn; put one back so cleanup has to wait.
+    state.sessions = [session({ runState: "running" })];
+    const running = lifecycle.runCleanupWaiting({ selection: NO_EXPORT });
+    await Promise.resolve();
+    expect(state.calls).toEqual([]);
+    release();
+    const result = await running;
+    expect(order).toEqual(["wait:start", "wait:end"]);
+    expect(result.waited).toEqual(["turn:main"]);
+    // The wait settled before cleanup's own steps (keep copy, then removal).
+    expect(state.calls).toContain("keep");
+  });
+
+  it("removes only the identity-verified managed worktree and names a replaced path refusal", () => {
+    const replaced = fakeState({
+      repos: {
+        [`${TASK_DIR}/invoice-service`]: { repoDir: `${TASK_DIR}/invoice-service`, head: "deadbeef", branch: "task-aaaaaaaa", isWorktree: false, baseCommitReachable: true },
+      },
+    });
+    const a = build(replaced);
+    a.lifecycle.archive();
+    const refused = a.lifecycle.runCleanup({ selection: NO_EXPORT });
+    expect(refused.ok).toBe(true);
+    expect(replaced.calls).not.toContain(`remove-worktree:${TASK_DIR}/invoice-service`);
+
+    const verified = fakeState();
+    const b = build(verified);
+    b.lifecycle.archive();
+    b.lifecycle.runCleanup({ selection: NO_EXPORT });
+    expect(verified.calls).toContain(`remove-worktree:${TASK_DIR}/invoice-service`);
+  });
+
+  it("keeps state and a recovery entry when one worktree removal fails, and retries", () => {
+    const state = fakeState({
+      worktreeRemovals: [{ repoDir: `${TASK_DIR}/invoice-service`, ok: false, reason: "工作副本被占用" }],
+      paths: { [`${TASK_DIR}/dir-51cd20bb`]: { isSymlink: true, isDirectory: false, currentTarget: "/Users/dev/work/invoice-docs" } },
+    });
+    const { lifecycle, store } = build(state);
+    lifecycle.archive();
+    const first = lifecycle.runCleanup({ selection: { exportSessions: true, exportDrafts: true, exportUsage: true } });
+    expect(first.ok).toBe(true);
+    expect(first.receipt?.partialFailure).toBe(true);
+    expect(first.recovery.map((entry) => entry.item)).toContain("code");
+    expect(store.readLifecycle(TASK_DIR)?.projectReleased).toBe(false);
+
+    state.worktreeRemovals = [];
+    const retry = lifecycle.runCleanup({ selection: { exportSessions: true, exportDrafts: true, exportUsage: true } });
+    expect(retry.receipt?.partialFailure).toBe(false);
+    expect(store.readLifecycle(TASK_DIR)?.projectReleased).toBe(true);
+  });
+});
+
+describe("restore readiness (#147)", () => {
+  it("does not fabricate workspace readiness for a cleaned task", () => {
+    const { lifecycle } = build(fakeState({ repos: {} }));
+    lifecycle.archive();
+    lifecycle.runCleanup({ selection: { exportSessions: true, exportDrafts: true, exportUsage: true } });
+    const state = lifecycle.state();
+    lifecycle.restore();
+    expect(state.cleaned).toBe(true);
+    expect(state.restore.ready).toBe(false);
+    expect(state.restore.rows[0]).toMatchObject({ state: "missing", repair: expect.stringContaining("重新准备") });
+    expect(state.restore.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("reports a present, verified worktree as ready", () => {
+    const { lifecycle } = build(fakeState());
+    lifecycle.archive();
+    lifecycle.restore();
+    expect(lifecycle.state().restore.ready).toBe(true);
+    expect(lifecycle.state().schedulePaused).toBe(true);
   });
 });

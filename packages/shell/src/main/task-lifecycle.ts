@@ -1125,7 +1125,8 @@ export function planRepoCleanup(input: {
       detail: `${parts.join("；")}${scope === "keep" ? "；保留工作副本" : scope === "export" ? "；先导出后清理" : blocked ? "；需先选择保留或导出" : "；可清理（仍需身份核验）"}`,
     });
     if (refusedClean) warnings.push(`${repo.repoDir}：未提交／未交付修改必须先保留或导出，拒绝直接清理`);
-    else if (delivered === null) warnings.push(`${repo.repoDir}：交付状态未读取，本次不当作已交付`);
+    else if (atRisk && chosen === undefined) warnings.push(`${repo.repoDir}：未提交／未交付修改默认保留，必须先保留或导出后才能清理`);
+    if (delivered === null) warnings.push(`${repo.repoDir}：交付状态未读取，本次不当作已交付`);
     if (uncommitted === null) warnings.push(`${repo.repoDir}：未提交状态未读取（${repo.reason ?? "Git 读取失败"}），按有未提交处理`);
   }
   const blocked = rows.filter((row) => row.blocked);
