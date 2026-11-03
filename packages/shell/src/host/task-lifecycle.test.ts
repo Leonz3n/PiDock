@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { memoryTaskStore } from "./task-host.js";
 import { parseLifecycleRecord, serializeLifecycleRecord } from "./task-store.js";
 import { TaskLifecycleHost, type LifecycleSession, type TaskLifecycleResources } from "./task-lifecycle.js";
-import type { CleanupSelection, GitResourceObservation, LiveProcessObservation } from "../main/task-lifecycle.js";
+import type { CleanupSelection, GitResourceObservation, LiveProcessObservation, RepoDeliveryObservation } from "../main/task-lifecycle.js";
 
 const TASK_DIR = "/Users/dev/pidock/tasks/task-aaaaaaaa";
 const KEEP_ROOT = "/Users/dev/pidock/kept/task-aaaaaaaa";
@@ -34,6 +34,11 @@ interface FakeState {
   paths: Record<string, { isSymlink: boolean; isDirectory: boolean; currentTarget: string | null } | undefined>;
   keepOk: { codeCopyOk: boolean; exportsOk: boolean; retainedPosition: string | null };
   delegated: Record<string, { ok: boolean; reason: string }>;
+  repoDelivery: RepoDeliveryObservation[];
+  heldLocks: { resourceId: string; owner: string }[];
+  /** Subjects the fake reports as waited for; a deferred promise keeps cleanup waiting. */
+  waitGate: { waitForIdle: () => Promise<readonly string[]> };
+  worktreeRemovals: { repoDir: string; ok: boolean; reason: string }[];
 }
 
 function fakeState(overrides: Partial<FakeState> = {}): FakeState {
@@ -50,6 +55,10 @@ function fakeState(overrides: Partial<FakeState> = {}): FakeState {
     paths: {},
     keepOk: { codeCopyOk: true, exportsOk: true, retainedPosition: KEEP_ROOT },
     delegated: { terminals: { ok: true, reason: "终端记录仅在内存中，已随 Host 生命周期结束" } },
+    repoDelivery: [{ repoDir: `${TASK_DIR}/invoice-service`, uncommitted: false, delivered: true }],
+    heldLocks: [],
+    waitGate: { waitForIdle: async () => [] },
+    worktreeRemovals: [],
     ...overrides,
   };
 }
@@ -81,6 +90,14 @@ function build(state: FakeState, store = memoryTaskStore()) {
     originalCheckoutPaths: () => ["/Users/dev/work/apiserver"],
     otherTaskDirs: () => ["/Users/dev/pidock/tasks/task-bbbbbbbb"],
     delivery: () => ({ uncommitted: false, undelivered: false }),
+    repoDelivery: () => state.repoDelivery,
+    heldLocks: () => state.heldLocks,
+    waitForIdle: () => state.waitGate.waitForIdle(),
+    removeManagedWorktree: (repoDir) => {
+      const entry = state.worktreeRemovals.find((removal) => removal.repoDir === repoDir);
+      state.calls.push(`remove-worktree:${repoDir}`);
+      return entry ?? { ok: true, reason: `已移除受管工作副本 ${repoDir}` };
+    },
     availableFiles: () => ["src/api.ts"],
     availableSkills: () => ["skills/code-review/SKILL.md"],
     liveProcesses: () => state.processes,

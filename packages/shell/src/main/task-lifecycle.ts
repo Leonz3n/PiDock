@@ -434,6 +434,14 @@ export interface ArchiveInput {
     templateVersion: string | null;
   };
   usageDetails: number;
+  /**
+   * Services/terminals that were already started before the archive. Archiving
+   * never claims to have stopped them: they are external to the Agent turn.
+   */
+  external?: {
+    services: number;
+    terminals: number;
+  };
 }
 
 export interface ArchivePlan {
@@ -441,6 +449,14 @@ export interface ArchivePlan {
   stoppedSessions: string[];
   expiredApprovals: string[];
   pausedSchedules: string[];
+  /**
+   * Truthful stop claim ([T12] #147): only Agent turns are stopped by an
+   * archive. Previously started services/terminals are NEVER claimed stopped —
+   * `0` is the count this plan stopped, and `notStopped` names what still runs.
+   */
+  stopped: { agentTurns: string[]; externalServices: 0; externalTerminals: 0 };
+  notStopped: { services: number; terminals: number };
+  disclosures: string[];
   /** Records the archive keeps (never removed by archiving). */
   kept: VersionedRecordKeep[];
   /** Archiving must not zero or double-count usage. */
@@ -476,6 +492,18 @@ export function planArchive(input: ArchiveInput): ArchivePlan {
     ],
     usage: { detailsBefore: input.usageDetails, detailsAfter: input.usageDetails, preserved: true },
     scheduleResumedOnRestore: false,
+    stopped: { agentTurns: stoppedSessions, externalServices: 0, externalTerminals: 0 },
+    notStopped: { services: input.external?.services ?? 0, terminals: input.external?.terminals ?? 0 },
+    disclosures: [
+      "归档只停止 Agent 回合，并使未执行确认失效；不主张已停止此前启动的外部服务或终端",
+      ...((input.external?.services ?? 0) > 0
+        ? [`本任务记录的 ${String(input.external?.services)} 个服务仍按原样运行（未停止、未接管其进程）`]
+        : []),
+      ...((input.external?.terminals ?? 0) > 0
+        ? [`本任务记录的 ${String(input.external?.terminals)} 个终端仍按原样运行（未停止）`]
+        : []),
+      "恢复不会自动重新启动服务、终端或定时任务",
+    ],
     steps: [
       ...stoppedSessions.map<QuitStep>((sessionId) => ({
         phase: "abort-agent",
@@ -1002,3 +1030,235 @@ export function planRelaunch(input: RelaunchInput): RelaunchPlan {
 
 /** Kept for readability of the plan shape above. */
 type RelaunchedSession = RelaunchPlan["tasks"][number]["sessions"][number];
+
+/* ------------------------------------------------------------------------- *
+ * [Pencil T12] (#147) task-level archive/cleanup: per-repo real git reading,
+ * in-flight waiting, identity-verified worktree removal and restore readiness.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One repository of the task, as main really read it. Both fields are
+ * three-valued on purpose: `null` means the read did not produce an answer and
+ * is therefore **never** treated as committed/delivered. There is no delivery
+ * ledger in this slice, so `delivered` stays `null` (unknown) unless a real
+ * delivery record names this repo — an unknown delivery is not a delivered one.
+ */
+export interface RepoDeliveryObservation {
+  repoDir: string;
+  /** Real `git status --porcelain`: true = dirty, false = clean, null = unread. */
+  uncommitted: boolean | null;
+  /** True only when a real delivery record proves this repo's branch was delivered. */
+  delivered: boolean | null;
+  /** Named read failure, when the observation could not be made. */
+  reason?: string;
+}
+
+/** What the user chooses for one repository ([T12] #147 S05 per-repo rows). */
+export type RepoCleanupScope = "keep" | "export" | "clean";
+
+export interface RepoCleanupRow {
+  repoDir: string;
+  scope: RepoCleanupScope;
+  /** True when the change is not provably committed and delivered. */
+  atRisk: boolean;
+  /** True when cleanup must refuse this repo until the user decides keep/export. */
+  blocked: boolean;
+  uncommitted: boolean | null;
+  delivered: boolean | null;
+  detail: string;
+}
+
+export interface RepoCleanupPlan {
+  rows: RepoCleanupRow[];
+  /** Rows cleanup refuses right now (default refusal, or a refused "clean"). */
+  blocked: RepoCleanupRow[];
+  /** Rows that still need an explicit keep/export decision from the user. */
+  requiresDecision: RepoCleanupRow[];
+  /** Repos whose managed worktree may be removed after identity verification. */
+  cleanable: string[];
+  warnings: string[];
+}
+
+/** Archive/cleanup choices an archived task offers ([T12] #147 box 1). */
+export type TaskArchiveMode = "archive-only" | "archive-and-cleanup";
+
+export function archiveModeLabel(mode: TaskArchiveMode): string {
+  return mode === "archive-only" ? "仅归档保留副本" : "归档并清理";
+}
+
+/**
+ * Per-repo cleanup scope ([T12] #147 box 2): every repo is read for real
+ * uncommitted changes and for a provable delivery. Uncommitted or undelivered
+ * work must be explicitly kept or exported; `clean` is refused for it, and an
+ * unknown delivery is not treated as delivered. A repo with no uncommitted and
+ * a provable delivery is cleanable (identity is still verified before removal).
+ */
+export function planRepoCleanup(input: {
+  repos: readonly RepoDeliveryObservation[];
+  /** Explicit per-repo choice; a missing entry keeps the conservative default. */
+  choices?: Readonly<Record<string, RepoCleanupScope>> | undefined;
+}): RepoCleanupPlan {
+  const rows: RepoCleanupRow[] = [];
+  const warnings: string[] = [];
+  for (const repo of input.repos) {
+    const uncommitted = repo.uncommitted;
+    const delivered = repo.delivered;
+    const atRisk = uncommitted !== false || delivered !== true;
+    const chosen = input.choices?.[repo.repoDir];
+    const scope: RepoCleanupScope = chosen ?? (atRisk ? "keep" : "clean");
+    const refusedClean = atRisk && scope === "clean";
+    const blocked = atRisk && (chosen === undefined || executedClean(scope));
+    const parts: string[] = [];
+    if (uncommitted === true) parts.push("有未提交修改");
+    else if (uncommitted === null) parts.push(`未提交状态未读取（${repo.reason ?? "Git 读取失败"}）：按未提交处理`);
+    else parts.push("无未提交修改");
+    if (delivered === true) parts.push("已交付");
+    else if (delivered === null) parts.push("交付状态未知：不当作已交付");
+    else parts.push("未交付");
+    rows.push({
+      repoDir: repo.repoDir,
+      scope,
+      atRisk,
+      blocked,
+      uncommitted,
+      delivered,
+      detail: `${parts.join("；")}${scope === "keep" ? "；保留工作副本" : scope === "export" ? "；先导出后清理" : blocked ? "；需先选择保留或导出" : "；可清理（仍需身份核验）"}`,
+    });
+    if (refusedClean) warnings.push(`${repo.repoDir}：未提交／未交付修改必须先保留或导出，拒绝直接清理`);
+    else if (delivered === null) warnings.push(`${repo.repoDir}：交付状态未读取，本次不当作已交付`);
+    if (uncommitted === null) warnings.push(`${repo.repoDir}：未提交状态未读取（${repo.reason ?? "Git 读取失败"}），按有未提交处理`);
+  }
+  const blocked = rows.filter((row) => row.blocked);
+  return {
+    rows,
+    blocked,
+    requiresDecision: rows.filter((row) => row.blocked && row.scope === "keep"),
+    cleanable: rows.filter((row) => !row.blocked && row.scope === "clean").map((row) => row.repoDir),
+    warnings,
+  };
+}
+
+/** `clean` is the only scope that removes; kept/exported work stays on disk. */
+function executedClean(scope: RepoCleanupScope): boolean {
+  return scope === "clean";
+}
+
+export type WorktreeCleanupAction = "keep" | "remove" | "refuse";
+
+export interface WorktreeCleanupDecision {
+  repoDir: string;
+  action: WorktreeCleanupAction;
+  reason: string;
+}
+
+/**
+ * Removal of one managed worktree ([T12] #147 box 4): only a worktree that is
+ * the identity-verified managed worktree of THIS task and whose repo scope is
+ * `clean` is removed. A replaced path, another checkout, a branch switch or a
+ * rewritten base is refused by name so the UI can show what to repair — and the
+ * original checkout is never a removal target.
+ */
+export function planWorktreeCleanup(input: {
+  repoDir: string;
+  identity: GitIdentityVerdict;
+  scope: RepoCleanupScope;
+  originalCheckoutPaths: readonly string[];
+}): WorktreeCleanupDecision {
+  if (input.scope !== "clean") {
+    return { repoDir: input.repoDir, action: "keep", reason: `保留 ${input.repoDir}（选择保留／导出，不删除工作副本）` };
+  }
+  if (input.originalCheckoutPaths.some((original) => isInside(input.repoDir, original))) {
+    return { repoDir: input.repoDir, action: "refuse", reason: `${input.repoDir} 是项目原检出目录，绝不删除` };
+  }
+  if (!input.identity.ok) {
+    return {
+      repoDir: input.repoDir,
+      action: "refuse",
+      reason: `身份不符（${input.identity.code}）：${input.identity.reason}；拒绝清理，路径保留待修复`,
+    };
+  }
+  return { repoDir: input.repoDir, action: "remove", reason: `身份已核验：移除本任务受管工作副本 ${input.repoDir}（保留原仓库 ${input.identity.branch} 分支与提交）` };
+}
+
+export interface CleanupWaitPlan {
+  /** True when cleanup may proceed now. */
+  ok: boolean;
+  /** What cleanup is waiting for, one entry per in-flight subject. */
+  waiting: { kind: "turn" | "lock"; subject: string; detail: string }[];
+  /** Named reason a wait cannot be met (kept with a recovery entry). */
+  error?: string;
+}
+
+/**
+ * Cleanup waits for in-flight work ([T12] #147 box 3): a running/awaiting Agent
+ * turn and a held write lock must settle before a worktree is removed. The
+ * wait never cancels the turn on the user's behalf — it reports what it waits
+ * for so the UI can say so and keep a recovery entry.
+ */
+export function planCleanupWait(input: {
+  turns: readonly { sessionId: string; runState: string }[];
+  locks: readonly { resourceId: string; owner: string }[];
+  taskId: string;
+}): CleanupWaitPlan {
+  const waiting: CleanupWaitPlan["waiting"] = [];
+  for (const turn of input.turns) {
+    if (turn.runState !== "running" && turn.runState !== "approval") continue;
+    waiting.push({ kind: "turn", subject: turn.sessionId, detail: `会话 ${turn.sessionId} 仍处于 ${turn.runState}：清理先等待该回合结束` });
+  }
+  for (const lock of input.locks) {
+    if (lock.owner !== input.taskId) continue;
+    waiting.push({ kind: "lock", subject: lock.resourceId, detail: `本任务仍持有写入权 ${lock.resourceId}：清理先等待其释放` });
+  }
+  return { ok: waiting.length === 0, waiting };
+}
+
+export type RestoreRepoState = "ready" | "missing" | "moved" | "identity-mismatch";
+
+export interface RestoreReadinessRow {
+  repoDir: string;
+  state: RestoreRepoState;
+  reason: string;
+  /** Repair entry the user can act on; `null` when nothing needs repairing. */
+  repair: string | null;
+}
+
+export interface RestoreReadiness {
+  ready: boolean;
+  /** True when a cleanup receipt says this task's workspace was cleaned. */
+  cleaned: boolean;
+  rows: RestoreReadinessRow[];
+  warnings: string[];
+}
+
+/**
+ * Restoring a cleaned task ([T12] #147 box 5): a cleaned workspace is GONE, so
+ * restore reports every repo as missing/moved with a named repair entry instead
+ * of fabricating readiness. A dirty-but-present worktree is still restorable
+ * (cleanup only removes what it verified), so presence + identity is what counts.
+ */
+export function planRestoreReadiness(input: {
+  cleaned: boolean;
+  repos: readonly { repoDir: string; observed: GitResourceObservation | undefined; record: GitResourceRecord }[];
+}): RestoreReadiness {
+  const rows = input.repos.map<RestoreReadinessRow>((repo) => {
+    const observed = repo.observed;
+    const repair = "从工作空间原始仓库重新准备该任务的工作副本（不会沿用已清理路径）";
+    if (!observed || observed.head === null) {
+      return { repoDir: repo.repoDir, state: "missing", reason: input.cleaned ? "该任务已清理：工作副本已按记录移除" : "工作副本路径不存在（可能被移动或删除）", repair };
+    }
+    if (!observed.isWorktree) {
+      return { repoDir: repo.repoDir, state: "moved", reason: `${repo.repoDir} 已不是本任务的 Git 工作副本（被替换或指向其它检出）`, repair };
+    }
+    const identity = verifyGitResourceIdentity({ record: repo.record, observed });
+    if (!identity.ok) {
+      return { repoDir: repo.repoDir, state: "identity-mismatch", reason: identity.reason, repair };
+    }
+    return { repoDir: repo.repoDir, state: "ready", reason: "工作副本身份核验通过", repair: null };
+  });
+  const warnings = rows.length === 0
+    ? [input.cleaned ? "该任务已清理且没有登记仓库：恢复不主张工作区就绪" : "该任务没有登记仓库：恢复不主张工作区就绪"]
+    : rows.some((row) => row.state !== "ready")
+      ? ["部分仓库不可用：恢复后需先修复工作区，界面不显示为就绪"]
+      : [];
+  return { ready: rows.length > 0 && rows.every((row) => row.state === "ready"), cleaned: input.cleaned, rows, warnings };
+}
