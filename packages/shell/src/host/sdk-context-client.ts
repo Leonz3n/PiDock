@@ -20,7 +20,7 @@
 
 import { shutdownDeadline } from "./shutdown-deadline.js";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { buildSdkContextEnv, type SdkContextTaskBinding } from "./sdk-context-env.js";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -86,6 +86,12 @@ export interface SdkContextOptions {
    * still declares no tools, so nothing can execute (fail closed).
    */
   toolHost?: SdkToolHost;
+  /**
+   * [Pencil T15] #150: the exact native `mcp.json` the session loads. Defaults
+   * to the Host's `PIDOCK_MCP_CONFIG` (set only by main's task-host spawn), so
+   * a context without one has no MCP surface.
+   */
+  mcpConfigPath?: string;
   /** Injected for tests; defaults to the compiled worker next to this file. */
   spawn?: (env: Record<string, string>, workerData: unknown) => SdkContextWorkerLike;
   /** Bound on the worker's bootstrap reply; a silent worker must not hang a turn. */
@@ -147,10 +153,16 @@ export class SdkContextClient implements SdkTextKernelPort {
       // `toolsEnabled` is the broker marker the worker gates its tool
       // declarations on: absent (no `toolHost`) means the isolated context must
       // declare no tools, so a tool can never exist without a Host executor.
+      const mcpConfigPath = this.options.mcpConfigPath ?? process.env["PIDOCK_MCP_CONFIG"];
+      if (mcpConfigPath !== undefined && (!isAbsolute(mcpConfigPath) || mcpConfigPath.includes("\0"))) throw new Error("sdk-context-input-invalid");
       const workerData = {
         task: this.options.task, config: this.options.config, credential: this.options.credential,
         toolsEnabled: this.options.toolHost !== undefined,
         ...(this.options.thinkingLevel === undefined ? {} : { thinkingLevel: this.options.thinkingLevel }),
+        // Only a Host that wired a broker gets the MCP path too: MCP tools are
+        // decided by that broker, so advertising them without it would be a
+        // tool whose only answer is a refusal.
+        ...(this.options.toolHost === undefined || mcpConfigPath === undefined ? {} : { mcpConfigPath }),
       };
       const worker = this.options.spawn?.(env, workerData) ?? new Worker(new URL("./sdk-context-worker.js", import.meta.url), { env, workerData });
       this.worker = worker;
