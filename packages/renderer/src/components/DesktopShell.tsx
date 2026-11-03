@@ -62,12 +62,23 @@ export type DesktopView =
   | { view: "env" }
   | { view: DesktopLocalPageKey };
 
-/** 能力管理 and 本机设置: the 系统 group's two local pages, each routed to a real page (#24). */
+/**
+ * 能力管理 and 设置: the 系统 group's TWO SEPARATE local pages, each routed to its
+ * own full-window page (#24, [Pencil T14] #149). They are separate destinations
+ * with separate navs — 能力管理 defaults to Providers, 设置 defaults to 外观 — and
+ * neither list carries Extensions / Computer Use / Browser entries.
+ */
 export type DesktopLocalPageKey = "capabilities" | "settings";
 
 const LABELS: Record<DesktopLocalPageKey, string> = {
   capabilities: "能力管理",
-  settings: "本机设置",
+  settings: "设置",
+};
+
+/** The compact rail's glyphs per design S06: blocks for 能力管理, sliders for 设置. */
+const LOCAL_PAGE_ICONS: Record<DesktopLocalPageKey, IconName> = {
+  capabilities: "grid",
+  settings: "sliders",
 };
 
 const NAV_ITEM_CLASS = "flex w-full items-center gap-[10px] rounded-[7px] px-[11px] py-[9px] text-left text-[12px] below-mid:justify-center";
@@ -352,8 +363,8 @@ export function DesktopShell({
             <SidebarNavButton label="定时任务" icon="clock" active={view.view === "schedules"} onSelect={() => onNavigate({ view: "schedules" })} />
             <SidebarNavButton label="环境与服务" icon="settings" active={view.view === "env"} onSelect={() => onNavigate({ view: "env" })} />
             <SidebarNavButton label="Token 用量" icon="chart" active={view.view === "usage"} onSelect={() => onNavigate({ view: "usage" })} />
-            <SidebarNavButton label={LABELS.capabilities} icon="book" active={view.view === "capabilities"} onSelect={() => onNavigate({ view: "capabilities" })} />
-            <SidebarNavButton label={LABELS.settings} icon="folder" active={view.view === "settings"} onSelect={() => onNavigate({ view: "settings" })} />
+            <SidebarNavButton label={LABELS.capabilities} icon={LOCAL_PAGE_ICONS.capabilities} active={view.view === "capabilities"} onSelect={() => onNavigate({ view: "capabilities" })} />
+            <SidebarNavButton label={LABELS.settings} icon={LOCAL_PAGE_ICONS.settings} active={view.view === "settings"} onSelect={() => onNavigate({ view: "settings" })} />
             <div data-user-chip="local-workspace" title="本机工作区" className="flex items-center gap-[9px] px-2 py-[10px]">
               <LocalUserAvatar />
               <span className="truncate text-[11px] text-ink below-mid:hidden">本机工作区</span>
