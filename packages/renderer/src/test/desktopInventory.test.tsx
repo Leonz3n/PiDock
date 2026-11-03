@@ -242,7 +242,9 @@ describe("Desktop inventory pending creation recovery", () => {
     fireEvent.click(await screen.findByRole("button", { name: "确认创建 / 恢复" }));
     // The task view (facts + conversation) replaces the project management page.
     expect(await screen.findByTestId("desktop-task-facts")).toBeInTheDocument();
-    expect(screen.getByTestId("task-facts-mode")).toHaveTextContent("已有 Git 目录 · 共享原检出");
+    // The mode badge only exists once the Host facts read resolved: await it,
+    // never assert it synchronously (the section renders while loading).
+    expect(await screen.findByTestId("task-facts-mode")).toHaveTextContent("已有 Git 目录 · 共享原检出");
     expect(screen.queryByTestId("desktop-inventory")).not.toBeInTheDocument();
   });
 });

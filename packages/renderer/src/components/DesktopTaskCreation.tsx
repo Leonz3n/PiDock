@@ -69,6 +69,14 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
     setOpen(true);
     setError(null);
     setNotice(null);
+    // Esc / 取消 only close the dialog; main still holds the pending intent and
+    // refuses a second `prepare` (`已有待完成的任务`). Read it back so reopening
+    // shows the resumable preview instead of a form that cannot be submitted.
+    if (typeof bridge.createTask === "function") {
+      void currentCreation(bridge).then((current) => {
+        if (current?.state === "pending") { setIntent(current); setMode(current.workspaceMode); }
+      }).catch(() => undefined);
+    }
   };
   const close = () => { if (!busy) { setOpen(false); setIntent(null); } };
 
@@ -199,7 +207,11 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
             </div>
             <div className="rounded-[5px] border border-line bg-bg px-3 py-2">
               <p className="break-all font-mono text-xs text-ink">{intent.taskDir}</p>
-              <p className="mt-1 text-xs text-muted">任务分支：{hostText(intent.branch, "Host 未上报任务分支")}</p>
+              <p className="mt-1 text-xs text-muted">{intent.workspaceMode === "existing-git"
+                // A shared original gets no task branch at all: naming one here
+                // would invent a branch that never exists.
+                ? "任务分支：不创建（直接使用原检出的当前分支）"
+                : `任务分支：${hostText(intent.branch, "Host 未上报任务分支")}`}</p>
             </div>
             {intent.workspaceMode === "existing-git"
               ? intent.repos.map((repo) => <p className="break-all text-xs" key={repo.id}>

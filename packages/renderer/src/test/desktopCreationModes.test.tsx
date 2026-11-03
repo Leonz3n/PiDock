@@ -108,6 +108,27 @@ describe("task workspace mode in the S02 create form", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project.id, existingIntent.taskId));
   });
 
+  it("reopens the pending intent after Esc instead of a form main would refuse", async () => {
+    // Main keeps the pending intent when the dialog closes, so a bare form
+    // could not prepare a second one (`已有待完成的任务`). Reopening must read it
+    // back and show the resumable preview.
+    const createTask = vi.fn(async (request: { op: string }) => {
+      if (request.op === "current") return { ok: true, payload: existingIntent };
+      return { ok: true, payload: { canceled: false, intent: existingIntent } };
+    });
+    render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={vi.fn(async () => {})} />);
+    // The mount read opens the dialog on the pending intent by itself.
+    expect(await screen.findByText(/原检出 \/local\/web/)).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新建任务" })).not.toBeInTheDocument());
+    const readsBefore = createTask.mock.calls.filter(([request]) => request.op === "current").length;
+    fireEvent.click(screen.getByRole("button", { name: "任务" }));
+    await waitFor(() => expect(createTask.mock.calls.filter(([request]) => request.op === "current").length).toBeGreaterThan(readsBefore));
+    expect(await screen.findByText(/原检出 \/local\/web/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("任务名称")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "读取原检出并预览" })).not.toBeInTheDocument();
+  });
+
   it("keeps the S02 keyboard contract: Esc closes and ⌘↵ submits", async () => {
     const createTask = vi.fn(async (request: { op: string }) => {
       if (request.op === "current") return { ok: true, payload: null };

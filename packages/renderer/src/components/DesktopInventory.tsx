@@ -539,7 +539,7 @@ export function DesktopInventory() {
   // source, mode badge, per-source verification) with the existing conversation
   // entry directly below — no invented sessions, no fixture roots.
   if (activeTask) return shell(<div className="flex h-full min-h-0 flex-col">
-    <DesktopTaskFacts taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? {}} />
+    <DesktopTaskFacts taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge} />
     <div className="min-h-0 flex-1">
       <DesktopConversation key={activeTask.id} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "providers" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
     </div>
