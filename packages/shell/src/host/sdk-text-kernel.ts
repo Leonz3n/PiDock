@@ -89,6 +89,13 @@ function taskResources(taskDir: string, skillPrompt = ""): ResourceLoader {
  * and never rewrites the prompt of one that is already running. An absent,
  * invalid or unreadable document contributes nothing: the turn still runs with
  * the task prompt, and the named scan problem stays in the pane.
+ *
+ * The advertised location is outside the task for the usual (user-added)
+ * source, so the Host broker grants a read-only capability for exactly those
+ * files: `fs.read` of a skill resource of an ENABLED source is served through
+ * `skill-resource-access.ts`, while writes, commands and listings stay inside
+ * the task. The prompt itself is still the only injection point - a restored
+ * session re-opens its transcript and loads nothing again.
  */
 export function sessionSkillPrompt(file: string | undefined): string {
   if (!file) return "";

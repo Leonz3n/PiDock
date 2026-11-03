@@ -882,6 +882,11 @@ export class TaskWorkspaceHost {
       sharedPaths: (input) => this.claimAgentPath(input.sessionId, input.label, input.realPath),
       scope: () => this.sdkToolScope(),
       resolveRealPath: (path) => this.resolveRealPath(path),
+      // [#151] The same app-private Skills document the isolated context reads
+      // at session creation. The broker re-reads it on every skill resource
+      // read, so a source switched off or removed loses the read capability
+      // immediately (see `skill-resource-access.ts`).
+      ...(process.env["PIDOCK_SKILL_SOURCES_FILE"] ? { skillSourcesFile: () => process.env["PIDOCK_SKILL_SOURCES_FILE"] } : {}),
       // [PiDock 04] #7 box 5: the Agent's service tools read and control this
       // task's REAL services through the Host-owned runtime and driver (`host.ts`
       // hands the same pair to `task/serviceStatus`/`task/controlService`). A

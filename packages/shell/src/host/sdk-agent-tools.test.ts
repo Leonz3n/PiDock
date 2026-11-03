@@ -320,6 +320,52 @@ it("lists and searches inside the task and runs a command in the worktree", asyn
   await h.host.shutdownSdk();
 });
 
+/**
+ * [#151] The production wiring, not just the broker option: main hands the Host
+ * fork `PIDOCK_SKILL_SOURCES_FILE`, and the Host's broker must read that same
+ * app-private document for its read-only Skills grant. An external source is
+ * readable while enabled; switching it off through the real document loses the
+ * grant on the VERY NEXT read, without restarting the Host or the session.
+ */
+it("serves an external Skills source read through the env-wired broker and loses it when disabled", async () => {
+  const h = await harness();
+  const source = join(h.fixture.root, "external-skills");
+  const skillDir = join(source, "pdf-tools");
+  mkdirSync(join(skillDir, "references"), { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), "---\nname: pdf-tools\ndescription: PDFs.\n---\n\nSKILL-BODY-EXTERNAL\n");
+  writeFileSync(join(skillDir, "references", "format.md"), "FORMAT-EXTERNAL\n");
+  const configFile = join(h.fixture.root, "skill-sources.json");
+  const writeConfig = (enabled: boolean): void => {
+    writeFileSync(configFile, JSON.stringify({ version: 1, sources: [{ id: "src-aaaa1111", path: source, enabled }] }));
+  };
+  writeConfig(true);
+  vi.stubEnv("PIDOCK_SKILL_SOURCES_FILE", configFile);
+  try {
+    await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
+    await h.host.setPermission("main", "auto");
+
+    const read = await h.prompt("fs.read", { path: join(skillDir, "SKILL.md") });
+    expect(read.text).toContain("SKILL-BODY-EXTERNAL");
+    const resource = await h.prompt("fs.read", { path: join(skillDir, "references", "format.md") });
+    expect(resource.text).toContain("FORMAT-EXTERNAL");
+
+    // Writes and listings outside the task are still refused (the grant is read-only).
+    const written = await h.prompt("fs.write", { path: join(skillDir, "planted.md"), content: "planted" });
+    expect(written.text).toContain("tool-refused:");
+    expect(existsSync(join(skillDir, "planted.md"))).toBe(false);
+    const listed = await h.prompt("fs.search", { path: source });
+    expect(listed.text).toContain("tool-refused:");
+
+    // The real document is re-read per call: off means refused by name now.
+    writeConfig(false);
+    const disabled = await h.prompt("fs.read", { path: join(skillDir, "SKILL.md") });
+    expect(disabled.text).toContain("tool-refused:skill-source-disabled");
+  } finally {
+    vi.unstubAllEnvs();
+    await h.host.shutdownSdk();
+  }
+});
+
 // win32 (#53): the platform refusal has to reach the caller as a NAME, because the failure it
 // replaces is unnamed at the surface the Agent calls - `spawn("/bin/sh", …)` reports `ENOENT`,
 // which the exec tool renders as `command-spawn-failed: spawn /bin/sh ENOENT` with `exit unknown`,

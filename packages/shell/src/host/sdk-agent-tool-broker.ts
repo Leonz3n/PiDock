@@ -17,6 +17,13 @@
  *    application-private path and anything outside the task folder are refused
  *    by name before any read or write; a write must additionally land inside one
  *    of this task's own worktrees;
+ * 2b. [#151] the ONE read-only exception: `fs.read` may read a `SKILL.md` (or a
+ *    relative file it references) of an explicitly added, enabled local Skills
+ *    source. It is decided per call from the app-private source document and on
+ *    real paths only (`skill-resource-access.ts`), it never applies to a write,
+ *    a command or a directory listing, and the task-scoped gate is not used for
+ *    it (the gate's own rule is "inside the task", which would deny the very
+ *    file the skill prompt advertised);
  * 3. the **existing permission gate** (`main/pi-session.ts` semantics) decides:
  *    `read` denies every non-read tool, `default` asks for command tools, `auto`
  *    allows inside the task;
@@ -55,6 +62,7 @@ import { SERVICE_VALUE_MASK } from "../main/service-config.js";
 import type { ControlExecutionPort } from "./execution-ledger.js";
 import { isCredentialEnvName } from "./explicit-text-provider.js";
 import { normalizeScopePath } from "./path-coordination.js";
+import { decideSkillResourceRead, type SkillResourceDecision, type SkillResourceTarget } from "./skill-resource-access.js";
 import { runAgentServiceControl, type ServiceExecutionDriver } from "./service-control.js";
 import { probeServiceHealth, type ServiceHealthObservation } from "./service-health-probe.js";
 import { SERVICE_CONTROL_TOOL, type ServiceRecord, type TaskServiceRuntime } from "./service-runtime.js";
@@ -193,6 +201,16 @@ export interface SdkAgentToolBrokerOptions {
   templates?: () => ServiceTemplateEditPort | undefined;
   /** Real path: `realpath` of the deepest existing ancestor + the rest. */
   resolveRealPath(path: string): string;
+  /**
+   * [#151] The app-private Skills source document (`skill-sources.json` under
+   * `userData`). When present, `fs.read` may read a `SKILL.md` (or a relative
+   * file it references) of an explicitly added, enabled source even though the
+   * source lives outside the task. Nothing else is widened: the grant is
+   * read-only, decided per call from the current document and real paths, and
+   * `fs.search`/`fs.write`/`exec.run` keep the task-only rules. Absent (a Host
+   * main did not wire, or a pre-#151 wiring) means no grant at all.
+   */
+  skillSourcesFile?: () => string | undefined;
   /** True while the Host is closing (no new effect may start). */
   closing(): boolean;
   /**
@@ -1117,7 +1135,16 @@ export class SdkAgentToolBroker {
     const resolved = resolveSdkAgentToolPath({
       scope, resolveRealPath: this.options.resolveRealPath, requested: parsed.values.path!, base: scope.taskDir, mode: spec.kind === "read" ? "read" : "write",
     });
-    if (!resolved.ok) return refuse(resolved.code, resolved.reason);
+    if (!resolved.ok) {
+      // [#151] The advertised `SKILL.md` of an explicitly added source is a
+      // legitimate read even though it is outside the task: the Skills grant
+      // is consulted only after the task rule refused, only for `fs.read`, and
+      // it can never reach a write, a command or a directory listing.
+      const grant = spec.name === "fs.read" ? this.skillResourceGrant(scope, parsed.values.path!) : null;
+      if (grant === null) return refuse(resolved.code, resolved.reason);
+      if (grant.kind === "refused") return refuse(grant.code, grant.reason);
+      return await this.executeSkillRead(scope, parsed.values.path!, parsed.values);
+    }
     if (spec.name === "fs.write") {
       const fingerprint = fileFingerprint(resolved.real);
       if (fingerprint.startsWith("not-a-file") || fingerprint.startsWith("too-large")) {
@@ -1585,6 +1612,66 @@ export class SdkAgentToolBroker {
         finish("closed");
       }
     });
+  }
+
+  /**
+   * [#151] The lexical + real spelling of one requested read. `null` when the
+   * request cannot be resolved (then the task refusal stays the answer).
+   */
+  private skillResourceTarget(scope: SdkAgentToolScope, requested: string): SkillResourceTarget | null {
+    if (this.options.skillSourcesFile === undefined) return null;
+    const lexical = resolve(scope.taskDir, requested);
+    try {
+      return { lexical, real: resolveLinkChain(lexical, this.options.resolveRealPath) };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * [#151] The Skills grant for one request, or `null` when the path is not a
+   * resource of a registered source (the caller then keeps the task refusal).
+   * `assertProtected` still wins: an application-private file is not readable
+   * just because a user added its folder as a source.
+   */
+  private skillResourceGrant(scope: SdkAgentToolScope, requested: string): SkillResourceDecision | null {
+    const target = this.skillResourceTarget(scope, requested);
+    if (target === null) return null;
+    const decision = decideSkillResourceRead(this.options.skillSourcesFile?.(), target);
+    if (decision === null) return null;
+    try {
+      scope.assertProtected(target.lexical);
+      scope.assertProtected(target.real);
+    } catch {
+      return null;
+    }
+    return decision;
+  }
+
+  /**
+   * [#151] Read one file of an enabled Skills source.
+   *
+   * The grant is re-decided right before the effect: the source document is read
+   * again and the real path resolved again, so a source switched off, removed or
+   * made unreadable since the request - or a symlink swapped in after it - loses
+   * the capability instead of being served. The file itself goes through the
+   * same bounded, regular-file-only reader as an in-task read; a directory is
+   * refused, never listed.
+   */
+  private async executeSkillRead(
+    scope: SdkAgentToolScope,
+    requested: string,
+    values: { pattern?: string; offset?: number; limit?: number },
+  ): Promise<SdkAgentToolOutcome> {
+    if (this.closed || this.options.closing()) return refuse("tool-refused:task-host-closing", "任务宿主正在关闭，执行已取消");
+    const grant = this.skillResourceGrant(scope, requested);
+    if (grant === null) return refuse("tool-refused:skill-source-unknown", "目标不再属于已启用且注册的 Skills 来源，读取已拒绝");
+    if (grant.kind === "refused") return refuse(grant.code, grant.reason);
+    try {
+      return await this.executeRead("fs.read", grant.real, values);
+    } catch {
+      return refuse("tool-refused:skill-source-unreadable", `技能资源不可读取：${grant.real}`);
+    }
   }
 
   private async executeRead(

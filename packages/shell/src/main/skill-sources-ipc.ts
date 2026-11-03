@@ -16,10 +16,21 @@
 import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { SkillSourceStore, type SkillSourcesView } from "./skill-source-store.js";
+import { sourcePathKey } from "../host/skill-sources.js";
 
-export type SkillSourcesResult = { ok: true; view: SkillSourcesView } | { ok: false; error: string };
+export type SkillSourcesResult =
+  | {
+    ok: true;
+    view: SkillSourcesView;
+    /**
+     * [#151] The exact file `open` resolved. The caller launches it with the OS
+     * handler; the page never receives or names a path.
+     */
+    open?: string;
+  }
+  | { ok: false; error: string };
 
-const OPS = ["list", "add", "remove", "setEnabled"] as const;
+const OPS = ["list", "add", "remove", "setEnabled", "open"] as const;
 export type SkillSourcesOp = (typeof OPS)[number];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -48,12 +59,36 @@ export function performSkillSourcesOperation(payload: unknown, userData: string)
     add: ["op", "path"],
     remove: ["op", "id"],
     setEnabled: ["op", "id", "enabled"],
+    // `open` names the skill key the pane already shows; main re-derives the
+    // file from its OWN scan, so a path is never accepted from the page.
+    open: ["op", "key"],
   };
   if (Object.keys(payload).some((key) => !allowed[op as SkillSourcesOp].includes(key))) {
     return { ok: false, error: "Skills 操作包含多余字段" };
   }
   const store = new SkillSourceStore(userData);
   if (op === "list") return { ok: true, view: store.view() };
+  if (op === "open") {
+    const key = payload["key"];
+    if (typeof key !== "string" || key.length === 0 || key.length > 512) return { ok: false, error: "技能标识无效" };
+    // [#151] The row's key is re-verified against the CURRENT scan: a source that
+    // was switched off or removed since the pane was rendered has no entry any
+    // more, and the file is served only when it still resolves inside that
+    // source's directory.
+    const view = store.view();
+    const sourceId = key.includes("::") ? key.slice(0, key.indexOf("::")) : "";
+    const source = view.sources.find((item) => item.id === sourceId);
+    if (!source) return { ok: false, error: "技能不存在或来源已被移除" };
+    if (!source.enabled) return { ok: false, error: "该技能来源已停用，重新启用后才能打开" };
+    const entry = source.skills.find((skill) => skill.key === key);
+    if (!entry) return { ok: false, error: "技能不存在，可能已从来源中移除" };
+    const root = sourcePathKey(source.path);
+    const file = sourcePathKey(entry.skillFile);
+    if (file !== root && !file.startsWith(`${root}/`)) {
+      return { ok: false, error: "技能文件不在来源目录内，已拒绝打开" };
+    }
+    return { ok: true, view, open: entry.skillFile };
+  }
   if (op === "add") {
     const path = directoryRefusal(payload["path"]);
     if (!path.ok) return { ok: false, error: path.error };

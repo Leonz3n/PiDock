@@ -7,6 +7,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  shell,
   utilityProcess,
   WebContentsView,
 } from "electron";
@@ -2429,11 +2430,19 @@ export function registerIpc(
 
   // [Pencil T16] #151 local Skills sources: main owns the app-private document
   // and the real-disk scan; the page names only an op, a directory or an id.
+  // `open` resolves the row's OWN file from that scan and hands it to the OS
+  // default handler - a read-only inspection, no editor settings and no path
+  // from the page.
   ipcMain.handle("shell/skillsOp", async (event, payload?: unknown) => {
     try {
       registry.requireShellSender(event);
       const result = performSkillSourcesOperation(payload, app.getPath("userData"));
-      return result.ok ? { ok: true as const, payload: result.view } : { ok: false as const, error: result.error };
+      if (!result.ok) return { ok: false as const, error: result.error };
+      if (result.open !== undefined) {
+        const failure = await shell.openPath(result.open);
+        if (failure.length > 0) return { ok: false as const, error: "无法用系统默认程序打开技能文件" };
+      }
+      return { ok: true as const, payload: result.view };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: errorMessage(error) };

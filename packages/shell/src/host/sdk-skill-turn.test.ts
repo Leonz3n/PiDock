@@ -35,8 +35,26 @@ import { createExplicitTextRuntime, isCredentialEnvName, type ExplicitTextProvid
 import { buildTaskDiskRecord, serializeTaskRecord } from "./task-store.js";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { SDK_AGENT_TOOL_NAMES, type SdkAgentToolOutcome } from "./sdk-agent-tool-contract.js";
+import { SdkAgentToolBroker, type SdkAgentToolChannel, type SdkAgentToolScope } from "./sdk-agent-tool-broker.js";
 
 import { SkillSourceStore } from "../main/skill-source-store.js";
+
+/** `realpath` of the deepest existing ancestor + the rest (the broker's contract). */
+function realpathDeep(path: string): string {
+  const { existsSync, realpathSync } = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+  const { basename, dirname } = process.getBuiltinModule("node:path") as typeof import("node:path");
+  const suffix: string[] = [];
+  let current = path.trim();
+  while (current.length > 0 && !existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) break;
+    suffix.unshift(basename(current));
+    current = parent;
+  }
+  let resolved = current;
+  try { resolved = realpathSync(current); } catch { resolved = current; }
+  return suffix.length > 0 ? `${resolved.replace(/[\\/]+$/, "")}/${suffix.join("/")}` : resolved;
+}
 
 const CREDENTIAL = "sk-loopback-skills-0123456789abcdef";
 const roots: string[] = [];
@@ -273,5 +291,105 @@ it("applies a source toggle at the next session only and keeps a broken sibling 
     expect(await second.prompt("other", "hello again")).toMatchObject({ state: "done" });
     expect(messageText(requests.at(-1)!.messages[0]!)).not.toContain("<available_skills>");
     await second.dispose();
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+/**
+ * The #151 acceptance gap: a source the user added lives OUTSIDE the task, so
+ * the advertised `SKILL.md` used to be refused by the task-scoped `fs.read`
+ * broker. This runs the real SDK kernel against the real broker: the model is
+ * advertised the external location, reads it through the Host, then follows the
+ * skill's own relative reference - while a write to the same source is still
+ * refused and changes nothing on disk.
+ */
+it("loads a skill from an external source through the real broker, refusing a write to it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pidock-skill-external-"));
+  roots.push(root);
+  const tasksRoot = join(root, "tasks");
+  const dir = join(tasksRoot, "task");
+  const appDir = join(root, "app");
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(appDir, { recursive: true });
+  execFileSync("git", ["init", "-q", dir], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TEMPLATE_DIR: "" } });
+  writeFileSync(join(dir, "task.json"), serializeTaskRecord(buildTaskDiskRecord({
+    taskId: "task-skills", name: "task-skills", dirId: "task-skills", branch: "main", root: tasksRoot, taskDir: dir,
+    remoteBranch: "main", baseCommit: "test", repos: [], now: new Date().toISOString(),
+  })));
+  // The source is a real directory outside the task folder - the usual case for
+  // a folder the user added through 能力管理 → Skills.
+  const externalSource = join(root, "external-skills");
+  const skillDir = join(externalSource, "pdf-tools");
+  mkdirSync(join(skillDir, "references"), { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"), `---\nname: pdf-tools\ndescription: Extract text from PDF files.\n---\n\n${SKILL_BODY}\n`);
+  writeFileSync(join(skillDir, "references", "format.md"), `${RESOURCE_BODY}\n`);
+  const store = new SkillSourceStore(appDir);
+  expect(store.add(externalSource).ok).toBe(true);
+  const configFile = join(appDir, "skill-sources.json");
+
+  const scope: SdkAgentToolScope = {
+    taskDir: dir, taskRoot: tasksRoot, worktrees: [], primaryCheckouts: [], assertProtected: () => {},
+  };
+  const channel: SdkAgentToolChannel = {
+    currentPermission: "auto",
+    previewGate: () => ({ verdict: "allow" }),
+    gate: () => ({ verdict: "allow" }),
+    consumeApproval: () => true,
+    reject: () => {},
+    snapshot: () => ({ approvals: [] }),
+  };
+  const broker = new SdkAgentToolBroker({
+    sessionKnown: (sessionId) => sessionId === "main",
+    channel: () => channel,
+    persist: () => {},
+    write: { claimWrite: () => ({ ok: true, claimId: "claim-1" }), releaseWrite: () => {} },
+    scope: () => scope,
+    resolveRealPath: realpathDeep,
+    skillSourcesFile: () => configFile,
+    closing: () => false,
+  });
+
+  const requests: { messages: { role: string; content: unknown }[] }[] = [];
+  let turn = 0;
+  const server = createServer((request, response) => {
+    void (async () => {
+      const parsed = await body(request);
+      requests.push({ messages: (parsed["messages"] ?? []) as { role: string; content: unknown }[] });
+      turn += 1;
+      if (turn === 1) return toolCall(response, "fs.read", { path: join(skillDir, "SKILL.md") });
+      if (turn === 2) return toolCall(response, "fs.read", { path: join(skillDir, "references", "format.md") });
+      sse(response, { content: "external ORCHID" }, "stop");
+    })();
+  });
+  const port = await listen(server);
+  try {
+    const { runtime, model, bindingIdentity } = await createExplicitTextRuntime(configFor(port), CREDENTIAL);
+    const kernel = new PiSdkTextKernel("task-skills", dir, {
+      model, modelRuntime: runtime, bindingIdentity,
+      callTool: (sessionId, request) => broker.call(sessionId, request),
+      skillSourcesFile: configFile,
+    });
+    await kernel.open("main");
+    const result = await kernel.prompt("main", "extract the pdf");
+    expect(result).toMatchObject({ state: "done", text: "external ORCHID" });
+    expect(requests).toHaveLength(3);
+
+    // The external location is advertised, and the instructions are still not
+    // injected until the model asks for them.
+    const prompt = messageText(requests[0]!.messages[0]!);
+    expect(prompt).toContain("<name>pdf-tools</name>");
+    expect(prompt).toContain(`<location>${join(skillDir, "SKILL.md")}</location>`);
+    expect(prompt).not.toContain("Read references/format.md before answering");
+
+    // The real broker served the external SKILL.md and then its relative resource.
+    expect(JSON.stringify(requests[1]!.messages)).toContain(SKILL_BODY);
+    expect(JSON.stringify(requests[2]!.messages)).toContain(RESOURCE_BODY);
+
+    // The grant is read-only: the same source is still not writable, and the
+    // bytes on disk did not change.
+    const prior = readFileSync(join(skillDir, "SKILL.md"), "utf8");
+    const written = await broker.call("main", { tool: "fs.write", args: { path: join(skillDir, "SKILL.md"), content: "replaced" } });
+    expect(written).toMatchObject({ outcome: "refused", code: "tool-refused:out-of-scope" });
+    expect(readFileSync(join(skillDir, "SKILL.md"), "utf8")).toBe(prior);
+    await kernel.dispose();
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
