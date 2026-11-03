@@ -2,7 +2,16 @@
 
 /*
  * Historical implementation styles; current design is docs/design/PiDock.pen.
- * New theme values are documented in docs/design/appearance.tokens.json.
+ * Theme values come from docs/design/appearance.tokens.json (the same variables
+ * the Pencil file's light/dark mode axis uses) — see docs/design/APPEARANCE.md.
+ *
+ * [Pencil T14] #149 日间／夜间：ONE semantic palette, two modes. Components name
+ * semantic tokens only (`bg-bg`, `text-ink`, `border-line`, `bg-paper`,
+ * `bg-sidebar`, `text-accent`…); the mode is switched by the `data-theme`
+ * attribute the appearance store writes on `<html>`, so no component knows a
+ * theme name. The accent is the design's 雾蓝, and no token uses 绿色
+ * (docs/design/README.md: 不使用绿色; the token test rejects the 90°–150° hue band).
+ *
  * Prototype A writes the wide layout as the baseline and overrides it downwards
  * with three `@media(max-width: …)` blocks (`prototypes/pidock-ui/style.css`).
  * These custom variants mirror that shape exactly — same numbers (1180/960/850
@@ -16,15 +25,16 @@
 @custom-variant below-stack (@media (max-width: 720px));
 
 @theme {
-  --color-bg: #f6f7f8;
-  --color-paper: #ffffff;
-  --color-ink: #252b30;
-  --color-muted: #858d94;
-  --color-line: #e9ecee;
-  --color-accent: #233c78;
-  --color-soft: #eaedf3;
-  --color-sidebar: #f4f5f5;
-  --color-orange: #b88032;
+  /* 日间 (appearance.tokens.json → mode light). */
+  --color-bg: #f3f1ec; /* bg-canvas */
+  --color-paper: #faf8f4; /* bg-surface */
+  --color-ink: #30343b; /* ink-primary */
+  --color-muted: #60666f; /* ink-muted */
+  --color-line: #dcd8d0; /* border-light */
+  --color-accent: #4b638d; /* accent-primary · 雾蓝 */
+  --color-soft: #e1e7f0; /* accent-soft */
+  --color-sidebar: #eae7e1; /* bg-sidebar */
+  --color-orange: #805c28; /* status-attention */
 
   --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
   --radius-panel: 10px;
@@ -52,17 +62,92 @@
   --color-border: var(--color-line);
   --color-input: var(--color-line);
   --color-ring: var(--color-accent);
-  --color-destructive: #ad4545;
+  --color-destructive: #9e4943; /* status-danger (light) */
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 10px;
 }
 
+/*
+ * 夜间 (appearance.tokens.json → mode dark). Overriding the SAME names is what
+ * makes both modes one palette instead of two designs: every `bg-*` / `text-*`
+ * utility that reads `var(--color-…)` follows automatically.
+ */
+:root[data-theme="dark"] {
+  --color-bg: #202226;
+  --color-paper: #282b30;
+  --color-ink: #dddcd7;
+  --color-muted: #9498a1;
+  --color-line: #393d44;
+  --color-accent: #adc2e8;
+  --color-soft: #303d52;
+  --color-sidebar: #1c1e22;
+  --color-orange: #d7b578;
+  --color-destructive: #e3a19a;
+}
+
 @layer base {
+  html {
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+  }
+
   /* Prototype A focus ring: every keyboard-reachable control shows it. */
   button:focus-visible,
   a:focus-visible {
-    outline: 2px solid #334d89;
+    outline: 2px solid var(--color-accent);
     outline-offset: 3px;
   }
+}
+
+/*
+ * Legacy compatibility layer for surfaces written before the theme axis existed.
+ *
+ * Older pages still hardcode the prototype A light palette as arbitrary
+ * Tailwind values (`bg-[#fafbfc]`, `text-[#283c6c]`…). Those are NOT semantic: in
+ * the dark mode they would paint a near-white card under light text. Rather
+ * than leave unreadable panels in 夜间, this block maps the exact values those
+ * pages use onto the same semantic tokens. It is a bounded, documented list —
+ * new surfaces must use `bg-paper` / `text-ink` / `border-line` instead — and it
+ * adds no new colour: every mapping is a mode-aware token.
+ */
+:root[data-theme="dark"] .bg-\[\#fafbfc\],
+:root[data-theme="dark"] .bg-\[\#ffffff\],
+:root[data-theme="dark"] .bg-\[\#f8f9fb\],
+:root[data-theme="dark"] .bg-\[\#f4f5f7\],
+:root[data-theme="dark"] .bg-\[\#f0f2f5\],
+:root[data-theme="dark"] .bg-\[\#edeff3\],
+:root[data-theme="dark"] .bg-\[\#f0f0f1\],
+:root[data-theme="dark"] .bg-\[\#e7eaea\],
+:root[data-theme="dark"] .bg-\[\#eaebec\],
+:root[data-theme="dark"] .bg-\[\#e3e6ec\] {
+  background-color: var(--color-soft);
+}
+
+:root[data-theme="dark"] .text-\[\#252b30\],
+:root[data-theme="dark"] .text-\[\#283c6c\],
+:root[data-theme="dark"] .text-\[\#425a93\] {
+  color: var(--color-ink);
+}
+
+:root[data-theme="dark"] .text-\[\#858d94\],
+:root[data-theme="dark"] .text-\[\#8a8c92\],
+:root[data-theme="dark"] .text-\[\#8a8f95\],
+:root[data-theme="dark"] .text-\[\#8d8f95\],
+:root[data-theme="dark"] .text-\[\#91999f\],
+:root[data-theme="dark"] .text-\[\#939c9f\],
+:root[data-theme="dark"] .text-\[\#95979c\],
+:root[data-theme="dark"] .text-\[\#959da2\],
+:root[data-theme="dark"] .text-\[\#96999e\],
+:root[data-theme="dark"] .text-\[\#9aa4ab\],
+:root[data-theme="dark"] .text-\[\#69737a\],
+:root[data-theme="dark"] .text-\[\#858e9d\] {
+  color: var(--color-muted);
+}
+
+:root[data-theme="dark"] .border-\[\#e5e5e6\],
+:root[data-theme="dark"] .border-\[\#d9dde6\],
+:root[data-theme="dark"] .border-\[\#cfd3d7\],
+:root[data-theme="dark"] .border-\[\#dfe3eb\] {
+  border-color: var(--color-line);
 }

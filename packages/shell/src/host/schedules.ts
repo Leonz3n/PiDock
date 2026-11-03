@@ -45,6 +45,7 @@ import {
   type StoredSchedule,
   type TriggerDecision,
 } from "../main/schedule-rules.js";
+import { firstScheduleRefusal } from "../main/schedule-task.js";
 
 /** The persistence slice this manager needs (satisfied by `TaskStore`). */
 export interface ScheduleStore {
@@ -75,6 +76,14 @@ export interface SchedulePorts {
   /** Provider catalog as the Host knows it; empty = not handed one yet. */
   catalog(): readonly { id: string; enabled?: boolean; models: readonly { id: string }[] }[];
   now(): string;
+  /**
+   * [Pencil T17] #152 creation intent of the task this schedule lives in. A
+   * schedule may only be created inside a task created as a dedicated scheduled
+   * task, never bolted onto an arbitrary existing one.
+   */
+  taskKind?(): "normal" | "scheduled";
+  /** Installed Provider generation the save is validated against ([#139]). */
+  providerGeneration?(): number | undefined;
 }
 
 export interface SaveScheduleInput {
@@ -185,6 +194,7 @@ export class TaskSchedules {
    */
   save(input: SaveScheduleInput): SaveScheduleResult {
     const now = this.ports.now();
+    const parsedRule = parseRuleText(input.ruleText, input.timezone);
     const result = validateScheduleConfig({
       providerId: input.providerId,
       model: input.model,
@@ -198,6 +208,17 @@ export class TaskSchedules {
     if (!result.ok) return { ok: false, code: result.code, message: result.message };
     if (input.name.trim().length === 0) return { ok: false, code: "name-empty", message: "定时任务名称不能为空" };
     const existing = input.scheduleId === undefined ? undefined : this.recordState.schedules.find((item) => item.scheduleId === input.scheduleId);
+    // [Pencil T17] #152: a NEW schedule is only created inside a task that was
+    // created as a dedicated scheduled task. Editing an existing one is allowed.
+    const dedicated = firstScheduleRefusal({
+      // Absent port = a host that never learned its creation intent (legacy /
+      // unit-test wiring); it is treated as a schedule task so the older
+      // behaviour is preserved, and `host.ts` always wires the real one.
+      kind: this.ports.taskKind?.() ?? "scheduled",
+      existingSchedules: this.recordState.schedules.length,
+      creating: existing === undefined,
+    });
+    if (!dedicated.ok) return { ok: false, code: dedicated.code, message: dedicated.message };
     if (input.scheduleId !== undefined && existing === undefined) {
       return { ok: false, code: "unknown-schedule", message: `定时任务 ${input.scheduleId} 不存在` };
     }
@@ -219,6 +240,10 @@ export class TaskSchedules {
       lastEvaluatedAt: now,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      // [Pencil T17] #152 persisted plan: next instant this rule fires, or null
+      // when a one-shot has no further occurrence. Never fabricated on a bad rule.
+      nextRunAt: parsedRule.ok ? nextTriggerAt(parsedRule.rule, { after: now }) : null,
+      ...(this.ports.providerGeneration?.() !== undefined ? { providerGeneration: this.ports.providerGeneration() as number } : {}),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : existing?.projectId !== undefined ? { projectId: existing.projectId } : {}),
     };
     this.recordState = {
@@ -284,12 +309,46 @@ export class TaskSchedules {
       updatedAt: this.ports.now(),
       ...(enabled ? { lastEvaluatedAt: this.ports.now() } : {}),
     };
+    const parsed = enabled ? parseRuleText(schedule.ruleText, schedule.timezone) : null;
+    const planned: StoredSchedule = {
+      ...next,
+      ...(parsed === null ? {} : { nextRunAt: parsed.ok ? nextTriggerAt(parsed.rule, { after: this.ports.now() }) : null }),
+    };
     this.recordState = {
       ...this.recordState,
-      schedules: this.recordState.schedules.map((item) => (item.scheduleId === scheduleId ? next : item)),
+      schedules: this.recordState.schedules.map((item) => (item.scheduleId === scheduleId ? planned : item)),
     };
     this.persist();
-    return { ok: true, schedule: cloneSchedule(next) };
+    return { ok: true, schedule: cloneSchedule(planned) };
+  }
+
+  /**
+   * [Pencil T17] #152 terminal state of an asynchronous real run: the trigger
+   * records `running` when the SDK accepted the turn, and this settles that same
+   * record to completed/failed with the model that actually served it. A record
+   * that is no longer `running` is never rewritten (no fabricated success, no
+   * duplicate settlement after a restart).
+   */
+  settleRun(
+    runId: string,
+    input: { result: Exclude<ScheduledRunResult, "running">; actualModel?: string; reason?: string; failureCode?: string },
+  ): ScheduledRunRecord | undefined {
+    const current = this.recordState.runs.find((run) => run.runId === runId);
+    if (current === undefined || current.result !== "running") return current === undefined ? undefined : { ...current };
+    const settled: ScheduledRunRecord = {
+      ...current,
+      result: input.result,
+      endedAt: this.ports.now(),
+      ...(input.actualModel !== undefined ? { actualModel: input.actualModel } : {}),
+      ...(input.reason !== undefined ? { reason: input.reason } : {}),
+      ...(input.failureCode !== undefined ? { failureCode: input.failureCode } : {}),
+    };
+    this.recordState = {
+      ...this.recordState,
+      runs: this.recordState.runs.map((run) => (run.runId === runId ? settled : run)),
+    };
+    this.persist();
+    return { ...settled };
   }
 
   /** Delete one schedule; its run history and the sessions it created are kept. */

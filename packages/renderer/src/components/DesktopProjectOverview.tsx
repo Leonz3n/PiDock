@@ -3,6 +3,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Icon } from "./Icon";
 import { SharedRepoIsolation } from "./SharedRepoIsolation";
+import { DesktopWorkspaceVariables } from "./DesktopVariables";
 import { projectName, sourceName, sourcePath, type DesktopProject, type SourceVerification, type TaskAssociation } from "../data/desktopProjects";
 import type { DesktopShellTask } from "./DesktopShell";
 import { hostText } from "../data/workspaceFiles";
@@ -240,16 +241,9 @@ export function DesktopProjectOverview({
                 <h3 className="text-[12px] font-semibold text-ink">工作空间全局环境变量（下属各任务默认继承）</h3>
                 <Button type="button" size="sm" variant="ghost" onClick={onEdit}>管理变量</Button>
               </div>
-              <div className="rounded-[5px] bg-bg px-3 py-2">
-                {project.environment === null
-                  ? <p className="text-[10px] text-muted">Host 未上报环境变量</p>
-                  : project.environment.length === 0
-                    ? <p className="text-[10px] text-muted">尚未配置环境变量。</p>
-                    : <ul className="flex flex-col gap-1 font-mono text-[10px] text-ink">
-                      {project.environment.map((row) => <li key={row.key} className="break-all">• {row.key} = {row.value}</li>)}
-                    </ul>}
-                <p className="mt-1 text-[10px] text-muted">此处只保存与展示；任务继承和单次任务覆盖由后续改动接入。</p>
-              </div>
+              {project.environment === null
+                ? <div className="rounded-[5px] bg-bg px-3 py-2"><p className="text-[10px] text-muted">Host 未上报环境变量</p></div>
+                : <DesktopWorkspaceVariables projectId={project.id} initialRows={project.environment} />}
             </div>
             <div className="flex min-w-0 flex-col gap-1.5">
               <div className="flex items-center justify-between gap-2">

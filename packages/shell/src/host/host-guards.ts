@@ -20,6 +20,7 @@ import { isExternalResourceKind } from "../main/service-runs.js";
 import { checkReferencePayload } from "../main/composer-references.js";
 import { REMOTE_ENTRY_MODES } from "../main/remote-rules.js";
 import { MAX_EDITOR_ARGS, MAX_EDITOR_ARG_CHARS } from "../main/external-editor.js";
+import { variableNameRefusal } from "../main/workspace-variables.js";
 
 export const DEFAULT_WORKSPACE_ID = "s1-default-workspace";
 
@@ -370,6 +371,12 @@ export function buildHostEnv(
   protectedProfile?: string,
   defaultRoot?: string,
   platform: NodeJS.Platform = process.platform,
+  /**
+   * [Pencil T09] #144 effective workspace/task variables for this task. They are
+   * applied after the Host's own bindings; a reserved/credential-shaped name or
+   * an invalid value fails the fork by name instead of being silently dropped.
+   */
+  variables?: Record<string, string>,
 ): Record<string, string> {
   if (typeof workspaceId !== "string" || workspaceId.length === 0 || workspaceId.includes("\0")) {
     throw new Error("invalid-payload: workspaceId must be a non-empty string");
@@ -397,6 +404,21 @@ export function buildHostEnv(
     }
     env["PIDOCK_TASK_ID"] = task.taskId;
     env["PIDOCK_TASK_DIR"] = task.taskDir;
+  }
+  if (variables !== undefined) {
+    for (const [key, value] of Object.entries(variables)) {
+      const refusal = variableNameRefusal(key);
+      if (refusal !== null) throw new Error(`host-env-invalid: ${key}`);
+      if (typeof value !== "string" || value.length > 4096 || value.includes("\0") || /[\r\n]/.test(value)) {
+        throw new Error(`host-env-invalid: ${key}`);
+      }
+      // Windows environment names are case-insensitive; the reserved list already
+      // covers the OS inputs, so this is only a defence against a future alias.
+      for (const inherited of Object.keys(env)) {
+        if (inherited !== key && inherited.toUpperCase() === key.toUpperCase()) delete env[inherited];
+      }
+      env[key] = value;
+    }
   }
   return env;
 }
@@ -1347,7 +1369,7 @@ export function validateHostTaskOp(
     return { ok: true };
   }
   if (op === "task/sessionArchive" || op === "task/sessionRestore" || op === "task/sessionDelete" ||
-      op === "task/sessionActivate" || op === "task/sessionReadout") {
+      op === "task/sessionStop" || op === "task/sessionActivate" || op === "task/sessionReadout") {
     if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
     if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
       return { ok: false, error: `invalid-payload: ${op}.sessionId must be a non-empty string` };

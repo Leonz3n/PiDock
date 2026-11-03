@@ -17,7 +17,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const BRIDGE_NAME = "pidock";
-const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/projectOp", "shell/serviceCatalogOp", "shell/createTask", "shell/appendTaskRepos", "shell/openTaskEditor", "shell/editorSettingsOp", "shell/providerOp", "shell/taskOp", "shell/sdkTurn"];
+const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/projectOp", "shell/serviceCatalogOp", "shell/createTask", "shell/appendTaskRepos", "shell/openTaskEditor", "shell/editorSettingsOp", "shell/preferencesOp", "shell/providerOp", "shell/taskOp", "shell/sdkTurn"];
 const EVENT_CHANNELS = ["shell/hostStatus", "shell/sdkTurnEvent"];
 
 // Preload-only capabilities (NOT visible to the page itself). Sandboxed
@@ -80,6 +80,10 @@ const bridge = {
   // own machine-private document. No task op carries this write.
   editorSettingsOp: function (request) {
     return invoke("shell/editorSettingsOp", request);
+  },
+  // [Pencil T14] #149 设置：PiDock 外观偏好与 Pi 原生 keybindings 的有界投影。
+  preferencesOp: function (request) {
+    return invoke("shell/preferencesOp", request);
   },
   providerOp: function (request) {
     return invoke("shell/providerOp", request);

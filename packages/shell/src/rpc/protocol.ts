@@ -73,6 +73,7 @@ export type HostTaskOp =
   | "task/sessionArchive"
   | "task/sessionRestore"
   | "task/sessionDelete"
+  | "task/sessionStop"
   | "task/sessionActivate"
   | "task/sessionReadout"
   | "task/sessionModel"
@@ -288,6 +289,7 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/sessionArchive",
   "task/sessionRestore",
   "task/sessionDelete",
+  "task/sessionStop",
   "task/sessionActivate",
   "task/sessionReadout",
   "task/sessionModel",

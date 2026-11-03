@@ -69,6 +69,7 @@ import {
   type RepoPreviewInput,
 } from "../main/git-delivery.js";
 import { sessionCreatedPayload, sessionListPayload } from "./session-list-payload.js";
+import { hostSessionLifecyclePorts, runSessionLifecycle, type SessionLifecycleAction } from "./session-lifecycle.js";
 import { switchSessionModel } from "./session-switch.js";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
@@ -1367,11 +1368,19 @@ async function performTaskOp(
         // plan (real cwds; empty only in the sense of zero ops). Both ride
         // the `host/task` result payload so a caller can persist-then-execute
         // without re-deriving git ops from the record.
+        // [Pencil T17] #152 creation intent: only an explicit `scheduled` value
+        // creates a dedicated schedule task; anything else stays an ordinary
+        // task that can never receive a schedule rule.
+        const kind = record["kind"];
+        if (kind !== undefined && kind !== "normal" && kind !== "scheduled") {
+          return { ok: false, error: "invalid-payload: task/provision.kind must be normal/scheduled" };
+        }
         const { record: saved, plan } = host.provision({
           name,
           dirId,
           branch,
           rootOverride,
+          ...(kind !== undefined ? { kind: kind as "normal" | "scheduled" } : {}),
           remoteBranch,
           fetchedCommit,
           repos,
@@ -2058,24 +2067,39 @@ async function performTaskOp(
         }
       }
       case "task/sessionRename": case "task/sessionArchive": case "task/sessionRestore":
-      case "task/sessionDelete": case "task/sessionActivate": {
+      case "task/sessionDelete": case "task/sessionActivate": case "task/sessionStop": {
         const sessionId = record["sessionId"];
         if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) {
           return { ok: false, error: `invalid-payload: ${op} requires sessionId` };
         }
         try {
+          // [#146] 停止 / 归档 / 恢复 / 删除 share ONE ordered policy: a live
+          // turn is aborted and awaited, its claims/approvals released, and only
+          // then is history written; a delete retires the id first so a late turn
+          // is refused by identity (`session-deleted`) instead of writing into a
+          // removed session.
+          if (op === "task/sessionStop" || op === "task/sessionArchive" || op === "task/sessionRestore" || op === "task/sessionDelete") {
+            const action: SessionLifecycleAction = op === "task/sessionStop" ? "stop"
+              : op === "task/sessionArchive" ? "archive" : op === "task/sessionRestore" ? "restore" : "delete";
+            const outcome = await runSessionLifecycle(action, sessionId, hostSessionLifecyclePorts(host, sdkTurns));
+            return {
+              ok: true,
+              payload: {
+                ...sessionListPayload(outcome.index, host.sdkProviderConfig()),
+                action: outcome.action,
+                sessionId: outcome.sessionId,
+                stopped: outcome.stopped,
+                abortedTurnIds: outcome.abortedTurnIds,
+              },
+            };
+          }
           let index: SessionIndex;
           if (op === "task/sessionRename") {
             const name = record["name"];
             if (typeof name !== "string") return { ok: false, error: "invalid-payload: task/sessionRename requires name" };
             index = host.renameTaskSession(sessionId, name);
-          } else if (op === "task/sessionArchive") index = host.archiveTaskSession(sessionId);
-          else if (op === "task/sessionRestore") index = host.restoreTaskSession(sessionId);
-          else if (op === "task/sessionActivate") index = host.activateTaskSession(sessionId);
-          else {
-            // A session with a model turn in flight is not deleted under it.
-            if (sdkTurns?.busy(sessionId)) throw new Error("sdk-session-busy");
-            index = host.deleteTaskSession(sessionId);
+          } else {
+            index = host.activateTaskSession(sessionId);
           }
           // [#139] A write reply is a full list reply (provider included) so the
           // renderer can replace its list without losing the model menu.

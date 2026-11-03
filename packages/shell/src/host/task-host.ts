@@ -611,6 +611,12 @@ export interface ProvisionTaskInput {
     remoteDigest: string;
   }[];
   /**
+   * [Pencil T17] #152 creation intent. `scheduled` marks the task as the
+   * dedicated workspace of its own schedule rules; a first schedule may only be
+   * created there. Absent = ordinary task.
+   */
+  kind?: "normal" | "scheduled";
+  /**
    * [Pencil T02] #137: recorded identity of each worktree source checkout,
    * keyed by `repoDir`. Optional; a record without it is `待修复` on reopen.
    */
@@ -1161,6 +1167,8 @@ export class TaskWorkspaceHost {
           models: profile.models.map((model) => ({ id: model.id })),
         })),
       now: this.now,
+      taskKind: () => (this.store.readTask(this.taskDir)?.kind === "scheduled" ? "scheduled" : "normal"),
+      providerGeneration: () => this.sdkProviderConfig()?.generation,
     });
     this.remote = new TaskRemoteDevices(taskDir, store, { now, mintSecret });
   }
@@ -1316,6 +1324,19 @@ export class TaskWorkspaceHost {
 
   removeSchedule(scheduleId: string): { removed: boolean } {
     return this.schedules.remove(scheduleId);
+  }
+
+  /** [Pencil T17] #152 creation intent of this task (dedicated schedule task or not). */
+  taskKind(): "normal" | "scheduled" {
+    return this.store.readTask(this.taskDir)?.kind === "scheduled" ? "scheduled" : "normal";
+  }
+
+  /** [Pencil T17] #152 settle an asynchronous run that was accepted as `running`. */
+  settleScheduleRun(
+    runId: string,
+    input: { result: "completed" | "awaiting-approval" | "skipped" | "failed"; actualModel?: string; reason?: string; failureCode?: string },
+  ): ScheduledRunRecord | undefined {
+    return this.schedules.settleRun(runId, input);
   }
 
   /** 立即运行: one independent run now, without moving the next planned time. */
@@ -1947,6 +1968,7 @@ export class TaskWorkspaceHost {
             })
           : undefined,
       workspaceMode,
+      ...(input.kind !== undefined ? { kind: input.kind } : previous?.kind !== undefined ? { kind: previous.kind } : {}),
       sharedRepos: sharedSnapshots !== null
         ? sharedSnapshots.map((repo) => ({
             rootId: repo.rootId, sourcePath: repo.sourcePath, sourceRealPath: repo.sourceRealPath,
@@ -2873,6 +2895,22 @@ export class TaskWorkspaceHost {
     if (live) return live.currentPermission;
     const saved = this.store.readSession(this.taskDir, sessionId);
     return saved?.permission ?? null;
+  }
+
+  /**
+   * [#146] Whether one session has live work the lifecycle must settle first,
+   * read **without** opening or creating the session: a running/approval-waiting
+   * Host turn and the confirmations parked on it. A session with no snapshot is
+   * simply not live (never an error: the index is the authority on existence).
+   */
+  sessionActivity(sessionId: string): { running: boolean; pendingApprovals: number } {
+    const live = this.channels.get(sessionId);
+    const snapshot = live ? live.snapshot() : this.store.readSession(this.taskDir, sessionId);
+    if (!snapshot) return { running: false, pendingApprovals: 0 };
+    return {
+      running: snapshot.runState === "running" || snapshot.runState === "approval",
+      pendingApprovals: snapshot.approvals.filter((approval) => approval.status === "pending").length,
+    };
   }
 
   openSession(
