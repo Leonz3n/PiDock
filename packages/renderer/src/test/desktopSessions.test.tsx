@@ -89,7 +89,7 @@ function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | nu
       const list = () => ({ activeSessionId, sessions, provider });
       if (op === "task/sessionList") return envelope(list());
       if (op === "task/sessionReadout") {
-        if (!readable.has(sessionId)) return { ok: false as const, error: "session-unknown" };
+        if (sessions.length === 0 || !readable.has(sessionId)) return { ok: false as const, error: "session-unknown" };
         const refusal = refusals[`readout:${sessionId}`];
         if (refusal) return { ok: false as const, error: refusal };
         return envelope(readoutOf(sessionId, {}, sessions));
@@ -262,6 +262,17 @@ describe("[#139] task sessions in the conversation", () => {
     fireEvent.click(within(row).getByRole("button", { name: "恢复" }));
     await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionRestore" && entry.payload["sessionId"] === "s-77777777")).toBe(true));
     expect(await screen.findByRole("tab", { name: "旧尝试" })).toBeInTheDocument();
+  });
+  it("names a task with no sessions and offers 新建会话 instead of subscribing to an id it lacks", async () => {
+    const fixture = setup({ sessions: [], activeSessionId: null });
+    mount(fixture);
+    expect(await screen.findByTestId("desktop-sessions-empty")).toHaveTextContent("本任务暂无会话");
+    // No subscribe for a session that does not exist: the page states the state.
+    expect(fixture.sdkCalls.filter((call) => call["action"] === "subscribe")).toEqual([]);
+    expect(await screen.findByText(/本任务暂无会话：新建一个会话后才能对话/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("session-new"));
+    await waitFor(() => expect(fixture.sdkCalls.filter((call) => call["action"] === "subscribe").map((call) => call["sessionId"])).toEqual(["s-9f9f9f9f"]));
+    expect(await screen.findByText(/尚未开始/)).toBeInTheDocument();
   });
 });
 

@@ -376,6 +376,13 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     // to the `main` fallback first and then jumped to the Host's active session
     // would show one session's history for a frame and issue a needless subscribe.
     if (sessionList.phase === "reading") return;
+    // A task whose sessions were all deleted has NO session to address. The page
+    // says so and offers 新建会话 instead of subscribing to an id the Host does
+    // not have (or inventing an empty one).
+    if (sessionList.phase === "read" && sessionList.list.sessions.length === 0) {
+      setConnected(false); setValid(false); setSnapshot(null); setNotice("本任务暂无会话：新建一个会话后才能对话");
+      return;
+    }
     const epoch = ++generation.current;
     const generationRef = generation;
     const poll = window.setInterval(() => {
@@ -455,7 +462,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     };
     void connect();
     return () => { if (generationRef.current === epoch) generationRef.current++; window.clearInterval(poll); off?.(); if (subscribed) void request("unsubscribe").catch(() => {}); };
-  }, [bridge, connectionKey, invalidated, queueDraftSave, reconcile, request, sessionId, sessionList.phase, taskId, verify]);
+  }, [bridge, connectionKey, invalidated, queueDraftSave, reconcile, request, sessionId, sessionList, taskId, verify]);
   const refresh = async () => {
     const epoch = generation.current;
     try { await verify(); if (epoch !== generation.current) return; await reconcile(epoch, attemptRef.current?.requestId); if (epoch === generation.current) setValid(true); }
@@ -954,7 +961,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         {sessions.filter((session) => !session.archived).length > 4 && <span className="pb-2 text-[11px] text-muted">+{sessions.filter((session) => !session.archived).length - 4}</span>}
         <Button type="button" size="sm" variant="ghost" data-testid="session-new" disabled={sessionBusy} onClick={() => void newSession()}><Icon name="plus" />新建会话</Button>
         <Button type="button" size="sm" variant="ghost" data-testid="session-all" onClick={() => setSessionsOpen(true)}>全部会话 {sessions.length}</Button>
-        {sessions.length === 0 && sessionList.phase === "read" && <span className="pb-2 text-[11px] text-muted">本任务暂无会话；新建一个即拥有全新上下文</span>}
+        {sessions.length === 0 && sessionList.phase === "read" && <span data-testid="desktop-sessions-empty" className="pb-2 text-[11px] text-[#9a6032]">本任务暂无会话；新建一个会话后才能对话</span>}
       </div>
     </div>
     <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} />
