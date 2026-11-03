@@ -130,7 +130,7 @@ function validate(value: unknown): CreationIntent {
   if (!legacy && !current) throw new Error("创建意图损坏");
   const row = value as Record<string, unknown>;
   const workspaceMode: WorkspaceMode = legacy
-    ? ((row.repos as unknown[]).length > 0 ? "worktree" : "plain-dirs")
+    ? (Array.isArray(row.repos) && row.repos.length > 0 ? "worktree" : "plain-dirs")
     : row.workspaceMode as WorkspaceMode;
   if (workspaceMode !== "worktree" && workspaceMode !== "existing-git" && workspaceMode !== "plain-dirs") throw new Error("创建意图损坏");
   if (!UUID.test(string(row.id)) || !UUID.test(string(row.projectId)) || !/^task-[a-f0-9]{8}$/.test(string(row.taskId)) ||

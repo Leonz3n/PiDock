@@ -171,6 +171,32 @@ describe("task workspace modes through the real creation path", { timeout: 30_00
     expect(git(second.repo, "branch", "--list", "task/*")).toBe("");
   });
 
+  it("completes a mixed existing-git + plain-directory task without copying either source", async () => {
+    const env = await setup();
+    const shared = join(env.home, "shared-configs");
+    mkdirSync(shared);
+    const project = await env.projects.update(env.project.id, {
+      description: "", repositories: env.project.repositories, directories: [{ name: "configs", path: shared }],
+    });
+    const prepared = await env.service.prepare({
+      projectId: project.id, name: "Mixed work",
+      repositories: [{ sourceId: project.repositories[0]!.id, remote: "origin", remoteBranch: "" }],
+      directoryIds: [project.directories[0]!.id], sharedWriteConfirmed: true, override: false, workspaceMode: "existing-git",
+    });
+    await env.service.commit(prepared.id);
+    const record = readTaskRecordOnDisk(prepared.taskDir);
+    expect(record?.workspaceMode).toBe("existing-git");
+    expect(record?.sharedRepos).toHaveLength(1);
+    expect(record?.dirLinks).toHaveLength(1);
+    expect(record?.dirLinks?.[0]?.sourcePath).toBe(shared);
+    const facts = env.files(prepared.taskDir).facts();
+    expect(facts.map((root) => root.kind)).toEqual(["existing-git", "shared-dir"]);
+    expect(facts[1]).toMatchObject({ path: join(prepared.taskDir, record!.dirLinks![0]!.linkName), sourcePath: shared });
+    // The registered checkout still has its uncommitted work; no task branch.
+    expect(readFileSync(join(env.repo, "dirty.txt"), "utf8")).toBe("keep me\n");
+    expect(git(env.repo, "branch", "--list", "task/*")).toBe("");
+  });
+
   it("plain-dirs refuses a Git repo selection in main and accepts directories only", async () => {
     const env = await setup();
     await expect(env.service.prepare({ ...env.worktreeRequest, workspaceMode: "plain-dirs" }))
