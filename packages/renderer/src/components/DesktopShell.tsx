@@ -1,5 +1,7 @@
 /**
- * Production application shell ([UI 对齐 S8] #47, baseline `prototypes/pidock-ui/?variant=A`).
+ * Production application shell (historical [UI 对齐 S8] #47 implementation).
+ * Current UI design: docs/design/PiDock.pen (see docs/design/README.md).
+ * References to prototype A below describe this existing implementation only.
  *
  * The desktop path used to open on a flat management page (`DesktopInventory`) with no
  * app chrome, while prototype A's structure was already implemented for the demo path.

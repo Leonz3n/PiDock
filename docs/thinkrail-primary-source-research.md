@@ -6,7 +6,7 @@
 
 **高度相似，通用 pi 工作台值得优先用 ThinkRail 替代自建；当前证据不足以认定它能直接替代 PiDock 的多仓库、多服务本地验证闭环。建议暂停按现有完整清单投入生产实现，先验证现成 ThinkRail 加少量可维护扩展能否满足真实任务，再决定停止独立应用或收缩为运行环境工具。** 这是本次研究建议，未修改已确认规格、工单状态或技术选型。
 
-相似性不仅在界面：两者都以 pi 为引擎，分离 Host 与 React 界面，使用 Bun、Electrobun、worktree 和多会话。ThinkRail 已有源码与发布物，PiDock 仍处于设计/内存模拟原型阶段。PiDock 规格更细，不能由此推导产品更成熟或差异已成立。[ThinkRail 架构](https://github.com/JetBrains/thinkrail/blob/282f5a1ab8adf47af081ae10a2b2a8fd1f2afb6d/architecture.md)、[PiDock 当前权威规格](../.scratch/pidock-mvp/spec.md)、[技术栈设计](implementation-stack-design.md)、[原型说明](../prototypes/pidock-ui/README.md)
+相似性不仅在界面：两者都以 pi 为引擎，分离 Host 与 React 界面，使用 Bun、Electrobun、worktree 和多会话。ThinkRail 已有源码与发布物，PiDock 仍处于设计/内存模拟原型阶段。PiDock 规格更细，不能由此推导产品更成熟或差异已成立。[ThinkRail 架构](https://github.com/JetBrains/thinkrail/blob/282f5a1ab8adf47af081ae10a2b2a8fd1f2afb6d/architecture.md)、[PiDock 当前权威规格](../.scratch/pidock-mvp/spec.md)、[技术栈设计](implementation-stack-design.md)、[当前 Pencil 设计说明](design/README.md)
 
 若目的只是给 pi 配上好用的桌面界面、项目/worktree、聊天、文件和终端，继续从头造完整 PiDock 的收益已经很弱。若目的仍是消除每次手写配置、必须合并部署后才能验证的阻力，则问题尚未由 ThinkRail 当前公开产品直接解决。需要保留的是解决这一问题的能力，不必预先保留独立桌面应用这种形式。[PiDock 问题定义](../.scratch/pidock-mvp/spec.md#problem-statement)
 

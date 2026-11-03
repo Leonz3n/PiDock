@@ -64,7 +64,7 @@ Electron 生态的 electron-builder 提供 NSIS 安装器配置，可作为 Wind
 4. 任一核心能力不能以可接受代价实现，按规格回退 Electron + Bun Host，再用相同验收场景检查；保留 Host 与 React 界面的受控接口。
 5. macOS 与 Windows 分别记录结果，没有 Windows 环境时明确留待验证，不能宣布跨平台选型全部通过。
 
-React、Tailwind CSS 与 TanStack 属于产品界面栈，不决定上述原生浏览器控制是否成立。既有 vanilla JS 草稿可继续作为视觉与行为基线；无须为了比较桌面运行时先重写整套草稿。
+React、Tailwind CSS 与 TanStack 属于产品界面栈，不决定上述原生浏览器控制是否成立。当前 UI 视觉与关键交互统一以 [Pencil 设计](design/README.md) 为准；早期 vanilla JS 草稿已清理。
 
 ## 一手来源
 

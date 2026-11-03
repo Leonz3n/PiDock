@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
 /*
+ * Historical implementation styles; current design is docs/design/PiDock.pen.
+ * New theme values are documented in docs/design/appearance.tokens.json.
  * Prototype A writes the wide layout as the baseline and overrides it downwards
  * with three `@media(max-width: …)` blocks (`prototypes/pidock-ui/style.css`).
  * These custom variants mirror that shape exactly — same numbers (1180/960/850

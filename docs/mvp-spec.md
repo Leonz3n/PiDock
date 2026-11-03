@@ -4,4 +4,4 @@
 
 当前首版包含项目 → 任务 → 会话、定时任务、Provider/MCP/Skills 的 UI 管理、会话生命周期，以及 Git 仓库和普通目录。**已有目录与独立 worktree 两种方式都在首版**；服务编排、环境模板、内置浏览器与业务联调等按 #135 延后。旧规格和评论与新范围冲突时，以 #135 及父规格顶部的最新说明为准。
 
-下一步在新的 session 先重新设计 UI，确认后再开始产品实现；当前 UI 与原型 A 不作为必须复刻的视觉目标。执行控制见 #1、[#24](https://github.com/Leonz3n/PiDock/issues/24) 和 #135。
+当前 UI 设计已统一为 [Pencil 设计稿](design/PiDock.pen)，布局、视觉和关键交互以 [设计说明](design/README.md) 为准。旧 UI 候选与 HTML 原型已清理，历史界面不再作为实现目标。本次整理不启动产品实现；执行控制继续见 #1、[#24](https://github.com/Leonz3n/PiDock/issues/24) 和 #135。

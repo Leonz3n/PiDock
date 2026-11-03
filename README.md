@@ -1,41 +1,27 @@
 # PiDock
 
-PiDock 是一个面向软件开发任务的桌面 Agent 工作台。它把项目、任务工作区、Agent 会话、服务运行和本地验证组织在同一个界面中，并支持一个任务关联多个 Git 仓库与普通目录。
+PiDock 是面向软件开发任务的桌面 Agent 工作台。可复用工作空间登记 Git 仓库、普通目录和共享配置，任务选择所需来源并准备独立 worktree，Agent 会话围绕任务开展工作。
 
-> 项目目前处于产品设计和交互原型阶段，尚未进入正式应用实现。`PiDock` 是当前采用的项目名称。
+## UI 设计
 
-## 设计目标
+**[docs/design/PiDock.pen](docs/design/PiDock.pen) 是唯一的 UI 设计基准。** 使用 Pencil 打开；画板索引、关键交互和实现约定见 [设计说明](docs/design/README.md)。
 
-- 为每个任务提供独立工作区，并允许跨仓库协作。
-- 在桌面端统一管理 Agent 会话、文件、终端、服务和浏览器验证。
-- 区分可复用的共享模板、本机私有配置和单次任务覆盖。
-- 支持 Provider、Skills、Extensions、Pi Packages 和受控 MCP 接入。
-- 通过明确的设备授权和权限边界支持远程访问。
+配套资料包括 [日间 / 夜间主题说明](docs/design/APPEARANCE.md) 和 [主题颜色数据](docs/design/appearance.tokens.json)。旧候选设计、HTML 交互原型及压缩交付包已清理，历史版本通过 Git 追溯。
 
-## 当前内容
+## 项目入口
 
-- [`GLOSSARY.md`](GLOSSARY.md)：项目领域术语。
-- [首版规格](.scratch/pidock-mvp/spec.md)：当前权威 MVP 规格。
-- [`docs/`](docs)：设计记录、调研和验证计划。
-- [`docs/toolchain-warmup.md`](docs/toolchain-warmup.md)：实现前的本机工具链预热记录（Electron、Playwright、pi SDK 等）。
-- [`prototypes/pidock-ui/`](prototypes/pidock-ui)：无构建依赖的交互原型。
-
-## 查看 UI 原型
-
-原型可以直接打开 [`prototypes/pidock-ui/index.html`](prototypes/pidock-ui/index.html)，也可以启动本地静态服务器：
-
-```bash
-cd prototypes/pidock-ui
-python3 -m http.server 4319 --bind 127.0.0.1
-```
-
-然后访问 <http://127.0.0.1:4319/?variant=A>。原型中的数据和操作均为内存模拟，不会读写业务仓库、启动真实服务或调用模型。
+- [首版父规格与工单索引 #1](https://github.com/Leonz3n/PiDock/issues/1)：规格、依赖和执行记录。
+- [当前首版范围 #135](https://github.com/Leonz3n/PiDock/issues/135)：功能范围与验收入口。
+- [GLOSSARY.md](GLOSSARY.md)：领域术语；本轮 UI 中工作空间 / 任务的区分见设计说明。
+- [技术栈设计](docs/implementation-stack-design.md)：Electron、TypeScript、React 与 Pi AgentSession 的职责边界。
+- [首版验证计划](docs/mvp-validation-plan.md)：真实桌面验证场景。
+- [packages/](packages)：现有应用与共享代码。
+- [docs/](docs)：设计、技术调研与验证记录。
 
 ## 开发状态
 
-计划中的桌面应用技术方向为 Electron + TypeScript。正式实现开始前仍需完成关键技术验证和 MVP 工单拆分；当前原型用于确认产品结构与交互，不应直接作为生产代码。
+仓库包含已有桌面实现与运行验收记录；当前 UI 改版以 Pencil 设计为准。已有界面和历史截图不代表已对齐新版设计，设计稿也不代表运行功能已经实现。本轮仅整理设计资料。
 
 ## 协作约定
 
-Agent 工作入口见 [`AGENTS.md`](AGENTS.md)。规格与实现工单采用本地 Markdown 管理，约定见 [`docs/agents/`](docs/agents)。
-
+Agent 工作入口见 [AGENTS.md](AGENTS.md)。规格与工单使用 GitHub Issues，约定见 [docs/agents/](docs/agents/)。
