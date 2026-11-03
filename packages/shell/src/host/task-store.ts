@@ -192,6 +192,12 @@ export interface TaskDiskRecord {
   workspaceMode?: "worktree" | "existing-git" | "plain-dirs";
   /** [Pencil T02] #137: existing Git checkouts used in place (no copy). */
   sharedRepos?: SharedRepoRecord[];
+  /**
+   * [Pencil T17] #152 creation intent. `scheduled` marks a task created by
+   * 「新建定时任务」 whose workspace hosts its own schedule rules; absent means an
+   * ordinary task, which may never receive a schedule rule.
+   */
+  kind?: "normal" | "scheduled";
   createdAt: string;
   updatedAt: string;
 }
@@ -244,6 +250,7 @@ export function buildTaskDiskRecord(input: {
   repoPrepareErrors?: RepoPrepareErrorRecord[];
   workspaceMode?: TaskDiskRecord["workspaceMode"];
   sharedRepos?: SharedRepoRecord[];
+  kind?: TaskDiskRecord["kind"];
   now: string;
 }): TaskDiskRecord {
   const record: TaskDiskRecord = {
@@ -265,6 +272,7 @@ export function buildTaskDiskRecord(input: {
   if (input.repoPrepareErrors !== undefined) record.repoPrepareErrors = input.repoPrepareErrors.map((error) => ({ ...error }));
   if (input.workspaceMode !== undefined) record.workspaceMode = input.workspaceMode;
   if (input.sharedRepos !== undefined) record.sharedRepos = input.sharedRepos.map((repo) => ({ ...repo }));
+  if (input.kind !== undefined) record.kind = input.kind;
   return record;
 }
 
@@ -286,6 +294,9 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
   // [Pencil T07] #142 (#137 leftover): `branchKind` makes the branch spelling
   // explicit. A record without it predates the field and always carried a real
   // task branch; `none` is the only kind that may (and must) spell no branch.
+  if (record["kind"] !== undefined && record["kind"] !== "normal" && record["kind"] !== "scheduled") {
+    throw new Error("invalid-payload: task record.kind must be normal/scheduled");
+  }
   if (record["branchKind"] !== undefined && record["branchKind"] !== "task-worktree" && record["branchKind"] !== "none") {
     throw new Error("invalid-payload: task record.branchKind must be a known kind");
   }
@@ -1067,7 +1078,7 @@ export function scheduleFilePath(taskDir: string): string {
 
 const SCHEDULE_PERMISSIONS = ["read", "default", "auto"] as const;
 const RUN_TRIGGERS = ["due", "manual"] as const;
-const RUN_RESULTS = ["completed", "awaiting-approval", "skipped", "failed"] as const;
+const RUN_RESULTS = ["running", "completed", "awaiting-approval", "skipped", "failed"] as const;
 
 function requireString(record: Record<string, unknown>, key: string, label: string): void {
   if (typeof record[key] !== "string" || (record[key] as string).length === 0) {
@@ -1095,6 +1106,11 @@ function parseStoredSchedule(value: unknown): StoredSchedule {
     throw new Error("invalid-payload: schedule.configVersion must be a positive integer");
   }
   if (schedule["repairIssue"] !== undefined) requireString(schedule, "repairIssue", "schedule");
+  if (schedule["nextRunAt"] !== undefined && schedule["nextRunAt"] !== null) requireString(schedule, "nextRunAt", "schedule");
+  if (schedule["providerGeneration"] !== undefined &&
+      (typeof schedule["providerGeneration"] !== "number" || !Number.isInteger(schedule["providerGeneration"]) || (schedule["providerGeneration"] as number) < 1)) {
+    throw new Error("invalid-payload: schedule.providerGeneration must be a positive integer");
+  }
   return value as StoredSchedule;
 }
 
@@ -1106,7 +1122,7 @@ function parseScheduledRun(value: unknown): ScheduledRunRecord {
   for (const key of ["runId", "scheduleId", "taskId", "occurrenceKey", "scheduledAt", "startedAt", "providerId", "model", "ruleText"] as const) {
     requireString(run, key, "scheduled run");
   }
-  for (const key of ["endedAt", "sessionId", "reason"] as const) {
+  for (const key of ["endedAt", "sessionId", "reason", "actualModel", "failureCode"] as const) {
     if (run[key] !== undefined) requireString(run, key, "scheduled run");
   }
   if (typeof run["configVersion"] !== "number" || !Number.isInteger(run["configVersion"]) || (run["configVersion"] as number) < 1) {
@@ -1120,6 +1136,10 @@ function parseScheduledRun(value: unknown): ScheduledRunRecord {
   }
   if (typeof run["permission"] !== "string" || !(SCHEDULE_PERMISSIONS as readonly string[]).includes(run["permission"] as string)) {
     throw new Error("invalid-payload: scheduled run.permission must be read/default/auto");
+  }
+  if (run["providerGeneration"] !== undefined &&
+      (typeof run["providerGeneration"] !== "number" || !Number.isInteger(run["providerGeneration"]) || (run["providerGeneration"] as number) < 1)) {
+    throw new Error("invalid-payload: scheduled run.providerGeneration must be a positive integer");
   }
   return value as ScheduledRunRecord;
 }
