@@ -23,6 +23,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { DesktopConversation } from "../components/DesktopConversation";
 import { DesktopShell } from "../components/DesktopShell";
 import type { PidockBridge } from "../data/shellBridge";
+import {
+  activateSession, archiveSession, createSession, deleteSession, renameSession, restoreSession,
+} from "../data/taskSessions";
 
 const TASK_ID = "task-a";
 const roots = [{ label: "默认任务根", state: "ready" }];
@@ -41,10 +44,10 @@ const MODELS = [
 const provider = { profileId: "p-1", modelId: "model-large", generation: 1, models: MODELS };
 
 type Readout = Record<string, unknown>;
-const readoutOf = (id: string, overrides: Readout = {}, rows: SessionRow[] = SESSIONS): Readout => {
+const readoutOf = (id: string, overrides: Readout = {}, rows: SessionRow[] = SESSIONS, models: typeof MODELS = MODELS): Readout => {
   const row = rows.find((entry) => entry.id === id) ?? rows[0]!;
   const boundId = (row.binding as { modelId: string } | null)?.modelId ?? "model-large";
-  const model = MODELS.find((entry) => entry.id === boundId)!;
+  const model = models.find((entry) => entry.id === boundId) ?? models[0]!;
   return {
     session: row, active: row.id === "main", model,
     reasoningLevels: model.reasoningLevels,
@@ -55,16 +58,24 @@ const readoutOf = (id: string, overrides: Readout = {}, rows: SessionRow[] = SES
   };
 };
 
-function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | null } = {}) {
+function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | null; models?: typeof MODELS } = {}) {
+  // [#139 hotfix] the declared model rows this fixture's Provider serves.
+  const models = options.models ?? MODELS;
+  const providerRow = { ...provider, models };
   let sessions = options.sessions ?? SESSIONS;
   let activeSessionId: string | null = options.activeSessionId === undefined ? "s-1a2b3c4d" : options.activeSessionId;
   const ops: Array<{ op: string; payload: Record<string, unknown> }> = [];
   const drafts = new Map<string, string>();
   const snapshots: Record<string, unknown[]> = { main: [{ role: "assistant", text: "main 会话的回答", usage: null }], "s-1a2b3c4d": [{ role: "assistant", text: "重构认证会话的回答", usage: null }] };
-  const readable = new Set<string>(["main", "s-1a2b3c4d"]);
+  // Every session this fixture reports is readable (a test may pass its own rows).
+  const readable = new Set<string>(["main", "s-1a2b3c4d", ...(options.sessions ?? []).map((entry) => entry.id)]);
   const refusals: Record<string, string> = {};
   const sdkCalls: Array<Record<string, unknown>> = [];
   let subscriptions = 0;
+  // [Pencil T04 hotfix] the real Host answers every write with the same provider
+  // row it answers `task/sessionList` with; this switch reproduces an OLDER Host
+  // that omits it, to prove the page merges instead of nulling the model menu.
+  let writeProvider = true;
 
   const bridge: PidockBridge = {
     listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: [{ taskId: TASK_ID, name: "Task", branch: "task/main", repoCount: 1, updatedAt: "now" }], roots } })),
@@ -86,13 +97,14 @@ function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | nu
       ops.push({ op, payload });
       const envelope = (inner: unknown) => ({ ok: true as const, payload: inner });
       const sessionId = String(payload["sessionId"] ?? "");
-      const list = () => ({ activeSessionId, sessions, provider });
+      const list = () => ({ activeSessionId, sessions, provider: providerRow });
+      const writeList = () => (writeProvider ? list() : { activeSessionId, sessions });
       if (op === "task/sessionList") return envelope(list());
       if (op === "task/sessionReadout") {
         if (sessions.length === 0 || !readable.has(sessionId)) return { ok: false as const, error: "session-unknown" };
         const refusal = refusals[`readout:${sessionId}`];
         if (refusal) return { ok: false as const, error: refusal };
-        return envelope(readoutOf(sessionId, {}, sessions));
+        return envelope(readoutOf(sessionId, {}, sessions, models));
       }
       if (op === "task/sessionCreate") {
         const created = session("s-9f9f9f9f", String(payload["name"] ?? "新会话"));
@@ -100,29 +112,29 @@ function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | nu
         activeSessionId = created.id;
         readable.add(created.id);
         snapshots[created.id] = [];
-        return envelope({ session: created, activeSessionId, sessions });
+        return envelope({ session: created, ...writeList() });
       }
       if (op === "task/sessionActivate") {
         activeSessionId = sessionId;
-        return envelope(list());
+        return envelope(writeList());
       }
       if (op === "task/sessionRename") {
         sessions = sessions.map((entry) => (entry.id === sessionId ? { ...entry, name: String(payload["name"]) } : entry));
-        return envelope(list());
+        return envelope(writeList());
       }
       if (op === "task/sessionArchive") {
         sessions = sessions.map((entry) => (entry.id === sessionId ? { ...entry, archived: true } : entry));
         if (activeSessionId === sessionId) activeSessionId = sessions.find((entry) => !entry.archived)?.id ?? null;
-        return envelope(list());
+        return envelope(writeList());
       }
       if (op === "task/sessionRestore") {
         sessions = sessions.map((entry) => (entry.id === sessionId ? { ...entry, archived: false } : entry));
-        return envelope(list());
+        return envelope(writeList());
       }
       if (op === "task/sessionDelete") {
         sessions = sessions.filter((entry) => entry.id !== sessionId);
         if (activeSessionId === sessionId) activeSessionId = sessions.find((entry) => !entry.archived)?.id ?? null;
-        return envelope(list());
+        return envelope(writeList());
       }
       if (op === "task/sessionModel") {
         const refusal = refusals["model"];
@@ -130,12 +142,12 @@ function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | nu
         const modelId = String(payload["modelId"]);
         const level = payload["thinkingLevel"] === undefined ? null : String(payload["thinkingLevel"]);
         sessions = sessions.map((entry) => (entry.id === sessionId ? { ...entry, binding: { profileId: "p-1", modelId, thinkingLevel: level, generation: 1 } } : entry));
-        return envelope(readoutOf(sessionId, {}, sessions));
+        return envelope(readoutOf(sessionId, {}, sessions, models));
       }
       if (op === "task/sessionReasoning") {
         const level = String(payload["level"]);
         sessions = sessions.map((entry) => (entry.id === sessionId ? { ...entry, binding: { profileId: "p-1", modelId: (entry.binding as { modelId: string } | null)?.modelId ?? "model-large", thinkingLevel: level, generation: 1 } } : entry));
-        return envelope(readoutOf(sessionId, {}, sessions));
+        return envelope(readoutOf(sessionId, {}, sessions, models));
       }
       if (op === "task/readDraft") return envelope({ sessionId, draft: drafts.has(sessionId) ? { text: drafts.get(sessionId), references: [] } : null });
       if (op === "task/saveDraft") { drafts.set(sessionId, String(payload["text"])); return envelope({ sessionId }); }
@@ -143,8 +155,11 @@ function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | nu
       return { ok: true, payload: {} };
     }),
   };
-  return { bridge, ops, drafts, snapshots, refusals, sdkCalls, subscriptions: () => subscriptions };
+  return { bridge, ops, drafts, snapshots, refusals, sdkCalls, subscriptions: () => subscriptions, omitWriteProvider: () => { writeProvider = false; } };
 }
+
+/** The model name a menu row starts with (the window/levels span follows it directly). */
+const rowName = (row: HTMLElement) => row.textContent?.replace(/(\d|·).*$/, "") ?? "";
 
 function mount(fixture: ReturnType<typeof setup>) {
   window.pidock = fixture.bridge;
@@ -236,6 +251,134 @@ describe("[#139] task sessions in the conversation", () => {
     expect(screen.getByTestId("composer-model-name")).toHaveTextContent("Fast");
   });
 
+  /**
+   * [#139 hotfix] The evidence defect: a session WRITE reply used to carry only
+   * `{activeSessionId, sessions}`; the page replaced its whole list with it, so
+   * `provider` became `null` and the model menu said 切换模型不可用 until a
+   * remount. Every write now answers with the same provider row as
+   * `task/sessionList` (and the page merges a partial reply), so the menu keeps
+   * working after switching, creating, renaming, archiving, restoring, deleting.
+   */
+  it("keeps the model menu usable after switching and after every session write", async () => {
+    const fixture = setup();
+    mount(fixture);
+    await screen.findByRole("tab", { name: "主会话" });
+    const expectModelMenu = async (label: string) => {
+      fireEvent.click(screen.getByTestId("composer-model"));
+      const menu = await screen.findByRole("menu", { name: "会话模型" });
+      expect({ label, rows: within(menu).getAllByRole("menuitemradio").map((row) => rowName(row)) })
+        .toEqual({ label, rows: ["Large", "Fast"] });
+      fireEvent.click(screen.getByTestId("composer-model"));
+      await waitFor(() => expect(screen.queryByRole("menu", { name: "会话模型" })).not.toBeInTheDocument());
+    };
+    await expectModelMenu("initial");
+
+    // activate
+    fireEvent.click(screen.getByRole("tab", { name: "主会话" }));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionActivate")).toBe(true));
+    await expectModelMenu("activate");
+
+    // create
+    fireEvent.click(screen.getByTestId("session-new"));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionCreate")).toBe(true));
+    await screen.findByRole("tab", { name: "新会话" });
+    await expectModelMenu("create");
+
+    // rename the new session through the 全部会话 panel
+    fireEvent.click(screen.getByTestId("session-all"));
+    let row = await screen.findByTestId("session-row-s-9f9f9f9f");
+    fireEvent.click(within(row).getByRole("button", { name: "重命名" }));
+    fireEvent.change(within(row).getByRole("textbox", { name: "会话名称" }), { target: { value: "改过的名字" } });
+    fireEvent.click(within(row).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionRename")).toBe(true));
+    await expectModelMenu("rename");
+
+    // archive the current session (the page moves to the next real one)
+    row = screen.getByTestId("session-row-s-9f9f9f9f");
+    fireEvent.click(within(row).getByRole("button", { name: "归档" }));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionArchive")).toBe(true));
+    await expectModelMenu("archive");
+
+    // restore it
+    row = await screen.findByTestId("session-row-s-9f9f9f9f");
+    fireEvent.click(within(row).getByRole("button", { name: "恢复" }));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionRestore")).toBe(true));
+    await expectModelMenu("restore");
+
+    // delete it
+    row = screen.getByTestId("session-row-s-9f9f9f9f");
+    fireEvent.click(within(row).getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionDelete")).toBe(true));
+    await expectModelMenu("delete");
+  });
+
+  it("merges a partial write reply instead of emptying the model menu", async () => {
+    const fixture = setup();
+    // An older/partial Host reply: the page must keep the provider it read.
+    fixture.omitWriteProvider();
+    mount(fixture);
+    await screen.findByRole("tab", { name: "主会话" });
+    fireEvent.click(screen.getByRole("tab", { name: "主会话" }));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionActivate")).toBe(true));
+    fireEvent.click(screen.getByTestId("session-new"));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionCreate")).toBe(true));
+    fireEvent.click(screen.getByTestId("composer-model"));
+    const menu = await screen.findByRole("menu", { name: "会话模型" });
+    expect(within(menu).getAllByRole("menuitemradio").map((row) => rowName(row))).toEqual(["Large", "Fast"]);
+    // And the switch itself still reaches the Host.
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: /Fast/ }));
+    await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionModel" && entry.payload["modelId"] === "model-fast")).toBe(true));
+  });
+
+  it("shows declared windows honestly: 8 stays 8, never 0k", async () => {
+    const windowModels = [
+      { id: "model-tiny", name: "Tiny", contextWindow: 8, maxTokens: 8, reasoning: false, reasoningLevels: [] },
+      { id: "model-odd", name: "Odd", contextWindow: 999, maxTokens: 64, reasoning: false, reasoningLevels: [] },
+      { id: "model-small", name: "Small", contextWindow: 1024, maxTokens: 128, reasoning: false, reasoningLevels: [] },
+      { id: "model-large", name: "Large", contextWindow: 131072, maxTokens: 8192, reasoning: true, reasoningLevels: ["low"] },
+    ];
+    const tiny = session("s-12121212", "迷你窗口", { binding: { profileId: "p-1", modelId: "model-tiny", thinkingLevel: null, generation: 1 } });
+    const fixture = setup({ models: windowModels, sessions: [...SESSIONS, tiny], activeSessionId: tiny.id });
+    mount(fixture);
+    await screen.findByRole("tab", { name: "主会话" });
+    // The bound model's real window, in the header and the composer.
+    await waitFor(() => expect(screen.getByTestId("composer-context")).toHaveTextContent("1.2k / 8"));
+    const context = screen.getByTestId("composer-context");
+    expect(context.textContent).not.toContain("0k");
+    expect(context.getAttribute("title")).toContain("绑定模型窗口 8 tokens");
+    // Every row in the menu names its own declared window.
+    fireEvent.click(screen.getByTestId("composer-model"));
+    const menu = await screen.findByRole("menu", { name: "会话模型" });
+    const labels = within(menu).getAllByRole("menuitemradio").map((row) => row.textContent);
+    expect(labels).toEqual([
+      expect.stringContaining("8 · 无推理档位"),
+      expect.stringContaining("999 · 无推理档位"),
+      expect.stringContaining("1k · 无推理档位"),
+      expect.stringContaining("131k · 1 档"),
+    ]);
+    expect(labels.join(" ")).not.toContain("0k");
+  });
+
+  it("names an unbound session as 未绑定模型 instead of claiming the model lacks reasoning", async () => {
+    // No Provider installed: the Host reports `model: null`, `reasoningLevels: []`.
+    // That is "nothing bound", not "the model does not support reasoning".
+    const fixture = setup({ activeSessionId: "main" });
+    fixture.bridge.taskOp = vi.fn(async (_taskId: string, op: string) => {
+      if (op === "task/sessionList") return { ok: true as const, payload: { activeSessionId: "main", sessions: [session("main", "主会话")], provider: null } };
+      if (op === "task/sessionReadout") return { ok: true as const, payload: readoutOf("main", { model: null, reasoningLevels: [], context: { used: null, window: null, source: "unknown" } }) };
+      return { ok: true as const, payload: {} };
+    });
+    mount(fixture);
+    await screen.findByRole("tab", { name: "主会话" });
+    await waitFor(() => expect(screen.getByTestId("desktop-session-model")).toHaveTextContent("模型 · 未绑定模型"));
+    expect(screen.getByTestId("desktop-session-reasoning")).toHaveTextContent("推理 · 未绑定模型");
+    expect(screen.getByTestId("composer-model-name")).toHaveTextContent("未绑定模型");
+    const reasoning = screen.getByTestId("composer-reasoning");
+    expect(reasoning).toHaveTextContent("未绑定模型");
+    expect(reasoning).not.toHaveTextContent("该模型不支持");
+    expect(reasoning).not.toHaveTextContent("无推理档位");
+  });
+
   it("quotes the Host's busy refusal by name and keeps the previous binding", async () => {
     const fixture = setup();
     fixture.refusals["model"] = "sdk-session-busy: 该会话正在执行回合，稍后再切换模型";
@@ -307,6 +450,59 @@ describe("[#139] the sidebar session tree", () => {
     fireEvent.click(document.querySelector('[data-session-nav="main"]') as HTMLElement);
     expect(onNavigate).toHaveBeenCalledWith({ view: "task", taskId: TASK_ID, sessionId: "main" });
     expect(fixture.ops.some((entry) => entry.op === "task/sessionList")).toBe(true);
+  });
+
+  /**
+   * [#139 hotfix] The evidence caught the sidebar's rows stale: `TaskSessionRows`
+   * read on `[taskId]` only, so a session created (or renamed/archived/...) in the
+   * conversation was missing until the task was re-selected. Every accepted write
+   * now announces its task and this row list re-reads the Host's index.
+   */
+  it("re-reads the rows after create, rename, archive, restore, activate and delete", async () => {
+    const fixture = setup();
+    window.pidock = fixture.bridge;
+    render(
+      <DesktopShell
+        view={{ view: "task", taskId: TASK_ID }}
+        onNavigate={vi.fn()}
+        projects={[]}
+        projectsInitialized
+        unassignedCount={0}
+        tasks={[{ taskId: TASK_ID, name: "Task", branch: "task/main", repoCount: 1, updatedAt: "2026-01-02", projectId: null }]}
+        allTaskCount={1}
+        lifecyclePending={false}
+        lifecycleErrors={[]}
+        roots={[]}
+        rootRetry={{ busy: false, pending: false, error: null, run: vi.fn() }}
+        breadcrumb={{}}
+      >
+        <div />
+      </DesktopShell>,
+    );
+    const row = (id: string) => document.querySelector(`[data-session-nav="${id}"]`);
+    const reads = () => fixture.ops.filter((entry) => entry.op === "task/sessionList").length;
+    await waitFor(() => expect(document.querySelectorAll("[data-session-nav]")).toHaveLength(2));
+
+    await createSession(TASK_ID, { name: "第四会话" });
+    await waitFor(() => expect(row("s-9f9f9f9f")?.textContent).toBe("第四会话"));
+
+    await renameSession(TASK_ID, "s-9f9f9f9f", "改过的名字");
+    await waitFor(() => expect(row("s-9f9f9f9f")?.textContent).toBe("改过的名字"));
+
+    await archiveSession(TASK_ID, "s-9f9f9f9f");
+    await waitFor(() => expect(row("s-9f9f9f9f")).toBeNull());
+
+    await restoreSession(TASK_ID, "s-9f9f9f9f");
+    await waitFor(() => expect(row("s-9f9f9f9f")?.textContent).toBe("改过的名字"));
+
+    const before = reads();
+    await activateSession(TASK_ID, "s-9f9f9f9f");
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    expect(row("s-9f9f9f9f")).not.toBeNull();
+
+    await deleteSession(TASK_ID, "s-9f9f9f9f");
+    await waitFor(() => expect(row("s-9f9f9f9f")).toBeNull());
+    expect(document.querySelectorAll("[data-session-nav]")).toHaveLength(2);
   });
 
   it("names a failed session-list read in the sidebar instead of showing an empty tree", async () => {
