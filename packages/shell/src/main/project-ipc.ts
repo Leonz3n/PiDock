@@ -1,8 +1,27 @@
 import type { ProjectRegistry, ProjectCreateInput, ProjectUpdateInput } from "./project-registry.js";
 import type { TaskRootIndex } from "./task-root-index.js";
+import { verifyProjectSources } from "./project-sources.js";
 import { TrustDomainViolation } from "./trust-domain.js";
 
-type ProjectOperation = "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer";
+type ProjectOperation = "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations"
+  | "claim" | "unlink" | "transfer" | "status" | "recover" | "verifySources" | "blockers";
+
+/**
+ * Named registry failures. The UI has to tell "missing, restore from backup",
+ * "corrupt" and "someone rewrote the audit trail" apart, so an unnamed
+ * catch-all string would leave the recovery path unreachable (#136).
+ */
+export function projectFailureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("backup requires explicit recovery")) return "项目注册表缺失，可从备份恢复";
+  if (message.includes("no valid backup")) return "项目注册表缺失，且备份不可用";
+  if (message.includes("audit integrity")) return "项目注册表审计摘要不一致，可能被外部改动";
+  if (message.includes("unsupported project registry version")) return "项目注册表版本不受支持";
+  if (message.includes("invalid project registry") || message.includes("too large") || message.includes("invalid project")) {
+    return "项目注册表内容损坏";
+  }
+  return "项目注册表操作失败，请检查本机项目数据后重试";
+}
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -43,6 +62,24 @@ export async function performProjectOperation(store: ProjectRegistry, request: u
       return store.rename(projectId(args["projectId"]), args["name"]);
     }
     case "delete": return store.delete(projectId(shape(request, "delete", ["projectId"])["projectId"]));
+    case "status": { shape(request, "status", []); return store.status(); }
+    case "recover": {
+      const args = shape(request, "recover", ["confirmed"]);
+      // Recovery installs the backup over the primary: it is never implicit.
+      if (args["confirmed"] !== true) throw new TrustDomainViolation("invalid-payload", "recovery requires explicit confirmation");
+      return store.recover();
+    }
+    case "verifySources": {
+      const target = projectId(shape(request, "verifySources", ["projectId"])["projectId"]);
+      const project = store.get(target);
+      if (!project) throw new TrustDomainViolation("invalid-payload", "unknown project");
+      return verifyProjectSources(project);
+    }
+    case "blockers": {
+      const target = projectId(shape(request, "blockers", ["projectId"])["projectId"]);
+      if (!roots) throw new TrustDomainViolation("invalid-payload", "task root index unavailable");
+      return store.blockers(target, roots);
+    }
     case "association": {
       const args = shape(request, "association", ["taskId"]);
       if (!roots) throw new TrustDomainViolation("invalid-payload", "task root index unavailable");
