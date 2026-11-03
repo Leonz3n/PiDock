@@ -50,8 +50,6 @@ const nativeView = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-type Prefs = (request: Record<string, unknown>) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
-
 function stubPreferences(preferencesOp: ReturnType<typeof vi.fn>) {
   window.pidock = { preferencesOp } as unknown as typeof window.pidock;
   return preferencesOp;
