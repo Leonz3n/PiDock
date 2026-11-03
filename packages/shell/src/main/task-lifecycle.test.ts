@@ -9,6 +9,11 @@ import {
   evaluateCleanupGate,
   planArchive,
   planCleanupRemoval,
+  planCleanupWait,
+  planRepoCleanup,
+  planRestoreReadiness,
+  planWorktreeCleanup,
+  archiveModeLabel,
   planExplicitQuit,
   planRelaunch,
   previewCleanup,
@@ -493,5 +498,162 @@ describe("planRelaunch", () => {
     const plan = planRelaunch({ ...input, tasks: [{ ...input.tasks[0]!, archived: true }] });
     expect(plan.tasks[0]!.archived).toBe(true);
     expect(plan.tasks[0]!.sessions.map((session) => session.autoSent)).toEqual([false, false]);
+  });
+});
+
+// [Pencil T12] (#147) task-level archive/restore + protected worktree cleanup.
+describe("archive mode and honest stop claims (#147)", () => {
+  const base = {
+    taskId: "task-aaaaaaaa",
+    sessions: [{ sessionId: "main", runState: "running" }],
+    pendingApprovals: [],
+    schedules: [{ scheduleId: "daily", enabled: true }],
+    kept: { worktrees: 1, protocolBindings: 0, browserRetained: null, templateVersion: null },
+    usageDetails: 0,
+  };
+
+  it("claims only the Agent turn as stopped and never claims external services/terminals stopped", () => {
+    const plan = planArchive({ ...base, external: { services: 1, terminals: 2 } });
+    expect(plan.stopped.agentTurns).toEqual(["main"]);
+    expect(plan.stopped.externalServices).toBe(0);
+    expect(plan.stopped.externalTerminals).toBe(0);
+    expect(plan.notStopped).toEqual({ services: 1, terminals: 2 });
+    expect(plan.disclosures.join(" ")).toContain("不主张已停止此前启动的外部服务或终端");
+    expect(plan.disclosures.join(" ")).toContain("1 个服务仍按原样运行");
+  });
+
+  it("names the two archive entry points separately", () => {
+    expect(archiveModeLabel("archive-only")).toBe("仅归档保留副本");
+    expect(archiveModeLabel("archive-and-cleanup")).toBe("归档并清理");
+  });
+
+  it("exposes the paused fact to scheduling while restore never resumes", () => {
+    const plan = planArchive(base);
+    expect(plan.pausedSchedules).toEqual(["daily"]);
+    expect(plan.scheduleResumedOnRestore).toBe(false);
+  });
+});
+
+describe("planRepoCleanup (#147)", () => {
+  it("keeps the conservative default for uncommitted work and refuses to clean it", () => {
+    const plan = planRepoCleanup({ repos: [{ repoDir: "/t/a", uncommitted: true, delivered: true }] });
+    expect(plan.rows[0]?.scope).toBe("keep");
+    expect(plan.rows[0]?.blocked).toBe(true);
+    expect(plan.requiresDecision.map((row) => row.repoDir)).toEqual(["/t/a"]);
+    expect(plan.cleanable).toEqual([]);
+    expect(plan.warnings.join(" ")).toContain("必须先保留或导出");
+  });
+
+  it("treats unknown delivery as not delivered and refuses a clean scope for it", () => {
+    const plan = planRepoCleanup({
+      repos: [{ repoDir: "/t/a", uncommitted: false, delivered: null }],
+      choices: { "/t/a": "clean" },
+    });
+    expect(plan.rows[0]).toMatchObject({ scope: "clean", atRisk: true, blocked: true });
+    expect(plan.warnings.join(" ")).toContain("交付状态未读取");
+    expect(plan.cleanable).toEqual([]);
+  });
+
+  it("treats an unreadable uncommitted state as at-risk instead of clean", () => {
+    const plan = planRepoCleanup({ repos: [{ repoDir: "/t/a", uncommitted: null, delivered: true, reason: "Git 状态读取失败" }] });
+    expect(plan.rows[0]?.atRisk).toBe(true);
+    expect(plan.rows[0]?.blocked).toBe(true);
+    expect(plan.warnings.join(" ")).toContain("按有未提交处理");
+  });
+
+  it("unblocks an at-risk repo once the user explicitly keeps or exports it", () => {
+    const repos = [{ repoDir: "/t/a", uncommitted: true, delivered: false }];
+    expect(planRepoCleanup({ repos, choices: { "/t/a": "keep" } }).blocked).toEqual([]);
+    expect(planRepoCleanup({ repos, choices: { "/t/a": "export" } }).blocked).toEqual([]);
+    expect(planRepoCleanup({ repos, choices: { "/t/a": "keep" } }).cleanable).toEqual([]);
+  });
+
+  it("cleans only the repo that is committed and provably delivered", () => {
+    const plan = planRepoCleanup({
+      repos: [
+        { repoDir: "/t/clean", uncommitted: false, delivered: true },
+        { repoDir: "/t/dirty", uncommitted: true, delivered: true },
+      ],
+      choices: { "/t/dirty": "keep" },
+    });
+    expect(plan.cleanable).toEqual(["/t/clean"]);
+    expect(plan.blocked).toEqual([]);
+    expect(plan.rows.map((row) => row.scope)).toEqual(["clean", "keep"]);
+  });
+});
+
+describe("planWorktreeCleanup (#147)", () => {
+  const record = { repoDir: "/t/a", branch: "task-aaaaaaaa", baseCommit: "9acb5b6f" };
+  const verified = verifyGitResourceIdentity({
+    record,
+    observed: { repoDir: "/t/a", head: "deadbeef", branch: "task-aaaaaaaa", isWorktree: true, baseCommitReachable: true },
+  });
+
+  it("removes only an identity-verified worktree selected for cleaning", () => {
+    expect(planWorktreeCleanup({ repoDir: "/t/a", identity: verified, scope: "clean", originalCheckoutPaths: ["/src/repo"] })).toMatchObject({ action: "remove" });
+    expect(planWorktreeCleanup({ repoDir: "/t/a", identity: verified, scope: "keep", originalCheckoutPaths: ["/src/repo"] })).toMatchObject({ action: "keep" });
+  });
+
+  it("refuses a replaced path or a path that is not this task's worktree, by name", () => {
+    const replaced = verifyGitResourceIdentity({
+      record,
+      observed: { repoDir: "/t/a", head: "deadbeef", branch: "task-aaaaaaaa", isWorktree: false, baseCommitReachable: true },
+    });
+    const refusal = planWorktreeCleanup({ repoDir: "/t/a", identity: replaced, scope: "clean", originalCheckoutPaths: ["/src/repo"] });
+    expect(refusal).toMatchObject({ action: "refuse" });
+    expect(refusal.reason).toContain("not-a-worktree");
+    const missing = verifyGitResourceIdentity({ record, observed: undefined });
+    expect(planWorktreeCleanup({ repoDir: "/t/a", identity: missing, scope: "clean", originalCheckoutPaths: [] }).reason).toContain("missing");
+  });
+
+  it("never removes an original checkout", () => {
+    const decision = planWorktreeCleanup({ repoDir: "/src/repo", identity: verified, scope: "clean", originalCheckoutPaths: ["/src/repo"] });
+    expect(decision.action).toBe("refuse");
+    expect(decision.reason).toContain("原检出目录");
+  });
+});
+
+describe("planCleanupWait (#147)", () => {
+  it("waits for a running turn and a held write right of this task", () => {
+    const plan = planCleanupWait({
+      taskId: "task-aaaaaaaa",
+      turns: [{ sessionId: "main", runState: "running" }, { sessionId: "done", runState: "done" }],
+      locks: [{ resourceId: "/t/a", owner: "task-aaaaaaaa" }, { resourceId: "/other", owner: "task-bbbbbbbb" }],
+    });
+    expect(plan.ok).toBe(false);
+    expect(plan.waiting.map((entry) => `${entry.kind}:${entry.subject}`)).toEqual(["turn:main", "lock:/t/a"]);
+  });
+
+  it("proceeds when nothing is in flight", () => {
+    expect(planCleanupWait({ taskId: "t", turns: [{ sessionId: "main", runState: "idle" }], locks: [] })).toEqual({ ok: true, waiting: [] });
+  });
+});
+
+describe("planRestoreReadiness (#147)", () => {
+  const record = { repoDir: "/t/a", branch: "task-aaaaaaaa", baseCommit: "9acb5b6f" };
+
+  it("reports a cleaned task as not ready with a repair entry instead of fabricating readiness", () => {
+    const readiness = planRestoreReadiness({ cleaned: true, repos: [{ repoDir: "/t/a", record, observed: undefined }] });
+    expect(readiness.ready).toBe(false);
+    expect(readiness.rows[0]).toMatchObject({ state: "missing", repair: expect.stringContaining("重新准备") });
+    expect(readiness.warnings.join(" ")).toContain("不显示为就绪");
+  });
+
+  it("reports a moved repo separately from a merely missing one", () => {
+    const readiness = planRestoreReadiness({
+      cleaned: false,
+      repos: [{ repoDir: "/t/a", record, observed: { repoDir: "/t/a", head: "deadbeef", branch: "task-aaaaaaaa", isWorktree: false, baseCommitReachable: true } }],
+    });
+    expect(readiness.rows[0]?.state).toBe("moved");
+    expect(readiness.ready).toBe(false);
+  });
+
+  it("is ready only when every recorded repo still verifies", () => {
+    const readiness = planRestoreReadiness({
+      cleaned: false,
+      repos: [{ repoDir: "/t/a", record, observed: { repoDir: "/t/a", head: "deadbeef", branch: "task-aaaaaaaa", isWorktree: true, baseCommitReachable: true } }],
+    });
+    expect(readiness.ready).toBe(true);
+    expect(readiness.rows[0]?.repair).toBeNull();
   });
 });

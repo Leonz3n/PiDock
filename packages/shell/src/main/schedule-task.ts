@@ -150,7 +150,7 @@ export function nextRunAtOf(schedule: Pick<StoredSchedule, "ruleText" | "timezon
   return nextTriggerAt(parsed.rule, { after });
 }
 
-export type ScheduleRunStatus = "running" | "completed" | "awaiting-approval" | "skipped" | "failed" | "unknown";
+export type ScheduleRunStatus = "running" | "completed" | "awaiting-approval" | "skipped" | "failed" | "interrupted" | "uncertain" | "unknown";
 
 /**
  * [#146 / T18 boundary] How a run's linked conversation stands TODAY.
@@ -195,6 +195,9 @@ const RESULT_LABEL: Record<ScheduledRunResult, string> = {
   skipped: "已跳过",
   failed: "失败",
   running: "执行中",
+  // [Pencil T18] #153 restart outcomes: named, never success.
+  interrupted: "已中断",
+  uncertain: "状态不确定",
 };
 
 /**

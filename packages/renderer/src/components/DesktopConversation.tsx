@@ -698,7 +698,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     setAttachmentReport(null);
   };
   const blocked = !valid || !connected || !!receiptError || snapshot?.pending || attempt?.phase === "starting" || attempt?.phase === "unknown" || attempt?.phase === "accepted";
-  const archive = async () => {
+  const archive = async (mode: "archive-only" | "archive-and-cleanup" = "archive-only") => {
     if (archiveBusy || blocked || busy.current) { setArchiveError("会话执行或请求状态未核验，不能归档；请先核验或停止执行"); return; }
     setArchiveBusy(true);
     setArchiveError("");
@@ -712,7 +712,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         throw new Error("会话仍在执行或请求结果未知，不能归档");
       }
       issued = true;
-      const result = await setTaskArchivedThroughShell({ taskId, archived: true });
+      // [T12] #147: "仅归档保留副本" sends no mode (the Host default) and keeps
+      // every worktree; "归档并清理" only opens the guarded per-repo cleanup.
+      const result = await setTaskArchivedThroughShell({ taskId, archived: true, ...(mode === "archive-and-cleanup" ? { mode } : {}) });
       if (!result.ok) throw new Error(result.error ?? "归档失败");
       if (!parseLifecycle(result.payload, taskId).archived) throw new Error("归档结果无法核验，请刷新归档状态");
       onArchived();
@@ -1347,12 +1349,14 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
         <h2 className="text-base font-semibold">归档当前任务</h2>
         <p className="mt-3 text-xs leading-6 text-muted">归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止。未执行确认会失效、定时任务暂停，代码和历史保留。恢复后服务与定时任务不会自动启动，清理需要单独处理。</p>
+        <p className="mt-2 text-[11px] leading-5 text-muted">仅归档保留副本：保留每个仓库的工作副本，不删除任何文件。归档并清理：先归档，再到已归档页逐个仓库检查未提交与未交付修改（未知交付状态不当作已交付），选择保留／导出／清理后才会移除身份核验通过的本任务工作副本。</p>
         {blocked && !archiveError && <p role="status" className="mt-3 text-xs text-muted">会话尚未连接、正在执行或请求状态未核验；请先完成核验或停止执行。</p>}
         {archiveError && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{archiveError}</p>}
         <div className="mt-5 flex justify-end gap-2">
           {invalidated && <Button type="button" variant="outline" onClick={onArchived}>查看归档状态</Button>}
           <Button ref={archiveCancelRef} type="button" variant="outline" disabled={archiveBusy} onClick={() => setArchivePrompt(false)}>取消</Button>
-          <Button type="button" disabled={archiveBusy || blocked} onClick={() => void archive()}>{archiveBusy ? "归档中…" : "确认归档"}</Button>
+          <Button type="button" variant="outline" disabled={archiveBusy || blocked} onClick={() => void archive("archive-and-cleanup")}>{archiveBusy ? "归档中…" : "归档并清理…"}</Button>
+        <Button type="button" disabled={archiveBusy || blocked} onClick={() => void archive()}>{archiveBusy ? "归档中…" : "确认归档"}</Button>
         </div>
       </div>
     </div>}

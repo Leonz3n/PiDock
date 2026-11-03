@@ -137,6 +137,8 @@ export type HostTaskOp =
   | "task/scheduleRunNow"
   | "task/scheduleRuns"
   | "task/scheduleEvaluate"
+  // [Pencil T18] #153 sleep/wake: main asks a running Host to plan forward.
+  | "task/scheduleWake"
   | "task/remoteState"
   | "task/remoteEntryMode"
   | "task/remotePairMint"
@@ -340,6 +342,7 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/scheduleRunNow",
   "task/scheduleRuns",
   "task/scheduleEvaluate",
+  "task/scheduleWake",
   "task/remoteState",
   "task/remoteEntryMode",
   "task/remotePairMint",

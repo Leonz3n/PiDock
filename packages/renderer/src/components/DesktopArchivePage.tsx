@@ -7,11 +7,13 @@ import { Button } from "./ui/button";
 type Task = { taskId: string; name: string; repoCount: number };
 /** One Host resource verdict as the archived row shows it: `ok === null` means the Host judged nothing. */
 type ResourceVerdictView = { subject: string; ok: boolean | null; reason?: string };
-type ArchivedTask = Task & { archivedAt: string | null; verdicts: ResourceVerdictView[] | undefined };
+type ArchivedTask = Task & { archivedAt: string | null; verdicts: ResourceVerdictView[] | undefined; restore: RestoreReadinessView | undefined };
 type CleanupDisposition = "remove" | "keep-copy" | "keep";
 type CleanupItemView = { resource?: string; detail?: string; disposition?: CleanupDisposition };
 type CleanupPreviewView = {
   items?: CleanupItemView[];
+  repos?: RepoRow[];
+  repoWarnings?: string[];
   warnings?: string[];
   recordsWillBeRemoved?: boolean;
   selectionLabels?: string[];
@@ -23,9 +25,21 @@ type CleanupRunView = {
   recovery?: { item?: string; reason?: string }[];
   error?: string;
 };
+/** [T12] #147 one repository row: real git state and the user's scope choice. */
+type RepoRow = {
+  repoDir: string;
+  scope: "keep" | "export" | "clean";
+  uncommitted: boolean | null;
+  delivered: boolean | null;
+  blocked: boolean;
+  detail: string;
+};
+type RestoreRow = { repoDir: string; state: string; reason: string; repair: string | null };
+type RestoreReadinessView = { ready: boolean; cleaned: boolean; rows: RestoreRow[]; warnings: string[] };
 type CleanupPanel = {
   taskId: string;
   selection: CleanupSelection;
+  repoScopes: Record<string, "keep" | "export" | "clean">;
   preview?: CleanupPreviewView;
   result?: CleanupRunView;
   error?: string;
@@ -36,11 +50,51 @@ const defaultSelection: CleanupSelection = { exportSessions: false, exportDrafts
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const strings = (value: unknown): string[] | undefined => Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : undefined;
 
-export function parseLifecycle(value: unknown, taskId: string): { archived: boolean; archivedAt: string | null; verdicts: ResourceVerdictView[] | undefined } {
+function restoreReadiness(value: unknown): RestoreReadinessView | undefined {
+  if (!object(value) || typeof value["ready"] !== "boolean") return undefined;
+  const rows = Array.isArray(value["rows"]) ? value["rows"].map((entry) => {
+    const row = object(entry) ? entry : {};
+    return {
+      repoDir: typeof row["repoDir"] === "string" ? row["repoDir"] : "Host 未上报路径",
+      state: typeof row["state"] === "string" ? row["state"] : "unknown",
+      reason: typeof row["reason"] === "string" ? row["reason"] : "Host 未上报原因",
+      repair: typeof row["repair"] === "string" ? row["repair"] : null,
+    };
+  }) : [];
+  return {
+    ready: value["ready"],
+    cleaned: value["cleaned"] === true,
+    rows,
+    warnings: strings(value["warnings"]) ?? [],
+  };
+}
+
+function repoRows(value: unknown): RepoRow[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((entry) => {
+    const row = object(entry) ? entry : {};
+    const scope = row["scope"];
+    return {
+      repoDir: typeof row["repoDir"] === "string" ? row["repoDir"] : "Host 未上报仓库",
+      scope: scope === "keep" || scope === "export" || scope === "clean" ? scope : "keep",
+      uncommitted: row["uncommitted"] === true ? true : row["uncommitted"] === false ? false : null,
+      delivered: row["delivered"] === true ? true : row["delivered"] === false ? false : null,
+      blocked: row["blocked"] === true,
+      detail: typeof row["detail"] === "string" ? row["detail"] : "Host 未上报详情",
+    };
+  });
+}
+
+export function parseLifecycle(value: unknown, taskId: string): { archived: boolean; archivedAt: string | null; verdicts: ResourceVerdictView[] | undefined; restore: RestoreReadinessView | undefined } {
   if (!object(value) || !object(value.lifecycle) || value.lifecycle.taskId !== taskId || typeof value.lifecycle.archived !== "boolean" ||
     !(value.lifecycle.archivedAt === null || typeof value.lifecycle.archivedAt === "string") ||
     (value.lifecycle.archived && !value.lifecycle.archivedAt)) throw new Error("归档状态返回异常");
-  return { archived: value.lifecycle.archived, archivedAt: value.lifecycle.archivedAt, verdicts: resourceVerdicts(value.lifecycle.resources) };
+  return {
+    archived: value.lifecycle.archived,
+    archivedAt: value.lifecycle.archivedAt,
+    verdicts: resourceVerdicts(value.lifecycle.resources),
+    restore: restoreReadiness(value.lifecycle.restore),
+  };
 }
 
 function processKindLabel(kind: string | undefined): string {
@@ -105,7 +159,10 @@ function cleanupItems(value: unknown): CleanupItemView[] | undefined {
 function parseCleanupPreview(value: unknown): CleanupPreviewView {
   if (!object(value) || !object(value.preview)) throw new Error("清理预览返回异常");
   const preview = value.preview;
+  const repos = repoRows(preview["repos"]);
   return {
+    ...(repos !== undefined ? { repos } : {}),
+    ...(strings(preview["repoWarnings"]) !== undefined ? { repoWarnings: strings(preview["repoWarnings"]) } : {}),
     ...(cleanupItems(preview["items"]) !== undefined ? { items: cleanupItems(preview["items"]) } : {}),
     ...(strings(preview["warnings"]) !== undefined ? { warnings: strings(preview["warnings"]) } : {}),
     ...(typeof preview["recordsWillBeRemoved"] === "boolean" ? { recordsWillBeRemoved: preview["recordsWillBeRemoved"] } : {}),
@@ -166,7 +223,7 @@ async function readArchived(tasks: readonly Task[]): Promise<{ rows: ArchivedTas
       const response = await lifecycleStateThroughShell(task.taskId);
       if (!response.ok) throw new Error(response.error ?? "读取失败");
       const state = parseLifecycle(response.payload, task.taskId);
-      return { row: state.archived ? { ...task, archivedAt: state.archivedAt, verdicts: state.verdicts } : null, error: "" };
+      return { row: state.archived ? { ...task, archivedAt: state.archivedAt, verdicts: state.verdicts, restore: state.restore } : null, error: "" };
     } catch (error) {
       return { row: null, error: `${task.name}：${error instanceof Error ? error.message : "读取失败"}` };
     }
@@ -203,16 +260,21 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
     }
   };
   const openCleanup = (taskId: string) => {
-    setCleanup((current) => current?.taskId === taskId ? null : { taskId, selection: { ...defaultSelection } });
+    setCleanup((current) => current?.taskId === taskId ? null : { taskId, selection: { ...defaultSelection }, repoScopes: {} });
   };
   const changeSelection = (key: keyof CleanupSelection, checked: boolean) => {
     setCleanup((current) => current ? { ...current, selection: { ...current.selection, [key]: checked }, preview: undefined, result: undefined, error: undefined } : current);
+  };
+  const changeRepoScope = (repoDir: string, scope: "keep" | "export" | "clean") => {
+    setCleanup((current) => current
+      ? { ...current, repoScopes: { ...current.repoScopes, [repoDir]: scope }, preview: undefined, result: undefined, error: undefined }
+      : current);
   };
   const previewCleanup = async (taskId: string) => {
     const current = cleanup;
     if (!current || current.taskId !== taskId) return;
     setCleanup({ ...current, previewing: true, error: undefined, result: undefined });
-    const response = await cleanupPreviewThroughShell({ taskId, selection: current.selection });
+    const response = await cleanupPreviewThroughShell({ taskId, selection: current.selection, repoScopes: current.repoScopes });
     if (!response.ok) {
       setCleanup((latest) => latest?.taskId === taskId ? { ...latest, previewing: false, error: response.error ?? "Host 未上报拒绝原因" } : latest);
       return;
@@ -229,7 +291,7 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
     if (!current || current.taskId !== task.taskId || !current.preview || current.running) return;
     if (!window.confirm(confirmationText(task.name, current.preview))) return;
     setCleanup({ ...current, running: true, error: undefined, result: undefined });
-    const response = await runCleanupThroughShell({ taskId: task.taskId, selection: current.selection, label: "清理任务" });
+    const response = await runCleanupThroughShell({ taskId: task.taskId, selection: current.selection, label: "清理任务", repoScopes: current.repoScopes });
     if (!response.ok) {
       setCleanup((latest) => latest?.taskId === task.taskId ? { ...latest, running: false, error: response.error ?? "Host 未上报拒绝原因" } : latest);
       return;
@@ -253,6 +315,19 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
             <div className="min-w-0"><h2 className="break-words text-sm font-semibold">{task.name}</h2><p className="mt-1 text-xs text-muted">{task.repoCount} 个仓库 · 归档于 {task.archivedAt}</p></div>
             <div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={restoring !== null || cleanup?.running === true} onClick={() => void restore(task.taskId)}>恢复</Button><Button size="sm" variant="outline" disabled={restoring !== null || cleanup?.running === true} onClick={() => openCleanup(task.taskId)}>{cleanup?.taskId === task.taskId ? "收起清理" : "清理…"}</Button></div>
           </div>
+          <section aria-label={`${task.name}工作区就绪`} data-testid={`restore-readiness-${task.taskId}`} className="mt-3 text-xs">
+            <h3 className="font-semibold">恢复后的工作区</h3>
+            {task.restore === undefined
+              ? <p className="mt-1 text-[11px] text-muted">Host 未上报工作区就绪状态，不视为就绪。</p>
+              : task.restore.ready
+                ? <p className="mt-1 text-[11px] text-muted">Host 核验：{task.restore.rows.length} 个仓库工作副本身份仍然匹配。</p>
+                : <div className="mt-1 text-[11px] text-[#9a6032]">
+                    <p>{task.restore.cleaned ? "该任务已清理：工作副本已按记录移除，恢复不等于工作区就绪。" : "工作区未就绪，恢复后需先修复。"}</p>
+                    <ul className="mt-1 list-inside list-disc">{task.restore.rows.map((row) => <li key={row.repoDir}>{row.repoDir}：{row.state} · {row.reason}{row.repair ? `；修复入口：${row.repair}` : ""}</li>)}</ul>
+                    {task.restore.warnings.map((warning) => <p key={warning} className="mt-1">{warning}</p>)}
+                    <p className="mt-1">修复未接线为独立按钮；修复入口在本页按 Host 上报显示。</p>
+                  </div>}
+          </section>
           <section aria-label={`${task.name}资源判定`} className="mt-3 text-xs">
             <h3 className="font-semibold">Host 资源判定</h3>
             <p className="mt-1 text-[11px] text-muted">Host 按身份核对工作副本与运行进程，不凭过期进程号或端口定论；这里只读展示判定，不能清理的资源按具名原因处理后重读。</p>
@@ -265,6 +340,27 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
           {cleanup?.taskId === task.taskId && <section aria-label={`${task.name}清理预览`} className="mt-4 border border-line bg-paper p-3">
             <p className="text-xs font-semibold">先预览 Host 清理清单</p>
             <p className="mt-1 text-[11px] text-muted">选择要随清理导出的记录；未选择的记录可能随清理移除。独立导出下载界面未接线。</p>
+            {cleanup.preview?.repos !== undefined && <div className="mt-2 text-xs">
+              <h3 className="font-semibold">逐仓库检查（真实 Git 状态）</h3>
+              {cleanup.preview.repos.length === 0
+                ? <p className="mt-1 text-[11px] text-muted">Host 上报 0 个仓库工作副本。</p>
+                : <ul className="mt-1 space-y-1.5">{cleanup.preview.repos.map((row) => <li key={row.repoDir} className="text-[11px]">
+                    <p className={row.blocked ? "text-[#9a6032]" : "text-muted"}>{row.repoDir}：{row.detail}</p>
+                    <div className="mt-1 flex flex-wrap gap-3">
+                      {([["keep", "保留"], ["export", "导出"], ["clean", "清理"]] as const).map(([scope, label]) => <label key={scope} className="flex items-center gap-1">
+                        <input
+                          type="radio"
+                          name={`repo-scope-${row.repoDir}`}
+                          checked={(cleanup.repoScopes[row.repoDir] ?? row.scope) === scope}
+                          disabled={cleanup.previewing || cleanup.running}
+                          onChange={() => changeRepoScope(row.repoDir, scope)}
+                        />{label}
+                      </label>)}
+                    </div>
+                    <p className="text-muted">未提交：{row.uncommitted === null ? "未读取（按未提交处理）" : row.uncommitted ? "有" : "无"} · 交付：{row.delivered === null ? "未知（不当作已交付）" : row.delivered ? "已交付" : "未交付"}</p>
+                  </li>)}</ul>}
+              {(cleanup.preview.repoWarnings ?? []).map((warning) => <p key={warning} className="mt-1 text-[11px] text-[#9a6032]">{warning}</p>)}
+            </div>}
             <div className="mt-2 flex flex-wrap gap-3 text-xs">
               {([ ["exportSessions", "导出会话"], ["exportDrafts", "导出草稿"], ["exportUsage", "导出用量"] ] as const).map(([key, label]) => <label key={key} className="flex items-center gap-1.5"><input type="checkbox" checked={cleanup.selection[key]} disabled={cleanup.previewing || cleanup.running} onChange={(event) => changeSelection(key, event.target.checked)} />{label}</label>)}
             </div>

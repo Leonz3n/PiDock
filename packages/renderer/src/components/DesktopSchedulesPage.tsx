@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { shellTaskOp } from "../data/shellBridge";
+import { shellSchedulerState, shellTaskOp } from "../data/shellBridge";
 import { parseProviderStatus, providerCall } from "../data/providerProfile";
 import { hostText } from "../data/workspaceFiles";
 import { Badge } from "./ui/badge";
@@ -14,9 +14,14 @@ type Schedule = { scheduleId: string; taskId: string; name: string; ruleText: st
  * served it (absent = never started); `sessionId` is the run's own session, the
  * one 「继续对话」 opens.
  */
-type Run = { runId: string; scheduleId: string; taskId: string; startedAt: string; result: "running" | "completed" | "awaiting-approval" | "skipped" | "failed"; reason?: string; model?: string; actualModel?: string; sessionId?: string; failureCode?: string };
+type Run = { runId: string; scheduleId: string; taskId: string; startedAt: string; result: "running" | "completed" | "awaiting-approval" | "skipped" | "failed" | "interrupted" | "uncertain"; reason?: string; model?: string; actualModel?: string; sessionId?: string; failureCode?: string };
+/**
+ * [Pencil T18] 工单 153 the scheduler's own phase plus the last quit that could not
+ * prove every Host stopped. Both are main-owned facts, not derived from a run.
+ */
+type SchedulerState = { phase: "active" | "asleep" | "quitting"; blockedReason: string | null; sleepingSince?: string; lastQuitUnconfirmed?: { at: string; hosts: string[]; attempts?: number } };
 type Result = { schedules: Schedule[]; runs: Run[]; errors: string[] };
-const runLabels: Record<Run["result"], string> = { running: "执行中", completed: "已完成", "awaiting-approval": "待确认", skipped: "已跳过", failed: "失败" };
+const runLabels: Record<Run["result"], string> = { running: "执行中", completed: "已完成", "awaiting-approval": "待确认", skipped: "已跳过", failed: "失败", interrupted: "已中断", uncertain: "状态不确定" };
 const permissionLabels: Record<Permission, string> = { read: "只读", default: "默认权限 · 需要时等待确认", auto: "自动执行 · 仍受任务边界约束" };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown): value is string => typeof value === "string";
@@ -34,7 +39,7 @@ function parseRuns(value: unknown, taskId: string): Run[] {
   if (!object(value) || !Array.isArray(value.runs)) throw new Error("执行记录返回异常");
   return value.runs.map((item: unknown) => {
     if (!object(item) || !["runId", "scheduleId", "taskId", "startedAt"].every((key) => text(item[key])) || item.taskId !== taskId ||
-        !["running", "completed", "awaiting-approval", "skipped", "failed"].includes(String(item.result)) ||
+        !["running", "completed", "awaiting-approval", "skipped", "failed", "interrupted", "uncertain"].includes(String(item.result)) ||
         (item.reason !== undefined && !text(item.reason)) ||
         (item.model !== undefined && !text(item.model)) ||
         (item.actualModel !== undefined && !text(item.actualModel)) ||
@@ -65,6 +70,7 @@ async function readSchedules(tasks: readonly Task[]): Promise<Result> {
 
 export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession }: { tasks: readonly Task[]; onOpenTask: (taskId: string) => void; onOpenSession?: (taskId: string, sessionId: string) => void }) {
   const [result, setResult] = useState<Result | null>(null);
+  const [scheduler, setScheduler] = useState<SchedulerState | null>(null);
   const [filter, setFilter] = useState<"all" | "active" | "paused">("all");
   const [revision, setRevision] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
@@ -81,6 +87,9 @@ export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession }: { tas
     let live = true;
     setResult(null);
     void readSchedules(tasks).then((data) => { if (live) setResult(data); });
+    // [Pencil T18] 工单 153 the scheduler phase + last unconfirmed quit are main-owned;
+    // a failed read keeps the previous banner instead of claiming 「运行中」.
+    void shellSchedulerState().then((state) => { if (live && state !== null) setScheduler(state); });
     return () => { live = false; };
   }, [tasks, revision]);
   // The Provider list belongs to the schedule's task: it is read once per opened
@@ -186,6 +195,10 @@ export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession }: { tas
     </div>
     <p className="mt-1.5 text-xs text-muted">每项配置属于一个真实任务；执行记录来自任务 Host。启用、暂停、立即运行与编辑由 Host 决定并回执；新建定时任务在项目工作空间选择「定时任务」类型创建专属任务。</p>
     {actionError && <p role="alert" data-testid="desktop-schedule-action-error" className="mt-2 break-words text-xs text-[#ad4545]">{actionError}</p>}
+    {scheduler && (scheduler.phase !== "active" || scheduler.lastQuitUnconfirmed !== undefined) && <div role="status" data-testid="desktop-scheduler-state" className="mt-4 border border-line bg-paper p-3 text-xs text-muted">
+      <strong className="text-ink">{{ active: "调度运行中", asleep: "系统休眠：不会执行或补跑，唤醒后按未来时间重新计划", quitting: "应用正在退出：不再执行定时触发" }[scheduler.phase]}</strong>
+      {scheduler.lastQuitUnconfirmed && <p className="mt-1" data-testid="desktop-scheduler-quit-unconfirmed">上次退出未确认（{scheduler.lastQuitUnconfirmed.at}）：{scheduler.lastQuitUnconfirmed.hosts.length ? scheduler.lastQuitUnconfirmed.hosts.join("、") : "退出报告未指明任务"} 未确认停止；请检查是否仍有进程在运行。</p>}
+    </div>}
     {!result ? <p role="status" className="mt-6 text-xs text-muted">正在读取任务的定时配置…</p> : <>
       {result.errors.length > 0 && <div role="alert" className="mt-5 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">部分数据读取失败，以下仅展示成功读取的配置与记录。<ul className="mt-1 list-inside list-disc">{result.errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
       <div className="mt-6 grid grid-cols-3 gap-3 below-mid:grid-cols-1">

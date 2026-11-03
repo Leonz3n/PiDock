@@ -10,6 +10,11 @@ export function registerApplicationLifecycle(input: {
   stopHosts: () => Promise<boolean>;
   /** Task ids the last quit report did not stop cleanly; the window-close escalation names them. */
   unsatisfiedHosts: () => string[];
+  /**
+   * [Pencil T18] #153 the last-window escalation gave up and the app exits
+   * anyway: record the unconfirmed shutdown so the next start can show it.
+   */
+  onQuitUnconfirmed?(report: { at: string; hosts: string[]; attempts: number }): void;
 }): void {
   const { app, window } = input;
   if (window.isDestroyed()) throw Error("application-window-unavailable");
@@ -47,6 +52,7 @@ export function registerApplicationLifecycle(input: {
     unsatisfiedHosts: input.unsatisfiedHosts,
     onExhausted: ({ attempts, unsatisfied }) => {
       quitFinished = true;
+      input.onQuitUnconfirmed?.({ at: new Date().toISOString(), hosts: unsatisfied, attempts });
       console.error(
         `[main] last-window shutdown did not converge after ${attempts} attempt(s); the window is already closed, so the app exits. Hosts that did not stop cleanly: ${unsatisfied.length ? unsatisfied.join(", ") : "none named by the quit report"}`,
       );

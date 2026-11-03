@@ -1522,6 +1522,15 @@ export class TaskWorkspaceHost {
     return this.schedules.evaluateDue();
   }
 
+  /**
+   * [Pencil T18] #153 wake: every enabled schedule's plan moves to the resume
+   * instant. Nothing that elapsed while asleep is replayed or recorded.
+   */
+  resumeSchedulesAfterWake(at: string): { moved: string[] } {
+    this.assertExecutionOpen();
+    return this.schedules.resumeForward(at);
+  }
+
   /** 盒子 4: an expired confirmation is ended (ledger + turn) before any run is judged. */
   private settleDueApprovalWaits(): void {
     for (const expired of this.executions.settleDueApprovals()) this.endExpiredApprovalWait(expired.sessionId);
