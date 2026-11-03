@@ -20,9 +20,6 @@ const homes: string[] = [];
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
-function appendToFile(path: string, line: string): void {
-  writeFileSync(path, `${readFileSync(path, "utf8")}${line}\n`);
-}
 
 async function setupTwoRepositories() {
   const home = mkdtempSync(join(tmpdir(), "pidock-143-"));
