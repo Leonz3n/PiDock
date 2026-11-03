@@ -23,13 +23,14 @@ import { TaskRootIndex } from "../dist/main/task-root-index.js";
 import { ProjectRegistry } from "../dist/main/project-registry.js";
 import { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } from "../dist/main/runtime.js";
 import { ProviderProfileStore } from "../dist/main/provider-profile-store.js";
+import { ProviderSecretStore, createTestSafeStorage } from "../dist/main/provider-secret-store.js";
+import { NativeModelsFile } from "../dist/main/native-models-config.js";
 import { ProviderWiring } from "../dist/main/provider-ipc.js";
 import { HostClient } from "../dist/rpc/host-client.js";
 import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const CREDENTIAL = "sk-issue46-synthetic-0123456789abcdef";
-const AUTH_REF = "PIDOCK_PROVIDER_ISSUE46";
 const ANSWER = "loopback answer";
 const resumeAt = process.argv.indexOf("--resume");
 const resumeRoot = resumeAt === -1 ? null : process.argv[resumeAt + 1];
@@ -79,7 +80,8 @@ function startProvider() {
 async function run() {
   try {
     const port = await startProvider();
-    process.env[AUTH_REF] = CREDENTIAL;
+    // #138 keeps the credential out of the environment entirely: it is typed
+    // once into the form and encrypted by the store.
     await app.whenReady();
     if (!resumeRoot) {
       execFileSync("git", ["init", "-q", taskDir]);
@@ -95,10 +97,19 @@ async function run() {
       return { child, client: new HostClient(child) };
     }, (id) => index.resolve(id), undefined, index);
     const profiles = new ProviderProfileStore(profile);
+    // [PiDock T03] #138: the credential lives only in the encrypted store and Pi
+    // reads the managed entry from its own `models.json`. The run uses a
+    // deterministic test cipher (never plaintext) and a temp agent dir, so it
+    // never touches the real `~/.pi/agent`.
+    const secrets = new ProviderSecretStore(profile, createTestSafeStorage());
+    const agentDir = join(root, "agent");
+    const nativeModels = new NativeModelsFile(agentDir);
     const providers = new ProviderWiring(profiles, async (id, provider, senderWebContentsId) => {
-      const payload = provider === null ? { provider: null } : { provider: { config: profiles.config(provider.profileId), credential: provider.credential } };
+      const payload = provider === null ? { provider: null } : { provider: {
+        config: profiles.config(provider.profileId, provider.modelId), credential: provider.credential, thinkingLevel: provider.thinkingLevel,
+      } };
       await registry.routeTaskOp({ workspaceId: "issue46", taskId: id, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } });
-    });
+    }, process.env, { secrets, native: nativeModels });
     views = await createTrustedWindow("issue46", "production");
     registerIpc(createUnavailableHostClient(), views.registry, registry, projects, index, undefined, undefined, providers);
     await loadTrustedViews(views);
@@ -111,7 +122,20 @@ async function run() {
     const text = () => evalJs("document.body.innerText");
     const until = async (match, label) => { for (let i = 0; i < 150; i++) { const body = await text(); if (match(body)) return body; await wait(100); } throw Error(`UI timeout (${label}): ${await text()}`); };
     const click = (name) => evalJs(`(() => { const b = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === ${JSON.stringify(name)} || el.getAttribute('aria-label') === ${JSON.stringify(name)}); if (!b) throw Error('missing '+${JSON.stringify(name)}); b.click(); return true; })()`);
+    // A button that is still inside a pending action (or its post-write reload)
+    // is disabled by React; a single click would be silently dropped.
+    const clickEnabled = async (name, label) => {
+      for (let i = 0; i < 100; i++) {
+        const clicked = await evalJs(`(() => { const b = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === ${JSON.stringify(name)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
+        if (clicked) return true;
+        await wait(100);
+      }
+      throw Error(`disabled button (${label}): ${name}`);
+    };
     const fill = (label, value) => evalJs(`(() => { const el = [...document.querySelectorAll('input')].find(i => i.closest('label')?.textContent.startsWith(${JSON.stringify(label)})); if (!el) throw Error('missing '+${JSON.stringify(label)}); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
+    // The S03B model table is not label-wrapped: its fields are named by aria-label.
+    const fillAria = (label, value) => evalJs(`(() => { const el = document.querySelector('input[aria-label=' + ${JSON.stringify(JSON.stringify(label))} + ']'); if (!el) throw Error('missing input '+${JSON.stringify(label)}); const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
+    const chooseAria = (label, value) => evalJs(`(() => { const el = document.querySelector('select[aria-label=' + ${JSON.stringify(JSON.stringify(label))} + ']'); if (!el) throw Error('missing select '+${JSON.stringify(label)}); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set; setter.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('change',{bubbles:true})); return el.value; })()`);
     const type = (value) => evalJs(`(() => { const el = document.querySelector('textarea[aria-label="消息"]'); const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input',{bubbles:true})); return el.value; })()`);
     const jsonl = () => {
       const dir = join(taskDir, ".pidock-sdk-sessions", "main");
@@ -137,14 +161,23 @@ async function run() {
       console.log("ISSUE46_E2E_RESUME=" + JSON.stringify({ root, restored: true, historyKept: true, credentialVisible: false, credentialInJsonl: jsonl().includes(CREDENTIAL) }));
     } else {
       await until((body) => body.includes("未配置"), "unconfigured state");
+      // #138 S03/S03B: the composer's model chip opens 能力管理 → Providers, the
+      // list is 供应商 not 凭据引用名, and saving writes Pi's models.json. 选用 is
+      // now a separate act: the save no longer selects the task.
       await evalJs("document.querySelector('[data-testid=composer-model]').click()");
-      await until((body) => body.includes("添加 Provider"), "provider page");
-      await click("添加 Provider");
+      await until((body) => body.includes("模型供应商"), "provider page");
+      await click("＋添加供应商");
+      await until((body) => body.includes("保存并写入 models.json"), "provider form");
       await fill("名称", "Loopback");
-      await fill("接口地址", `http://127.0.0.1:${port}/v1`);
-      await fill("模型", "issue46-model");
-      await fill("凭据引用名", AUTH_REF);
-      await click("保存并选用");
+      await fill("Base URL", `http://127.0.0.1:${port}/v1`);
+      await fillAria("模型 ID 1", "issue46-model");
+      await fillAria("显示名称 1", "issue46-model");
+      await chooseAria("默认模型", "issue46-model");
+      // The credential radio defaults to 本机加密存储; the key travels once.
+      await fill("API Key", CREDENTIAL);
+      await click("保存并写入 models.json");
+      await until((body) => body.includes("Loopback"), "saved provider card");
+      await clickEnabled("选用", "select provider");
       await until((body) => body.includes("已配置"), "configured state");
       const beforeSend = await text();
       if (beforeSend.includes(CREDENTIAL)) throw Error("credential shown before any request");
@@ -153,6 +186,14 @@ async function run() {
       // credential-bearing keys, not for a substring of the key name.
       if (persisted.includes(CREDENTIAL)) throw Error(`credential persisted: ${persisted}`);
       if (/"(credential|apiKey|api_key|token|secret|password)"\s*:/i.test(persisted)) throw Error(`credential-bearing field persisted: ${persisted}`);
+      // Pi's own file holds the managed entry and no credential value; the key
+      // exists only as ciphertext in the store.
+      const modelsDoc = readFileSync(nativeModels.path, "utf8");
+      const nativeProvider = Object.keys(JSON.parse(modelsDoc).providers).find((key) => key.startsWith("pidock-"));
+      if (!nativeProvider) throw Error(`no managed provider in models.json: ${modelsDoc}`);
+      if (modelsDoc.includes(CREDENTIAL)) throw Error(`credential written into models.json: ${modelsDoc}`);
+      const secretDoc = readFileSync(join(profile, "provider-secrets.json"), "utf8");
+      if (secretDoc.includes(CREDENTIAL)) throw Error("credential stored in plaintext");
 
       await openTask();
       await until((body) => body.includes("SDK JSONL 已确认历史"), "configured conversation");
@@ -184,6 +225,7 @@ async function run() {
       console.log("ISSUE46_E2E=" + JSON.stringify({
         root, port, configured: true, answerDelivered: answered.includes(ANSWER), redactedInUi: !after.includes(CREDENTIAL),
         credentialInJsonl: log.includes(CREDENTIAL), credentialInProfileStore: persisted.includes(CREDENTIAL),
+        nativeProvider, nativeHasCredential: modelsDoc.includes(CREDENTIAL), storeCiphertextOnly: !secretDoc.includes(CREDENTIAL),
         providerHits: received.length, authorizationMatched: true, jsonlBytes: log.length, screenshot,
         overflow: (await evalJs("({scrollWidth:document.documentElement.scrollWidth,innerWidth:window.innerWidth})")),
       }));
@@ -227,7 +269,7 @@ async function run() {
     catch (error) { refusal = String(error); }
     if (!refusal?.includes("sdk-host-closing")) throw Error("provider-reopened-after-shutdown");
     console.log("ISSUE46_SDK_SHUTDOWN=" + JSON.stringify({ receiptStable: true, providerReinstallRefused: true, jsonlKept: jsonl().includes("hello provider"), credentialInJsonl: jsonl().includes(CREDENTIAL) }));
-  } catch (error) { console.error("ISSUE46_E2E_FAILED", error); process.exitCode = 1; }
+  } catch (error) { console.error("ISSUE46_E2E_FAILED", error?.stack ?? error); process.exitCode = 1; }
   finally {
     clearTimeout(watchdog);
     server?.close();
