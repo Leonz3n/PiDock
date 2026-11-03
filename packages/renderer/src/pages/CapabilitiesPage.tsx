@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DesktopSkills } from "../components/DesktopSkills";
 import { Badge, Button, Panel } from "../components/ui";
 import { Icon, type IconName } from "../components/Icon";
 import { InlineNotice, PageIntro, PageTitle, TabRow, ViewLabel } from "../components/Management";
@@ -42,6 +43,10 @@ export function CapabilitiesPage() {
   // No session is attached to this page, so the tier shown is the standard
   // `default` session tier: it is the tier where a capability asking for more
   // is visibly capped, and the row says which tier it assumes.
+  // [Pencil T16] Pencil T16: the Skills TAB is the real local-source pane, not a
+  // fixture row list. 全部 keeps every declared capability row (#18) so the
+  // source/version summary stays one list, while a skill's real load state is
+  // reported by the Skills pane's own scan instead of a static card.
   const rows = capabilityRows(capabilities, "default").filter((row) => kind === "all" || row.capability.kind === kind);
   const addKind: "skill" | "extension" | "package" | "mcp" = kind === "all" ? "skill" : kind;
   const addLabel = (KINDS.find((entry) => entry.value === kind) ?? KINDS[1]).addLabel;
@@ -148,9 +153,13 @@ export function CapabilitiesPage() {
         </InlineNotice>
       ) : null}
 
-      <div className="rounded-md border border-line bg-soft/40 px-3 py-2 text-[11px] text-muted">
-        当前数据来自内存投影：来源、版本与连接状态均为夹具，尚未读取真实磁盘来源或建立真实连接。能力声明的权限不会扩大会话权限。
-      </div>
+      {kind === "skill" ? (
+        <DesktopSkills />
+      ) : (
+        <>
+          <div className="rounded-md border border-line bg-soft/40 px-3 py-2 text-[11px] text-muted">
+            当前数据来自内存投影：来源、版本与连接状态均为夹具，尚未读取真实磁盘来源或建立真实连接。能力声明的权限不会扩大会话权限。
+          </div>
 
       <div className="capability-list overflow-hidden rounded-[8px] border border-line bg-paper">
         {rows.map((row) => (
@@ -165,9 +174,11 @@ export function CapabilitiesPage() {
         ))}
       </div>
 
-      <p className="note text-[10px] leading-[1.9] text-[#939c9f]">
-        启停只改变内存投影里的配置状态；真实的加载、连接与版本切换要等会话空闲边界，磁盘来源与包内容在本页不会被写入。正式产品还需要区分配置已保存、包已安装与运行时已加载。
-      </p>
+          <p className="note text-[10px] leading-[1.9] text-[#939c9f]">
+            启停只改变内存投影里的配置状态；真实的加载、连接与版本切换要等会话空闲边界，磁盘来源与包内容在本页不会被写入。正式产品还需要区分配置已保存、包已安装与运行时已加载。
+          </p>
+        </>
+      )}
 
       <Panel title="来源与权限">
         <p className="text-xs text-muted">

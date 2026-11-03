@@ -5,6 +5,7 @@ import { clampThinkingLevel, type Api, type Model, type ModelThinkingLevel } fro
 import {
   createAgentSession,
   createExtensionRuntime,
+  formatSkillsForPrompt,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -12,6 +13,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { readTaskRecordOnDisk } from "./task-store.js";
+import { readSkillConfig, sessionSkills, type SkillConfigRead } from "./skill-sources.js";
 import {
   buildSdkAgentToolDefinitions,
   sdkAgentSystemPrompt,
@@ -73,11 +75,30 @@ const emptyResources: ResourceLoader = {
  * broker enforces. Resource discovery stays empty: the Agent gets the four
  * declared task tools and nothing else.
  */
-function taskResources(taskDir: string): ResourceLoader {
+function taskResources(taskDir: string, skillPrompt = ""): ResourceLoader {
   return {
     ...emptyResources,
-    getSystemPrompt: () => sdkAgentSystemPrompt({ taskDir, worktrees: taskWorktreePaths(taskDir) }),
+    getSystemPrompt: () => sdkAgentSystemPrompt({ taskDir, worktrees: taskWorktreePaths(taskDir) }) + skillPrompt,
   };
+}
+
+/**
+ * [#151] What a NEW session advertises from the PiDock-managed Skills source
+ * list. The real disk is read at session creation only (`skill-sources.ts` uses
+ * the SDK loader), so a toggle or a removed directory reaches the NEXT session
+ * and never rewrites the prompt of one that is already running. An absent,
+ * invalid or unreadable document contributes nothing: the turn still runs with
+ * the task prompt, and the named scan problem stays in the pane.
+ */
+export function sessionSkillPrompt(file: string | undefined): string {
+  if (!file) return "";
+  const read: SkillConfigRead = readSkillConfig(file);
+  if (read.state !== "ok") return "";
+  const { skills } = sessionSkills(read.config);
+  // `indirect`: this Host's tool is `fs.read`, so the SDK formatter must not
+  // advertise a tool that does not exist. The listing still names each skill's
+  // absolute location, which is what the model resolves relative paths against.
+  return formatSkillsForPrompt(skills, "indirect");
 }
 
 /** `repos` of the task record, each as `<taskDir>/<repoDir>` (never the original checkout). */
@@ -135,6 +156,13 @@ export class PiSdkTextKernel {
        * what the fail-closed `provider-not-configured`/no-tools paths rely on.
        */
       callTool?: SdkAgentToolCaller;
+      /**
+       * [#151] The app-private Skills source document
+       * (`skill-sources.json` under `userData`). Read once per session creation:
+       * enabled, valid skills are advertised in that session's prompt with their
+       * real locations. Absent = a task Host main did not wire.
+       */
+      skillSourcesFile?: string;
     },
   ) {
     if (!isAbsolute(taskDir) || !taskId) throw new Error("task-unknown");
@@ -320,7 +348,7 @@ export class PiSdkTextKernel {
       modelRuntime: this.selection.modelRuntime,
       sessionManager: manager,
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
-      resourceLoader: callTool ? taskResources(this.taskDir) : emptyResources,
+      resourceLoader: callTool ? taskResources(this.taskDir, sessionSkillPrompt(this.selection.skillSourcesFile)) : emptyResources,
       noTools: "all",
       tools: expectedTools,
       ...(callTool ? { customTools: buildSdkAgentToolDefinitions(sessionId, callTool) } : {}),
