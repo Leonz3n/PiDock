@@ -1,5 +1,7 @@
 # 可见页面控制与桌面壳验证
 
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+
 验证日期：2026-09-21。工单：[01 可见页面控制与桌面壳技术验证](https://github.com/Leonz3n/PiDock/issues/2)。
 
 抛弃式原型、原始证据与可重复脚本**未合入产品基线**，保留在分支 `codex/01-visible-browser` 的 `prototypes/visible-browser/` 下。下文中的证据与脚本路径都指该分支；本文只把验证结论和受影响设计带回主线。

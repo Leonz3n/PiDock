@@ -1,5 +1,7 @@
 # 历史渲染层基线评审（#3 / 原 20）
 
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+
 > 本文记录旧 UI 的实现与验证，不作为现行界面的设计或验收目标。当前唯一 UI 基准为 [PiDock.pen](design/PiDock.pen)，见 [设计说明](design/README.md)。文中旧原型与审阅资料已清理，其路径和行号仅用于 Git 历史追溯；保留的截图不代表已对齐新版设计。
 
 2026-09-22（复核修订：2026-09-22）。本记录覆盖渲染层基线（`packages/renderer`，`@pidock/renderer`）与静态草稿 `prototypes/pidock-ui/`（variant A 对话优先）的逐页对照、组件与许可证、状态职责边界、密集列表实测、锚点跟随验证与未测边界。

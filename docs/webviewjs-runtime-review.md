@@ -1,5 +1,7 @@
 # WebviewJS + Bun 候选复核
 
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+
 > **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
 
 2026-09-22。只读核对官方项目及其 Wry 依赖，未安装依赖、运行应用或推进工单。准确项目是 **`webviewjs/webview` / `@webviewjs/webview`**；当前 npm latest 和 GitHub release 都是 **0.4.6**，发布于 2026-09-20，tag 指向 `0b1854f957fde6754b7e47236b0afd18d3b72a22`。[S1][S2]
@@ -47,4 +49,4 @@ WebviewJS 的 WebContext 文档说不同 context 用于 isolated profiles，并�
 - S5：[Webview API](https://github.com/webviewjs/webview/blob/0b1854f957fde6754b7e47236b0afd18d3b72a22/docs/api/webview.md)、[Rust webview 实现](https://github.com/webviewjs/webview/blob/0b1854f957fde6754b7e47236b0afd18d3b72a22/src/webview.rs)、[JS 类型定义](https://github.com/webviewjs/webview/blob/0b1854f957fde6754b7e47236b0afd18d3b72a22/index.d.ts)。
 - S6：[WebContext API](https://github.com/webviewjs/webview/blob/0b1854f957fde6754b7e47236b0afd18d3b72a22/docs/api/web-context.md)、[Rust WebContext 实现](https://github.com/webviewjs/webview/blob/0b1854f957fde6754b7e47236b0afd18d3b72a22/src/web_context.rs)。
 - S7：[WebviewJS Cargo.toml](https://github.com/webviewjs/webview/blob/0b1854f957fde6754b7e47236b0afd18d3b72a22/Cargo.toml)；Wry 0.55.1 提交 `a5bf203a1c8dbb3583588382538d6521655222a8` 的 [Darwin 扩展说明](https://github.com/tauri-apps/wry/blob/a5bf203a1c8dbb3583588382538d6521655222a8/src/lib.rs#L1533)、[WKWebView 数据存储分支](https://github.com/tauri-apps/wry/blob/a5bf203a1c8dbb3583588382538d6521655222a8/src/wkwebview/mod.rs#L220)、[WebView2 数据目录](https://github.com/tauri-apps/wry/blob/a5bf203a1c8dbb3583588382538d6521655222a8/src/webview2/mod.rs#L287)。
-- S8：[当前首版规格](../.scratch/pidock-mvp/spec.md)。
+- S8：[历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)。

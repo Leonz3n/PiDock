@@ -1,5 +1,7 @@
 # pnpm workspace / Turborepo 任务图（[PiDock 02] S2 补充）
 
+> **资料状态：既有实现与验证记录。** 命令、行号、计数和未测项对应各节记录的版本，使用前核对当前脚本与代码。当前功能范围见 [#135](https://github.com/Leonz3n/PiDock/issues/135)，UI 见 [Pencil](design/README.md)，资料分类见 [文档导航](README.md)；历史模块章节不作为新版排期或验收通过证明。
+
 日期：2026-09-22（Asia/Shanghai）
 状态：已按 #5 工具链补充验收实现并实测；Electron GUI smoke、真实 worktree E2E、真实模型联通仍未测（见 #5 残留）。
 

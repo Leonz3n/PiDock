@@ -1,10 +1,12 @@
 # 桌面运行时选型资料核对
 
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+
 > **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
 
 核对日期：2026-09-21。范围：Bun、Electrobun 与 Electron + Bun Host，以及首版可见浏览器和安装包门槛。只读官方资料，没有构建应用、连接浏览器、下载发布包或执行平台实验。
 
-本文支持 [首版规格](../.scratch/pidock-mvp/spec.md) 与 [01 可见浏览器控制原型](https://github.com/Leonz3n/PiDock/issues/2)。**Electrobun 作为优先验证候选，Electron + Bun Host 作为失败后的回退；不是已经通过技术验收。** Bun Host 与 React 界面可以沿用相同业务边界，不应随桌面壳切换而重写领域逻辑。
+本文支持 [历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md) 与 [01 可见浏览器控制原型](https://github.com/Leonz3n/PiDock/issues/2)。**Electrobun 作为优先验证候选，Electron + Bun Host 作为失败后的回退；不是已经通过技术验收。** Bun Host 与 React 界面可以沿用相同业务边界，不应随桌面壳切换而重写领域逻辑。
 
 **2026-09-21 更新（实测结果）：** 工单 01 已在 macOS arm64 实测 Electrobun 2.0.1：可见 CEF 页面的直接 CDP 控制成立，但新持久 partition 的首个 CEF view 返回 null，且移除一个 CEF `BrowserView` 会清理同窗全部 CEF view 并使 CDP 不可达，因此触发本文与规格的决策关卡。后续实现按既定规则改用 **Electron + Bun Host**；本文关于 Electrobun 的官方资料核对保留为历史背景，下方「Electron + Bun Host 回退方案」成为当前路线。Electron 自身的浏览器生命周期、分区与调试接入仍须用同一场景实测，见 [可见页面控制与桌面壳验证](browser-automation-validation.md)。
 

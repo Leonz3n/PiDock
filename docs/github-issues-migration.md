@@ -1,5 +1,7 @@
 # GitHub Issues 迁移索引
 
+> 后续清理：迁移时保留的 `.scratch/` 规格快照也已从工作树移除。现行规格及历史快照入口见 [首版规格入口](mvp-spec.md)。下文保留迁移当时的事实，JSON 中的 `formerSource` 等字段用于追溯原路径。
+
 2026-09-22。仓库：[Leonz3n/PiDock](https://github.com/Leonz3n/PiDock)；父规格与执行控制：[https://github.com/Leonz3n/PiDock/issues/1](https://github.com/Leonz3n/PiDock/issues/1)。
 
 按 ask-matt 流程判断，此次不需要重新进行完整设计访谈或重拆工单：用户已确认产品目标、技术栈与进程边界，原型与源码复核已经记录取舍，剩余运行风险由 21、02、06、15 验收。具体驱动、IPC 消息形状等局部实现选择不阻止迁移，21 的运行验证也不能被这次文档检查替代。

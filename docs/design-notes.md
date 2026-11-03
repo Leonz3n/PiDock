@@ -1,12 +1,14 @@
 # 桌面 Agent 历史需求与技术调研记录
 
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+
 > 本文保留早期需求与技术取舍，不作为现行 UI 设计依据。当前唯一设计为 [PiDock.pen](design/PiDock.pen)，详见 [设计说明](design/README.md)；文中的历史原型验证不代表现有应用状态。
 
 > **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
 
 2026-09-21 的状态、审批、重试、定时确认过期及清理讨论见 [历史行为收口](product-design-closure.md)。当前功能范围以 GitHub #135 为准；旧 UI 基线已退役。
 
-状态：核心工作流及首个同步查询方向已确认，真实业务仓库和具体页面链路已完成只读核对；实现规格见 [首版规格](../.scratch/pidock-mvp/spec.md)，技术原型尚未验证。
+状态：核心工作流及首个同步查询方向已确认，真实业务仓库和具体页面链路已完成只读核对；实现规格见 [历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)，技术原型尚未验证。
 工作名称：PiDock（建议，尚未确认）。
 概念定义见 [CONTEXT.md](../CONTEXT.md)。
 
@@ -67,7 +69,7 @@
 - 对话中的模型选择、推理档位和上下文详情使用入口旁的小浮层；模型按 Provider 分组并支持搜索、键盘选择，推理标明当前与默认档位，上下文直接展示占用比例。
 - 当前上下文超过目标模型上限时禁止切换，模型置灰并显示原因；所有入口和实际切换操作一致校验，保留原模型、历史与草稿。先在当前模型下压缩并获得更新占用后重选，或使用新会话，不因尝试切换而自动压缩或丢弃历史。
 - 应用可以统计 Token 用量。
-- 具体切换行为、上下文与累计消耗的区分、统计维度及缺失数据处理见 [首版规格](../.scratch/pidock-mvp/spec.md)。pi 能力核对见 [Provider 与 usage 调查](pi-provider-usage.md)。
+- 具体切换行为、上下文与累计消耗的区分、统计维度及缺失数据处理见 [历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)。pi 能力核对见 [Provider 与 usage 调查](pi-provider-usage.md)。
 
 ## 当前 UI 与输入能力入口
 
@@ -173,13 +175,13 @@ Electrobun 与本规格契合的能力（依据官方文档 `framework.blackboar
 
 ## 会话权限入口（2026-09-21 已确认）
 
-历史需求区分只读、默认权限和自动执行，按 Session 独立保存；当前控件布局按 Pencil 设计。只读仅阅读分析；默认允许任务内读写，Agent 命令与浏览器操作前询问；自动执行不逐次询问，但仍遵循任务范围、共享模板确认、显式交付与任务写锁。切换保留草稿和历史，用于后续请求，已启动的 Subagent 保留启动时权限。具体规则见[规格](../.scratch/pidock-mvp/spec.md#会话权限选择)。
+历史需求区分只读、默认权限和自动执行，按 Session 独立保存；当前控件布局按 Pencil 设计。只读仅阅读分析；默认允许任务内读写，Agent 命令与浏览器操作前询问；自动执行不逐次询问，但仍遵循任务范围、共享模板确认、显式交付与任务写锁。切换保留草稿和历史，用于后续请求，已启动的 Subagent 保留启动时权限。具体规则见[规格](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md#会话权限选择)。
 
 当时仅验证原型中的权限选择和回显；真实工具门禁、审批与恢复须独立验证。当前权限入口的位置按 Pencil 设计，旧原型已清理。
 
 ## 混合目录与统一任务入口（2026-09-21 已确认）
 
-项目同时包含 Git 仓库与普通目录，任务可混选或仅选普通目录；所有任务都在配置根目录下使用 ASCII 任务文件夹，pi 从该目录启动。仓库放入独立 worktree，普通目录以稳定 ASCII 名称的软链接接入，界面同时展示链接与原始目标。中文名称仅用于显示，追加和恢复沿用已保存位置；链接共享原文件，清理只移除受管理链接而保留目标。完整要求见[规格](../.scratch/pidock-mvp/spec.md#混合目录与任务软链接)。
+项目同时包含 Git 仓库与普通目录，任务可混选或仅选普通目录；所有任务都在配置根目录下使用 ASCII 任务文件夹，pi 从该目录启动。仓库放入独立 worktree，普通目录以稳定 ASCII 名称的软链接接入，界面同时展示链接与原始目标。中文名称仅用于显示，追加和恢复沿用已保存位置；链接共享原文件，清理只移除受管理链接而保留目标。完整要求见[规格](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md#混合目录与任务软链接)。
 
 用户的本次「这部分确定」确认上述交互与路径方案；项目／环境管理中的其他删除限制、Subagent、图片的具体交互及 A/B/C 总体布局不由此一并冻结。pi 工具链接兼容性、Windows 链接方式、失败恢复和共享目标的真实路径授权／写协调仍需验证或细化。规格和草案已同步，未发布工单或开展生产实现。
 
@@ -189,7 +191,7 @@ Electrobun 与本规格契合的能力（依据官方文档 `framework.blackboar
 
 Gateway 负责登录、一次性配对交换、设备凭据、在线主机路由、断线重连、限流、撤销与审计，部署者负责 TLS、密钥、数据库、备份、升级和监控。DERP 只解决 Tailscale 网络中继，不替代这些业务职责。桌面本地生成二维码，码内只放短时单次配对凭据；手机扫码打开链接，登录后仍需桌面确认设备及权限。高风险远程终端、文件写入、能力安装和 MCP 配置默认关闭或要求本机确认。
 
-已验证的是原型中的模式切换、Gateway HTTPS 地址与模拟连接、二维码生成及刷新失效反馈；没有启动 Tailscale、Gateway 或外部服务，也没有执行真实登录、配对、消息转发和撤销。完整边界见[规格](../.scratch/pidock-mvp/spec.md#远程访问与设备配对)和[调研记录](pi-extensibility-and-remote-access.md)。现有 15 项拆分尚未覆盖这一新增系统，需整体审阅和重排，暂不发布工单。
+已验证的是原型中的模式切换、Gateway HTTPS 地址与模拟连接、二维码生成及刷新失效反馈；没有启动 Tailscale、Gateway 或外部服务，也没有执行真实登录、配对、消息转发和撤销。完整边界见[规格](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md#远程访问与设备配对)和[调研记录](pi-extensibility-and-remote-access.md)。现有 15 项拆分尚未覆盖这一新增系统，需整体审阅和重排，暂不发布工单。
 
 ## 定时任务与内置模板（2026-09-21 已确认）
 
@@ -199,7 +201,7 @@ Gateway 负责登录、一次性配对交换、设备凭据、在线主机路由
 
 ## 安装与发布（2026-09-21 已确认）
 
-首版使用 GitHub Actions 构建和发布安装包。GitHub Release 必须同时提供 macOS arm64 的 DMG 与 Windows x64 的 MSI（安装资产格式于 2026-10-13 改按 [ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，取代 NSIS 单一 EXE）；只有两个目标的构建、架构、安装冒烟及签名门禁均通过后才视为完整发布。正式 DMG 需要代码签名与公证，正式 MSI 需要 Authenticode 签名；资产携带版本、平台、架构和 SHA-256 校验信息，发布凭据只进入受保护的工作流环境。具体要求与验证见[规格](../.scratch/pidock-mvp/spec.md#安装包与-github-release)和[验收计划](mvp-validation-plan.md#安装包与发布)。
+首版使用 GitHub Actions 构建和发布安装包。GitHub Release 必须同时提供 macOS arm64 的 DMG 与 Windows x64 的 MSI（安装资产格式于 2026-10-13 改按 [ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，取代 NSIS 单一 EXE）；只有两个目标的构建、架构、安装冒烟及签名门禁均通过后才视为完整发布。正式 DMG 需要代码签名与公证，正式 MSI 需要 Authenticode 签名；资产携带版本、平台、架构和 SHA-256 校验信息，发布凭据只进入受保护的工作流环境。具体要求与验证见[规格](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md#安装包与-github-release)和[验收计划](mvp-validation-plan.md#安装包与发布)。
 
 ## 当前待补充的信息
 

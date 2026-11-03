@@ -1,6 +1,6 @@
 # GitHub Issues
 
-仓库：[`Leonz3n/PiDock`](https://github.com/Leonz3n/PiDock)。首版父规格与工单索引：[#1](https://github.com/Leonz3n/PiDock/issues/1)。GitHub Issue 是规格、工单验收、依赖和执行记录的权威来源；仓库设计文档提供补充说明。
+仓库：[`Leonz3n/PiDock`](https://github.com/Leonz3n/PiDock)。首版父规格与工单索引：[#1](https://github.com/Leonz3n/PiDock/issues/1)。GitHub Issue 是规格、工单验收、依赖和执行记录的权威来源；当前功能与验收统一见 [#135](https://github.com/Leonz3n/PiDock/issues/135)，UI 以 [Pencil 设计说明](../design/README.md) 为准，资料适用范围见 [文档导航](../README.md)。旧原型 A 工单和迁移快照用于追溯。
 
 ## 读取与执行
 
@@ -20,6 +20,6 @@
 
 已迁移的工单正文、草稿和旧拆分索引从仓库删除，不保留本地工单副本；历史内容可通过 Git 历史和 GitHub 迁移快照追溯。编号映射与校验记录保存在迁移索引中。
 
-`.scratch/pidock-mvp/spec.md` 保留为迁移时的规格快照，技术设计文档继续保留；后续规格与工单验收、依赖及执行记录以 GitHub 为准。
+现行规格入口见 [首版规格](../mvp-spec.md)。迁移时的本地规格快照已从工作树移除，通过该入口的 Git 历史链接追溯；技术设计文档继续保留。规格与工单验收、依赖及执行记录以 GitHub 为准。
 
-01 的实验源码仍在原实验分支；20 的未完成 worktree 内容继续保留。迁移未推送这些分支，也未启动后续实现。父 issue 已保存此次尚未推送的规格和设计快照。
+迁移时的实验分支和未完成 worktree 状态是历史记录，见迁移索引；本次整理未核实或处置这些分支。领取前检查当时的实际工作区。文档与 issue 整理不恢复暂停实现；已关闭工单的历史交付不自动通过 #135 的新增验收。

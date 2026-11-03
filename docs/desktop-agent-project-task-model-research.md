@@ -1,5 +1,7 @@
 # Research: 市面是否存在与 PiDock「项目-任务-对话」层级类似的 Desktop Agent 产品？
 
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+
 调查日期：2026-09-23。Scope：验证 PiDock「Project（可复用多仓库/目录/服务/环境集合）→ Task（跨多仓库目标工作，可并行）→ Task Workspace（单任务代码副本+运行状态）→ Agent Session（围绕任务的一段对话+执行上下文）→ Scheduled Task / Scheduled Run（固定工作区＋每次独立会话）」三元组在市面 Desktop Agent 产品中是否已存在一等实现。
 Methods（含 live fetch 声明）：本轮执行了 live primary-source 抓取——官方 docs（Anthropic、Cursor、Zed、GitHub Docs、LangChain、Cline、Aider）、官方 GitHub 源码 raw（JetBrains/thinkrail architecture.md、domain.ts、workspaces/SPEC.md、goal-and-requirements.md；RooCode Task.ts）、GitHub Releases API（thinkrail latest + per_page=10）。developers.openai.com Codex 页面两次 fetch 返回 HTTP 403，仅能用 web_search 摘要作 discovery aid，不作直接证据。source_check 对 ThinkRail 核心主张调用一次（status unclear，人工复核原文后采用）。每条事实主张带 inline [S#]（URL＋版本/commit）；区分 源码/文档证明 vs 未证明需实测 vs 结构性差异。
 

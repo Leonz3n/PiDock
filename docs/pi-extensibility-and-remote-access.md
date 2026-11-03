@@ -1,5 +1,7 @@
 # Pi 扩展管理与远程访问能力调研
 
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+
 > 2026-11-02 更新：实现基线已升级为 Pi **1.4.0**。完整更新影响、实际代码变更与验证边界见 [Pi 1.4 适配报告](pi-1.4-upgrade-review.md)。下列旧提交链接保留作历史依据；MCP 与实验远程栈的当前结论已在本文更正。远程访问已按 [#126](https://github.com/Leonz3n/PiDock/issues/126) 移出首版，本文的远程方案与“推荐 MVP”等旧表述仅作未来设计参考，不恢复正式桌面入口或通道。
 
 调研日期：2026-09-21。本文只读核对 `badlogic/pi-mono` 的官方文档与源码，固定到提交 [`890f920`](https://github.com/badlogic/pi-mono/tree/890f920884f6d21fc7617d236ef9e1cc5d7a0ef8)。当前源码中的 npm 包名为 `@earendil-works/pi-coding-agent`。本文未安装第三方包、未连接 MCP Server，也未运行实验性远程 harness；实现时应固定 Pi 版本并做兼容性测试。
