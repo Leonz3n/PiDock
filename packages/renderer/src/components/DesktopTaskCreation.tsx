@@ -38,7 +38,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
   const [directories, setDirectories] = useState<string[]>([]);
   const [sharedWriteConfirmed, setSharedWriteConfirmed] = useState(false);
   const [override, setOverride] = useState(false);
-  // [Pencil T17] #152: a scheduled creation is its OWN task kind. The definition
+  // [Pencil T17]: a scheduled creation is its OWN task kind. The definition
   // below travels with the creation intent and is saved by the Host's schedule
   // path (it still validates rule/timezone/provider/model/credential/directory).
   const [taskKind, setTaskKind] = useState<"normal" | "scheduled">("normal");

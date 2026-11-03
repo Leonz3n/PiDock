@@ -9,7 +9,7 @@ type Task = { taskId: string; name: string };
 type Permission = "read" | "default" | "auto";
 type Schedule = { scheduleId: string; taskId: string; name: string; ruleText: string; timezone: string; enabled: boolean; providerId: string; model: string; prompt: string; permission: Permission; repairIssue?: string };
 /**
- * [Pencil T17] #152 one run as the Host persisted it. `running` is an accepted
+ * [Pencil T17] one run as the Host persisted it. `running` is an accepted
  * SDK turn that has not settled yet; `actualModel` is the model that really
  * served it (absent = never started); `sessionId` is the run's own session, the
  * one 「继续对话」 opens.

@@ -17,7 +17,7 @@ export interface CreationIntentView {
   repos: { id: string; name: string; remote: string; remoteBranch: string; commit: string; repoDir: string; path?: string }[];
   directories: { id: string; name: string; linkName: string; path: string }[];
 }
-/** [Pencil T17] #152 the definition saved with a dedicated scheduled task. */
+/** [Pencil T17] the definition saved with a dedicated scheduled task. */
 export interface CreationScheduleInput {
   name: string;
   ruleText: string;
@@ -33,7 +33,7 @@ export interface CreationInput {
   repositories: { sourceId: string; remote: string; remoteBranch: string }[];
   directoryIds: string[]; sharedWriteConfirmed: boolean; override: boolean;
   workspaceMode: WorkspaceModeView;
-  /** [Pencil T17] #152: omitted = ordinary task; `scheduled` requires a definition. */
+  /** [Pencil T17]: omitted = ordinary task; `scheduled` requires a definition. */
   kind?: "normal" | "scheduled";
   schedule?: CreationScheduleInput;
 }
