@@ -61,6 +61,8 @@ import { resolveAgentDir } from "./native-models-config.js";
 import { homedir } from "node:os";
 import { performProjectOperation, projectFailureMessage } from "./project-ipc.js";
 import { PROVIDER_REFUSAL_TEXT, ProviderRefusal, type ProviderWiring } from "./provider-ipc.js";
+import { MCP_FAILURE_TEXT, type McpWiring } from "./mcp-ipc.js";
+import { McpFailure } from "./native-mcp-config.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
 import { performCreationOperation } from "./project-task-ipc.js";
 import type { ProjectTaskAppend } from "./task-append.js";
@@ -228,11 +230,21 @@ export async function createHost(
   task?: { taskId: string; taskDir: string },
   /** [Pencil T09] #144 effective variables resolved by main for this task. */
   variables?: Record<string, string>,
+  /**
+   * [Pencil T15] #150 the exact native `mcp.json` this app manages. The Host
+   * forwards it to each task's isolated SDK context so the MCP extension loads
+   * the SAME file the manager writes; absent means no MCP surface in that Host.
+   */
+  mcpConfigPath?: string,
 ): Promise<{ client: HostClient; child: UtilityProcess; disposal: ReturnType<typeof createHostDisposer> }> {
+  if (mcpConfigPath !== undefined && (!path.isAbsolute(mcpConfigPath) || mcpConfigPath.includes("\0"))) {
+    throw new Error("invalid-payload: MCP config path must be absolute");
+  }
   const entry = path.join(here, "..", "host", "host-entry.js");
   const child = utilityProcess.fork(entry, [], {
     serviceName: task ? `pidock-node-host-${task.taskId}` : "pidock-node-host",
     env: { ...buildHostEnv(process.env, workspaceId, task, app.getPath("userData"), normalizeTaskPath(defaultTasksRoot()), process.platform, variables),
+      ...(mcpConfigPath === undefined ? {} : { PIDOCK_MCP_CONFIG: mcpConfigPath }),
       // Only where service execution is admitted: a platform that cannot own a
       // service must not be told to verify one (see `serviceExecutionAdmitted`),
       // or its Host injects an orphan that no bootstrap can ever clear.
@@ -1923,6 +1935,11 @@ export function registerIpc(
    * the renderer, and the only way a refused quit becomes visible after restart.
    */
   scheduler?: { state(): SchedulerStateView },
+  /**
+   * [Pencil T15] #150 the MCP management surface. One exact-key channel over
+   * Pi's native `mcp.json`; absent fails closed with a named "未接入" state.
+   */
+  mcp?: McpWiring,
 ): void {
   if (tasks && catalog && taskRoots && projects) tasks.configureServices((workspaceId) => new InstalledServiceHostAuthority(
     app.getPath("userData"), catalog, serviceCatalogAuthority(taskRoots, projects), workspaceId, process.env));
@@ -2455,6 +2472,27 @@ export function registerIpc(
       // raw SDK/HTTP/file text can reach a renderer.
       if (error instanceof ProviderRefusal) return { ok: false as const, error: PROVIDER_REFUSAL_TEXT[error.code] };
       return { ok: false as const, error: "Provider 配置操作失败，请检查本机凭据环境后重试" };
+    }
+  });
+
+  // [Pencil T15] #150 能力管理 · MCP: Pi 的原生 mcp.json 是管理对象。The
+  // sender must be the attested shell webContents; the operation set is fixed,
+  // extra keys are refused, and no operation can name a file, an agent
+  // directory or a credential value. A save writes the file only — every open
+  // session keeps the servers it loaded, so the UI can state that boundary.
+  ipcMain.handle("shell/mcpOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      if (!mcp) return { ok: false as const, error: "MCP 配置尚未接入" };
+      return { ok: true as const, payload: await mcp.perform(payload) };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      // Named, actionable refusals only: a raw JSON parse error or a filesystem
+      // path never reaches a renderer.
+      if (error instanceof McpFailure) {
+        return { ok: false as const, error: MCP_FAILURE_TEXT[error.code] ?? "MCP 配置操作被拒绝" };
+      }
+      return { ok: false as const, error: "MCP 配置操作失败，请检查 mcp.json 后重试" };
     }
   });
 

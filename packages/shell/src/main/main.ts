@@ -33,6 +33,8 @@ import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { ProviderProfileStore } from "./provider-profile-store.js";
 import { ProviderSecretStore } from "./provider-secret-store.js";
 import { NativeModelsFile, resolveAgentDir } from "./native-models-config.js";
+import { NativeMcpFile, resolveMcpAgentDir } from "./native-mcp-config.js";
+import { McpWiring } from "./mcp-ipc.js";
 import { ProviderWiring } from "./provider-ipc.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import { createNodeAppendGit, ProjectTaskAppend } from "./task-append.js";
@@ -194,9 +196,18 @@ async function run(): Promise<void> {
       return {};
     }
   };
+  // [Pencil T15] #150: Pi's native `mcp.json` in the SAME agent directory
+  // `models.json` lives in. The manager writes only the `pidock-mcp-<uuid>`
+  // namespace; the exact file path is also what every task Host receives, so a
+  // session loads the file the manager edits instead of a second copy.
+  const nativeMcp = new NativeMcpFile(resolveMcpAgentDir(process.env, homedir()));
+  const mcp = new McpWiring(nativeMcp, process.env);
   const tasks = new PerTaskHostRegistry(
     workspaceId,
-    (ws, task, variables) => createHost(ws, true, task, variables),
+    // A task Host gets the exact MCP config path; each SDK session binds the MCP
+    // extension against it only when it starts, so a save never mutates a
+    // session that is already open.
+    (ws, task, variables) => createHost(ws, true, task, variables, nativeMcp.path),
     (taskId) => taskRoots.resolve(taskId),
     browsers.registry,
     taskRoots,
@@ -257,7 +268,7 @@ async function run(): Promise<void> {
     const persisted = gate.view().lastQuitUnconfirmed ?? quitReports.pending() ?? undefined;
     return { ...gate.view(), ...(persisted !== undefined ? { lastQuitUnconfirmed: persisted } : {}) };
   };
-  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers, catalog, undefined, append, taskVariables, { state: schedulerState });
+  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers, catalog, undefined, append, taskVariables, { state: schedulerState }, mcp);
   // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
   // the driver asks each *running* Host to evaluate its own due triggers. It
   // never forks a Host and never overlaps its own ticks; stop it wherever the

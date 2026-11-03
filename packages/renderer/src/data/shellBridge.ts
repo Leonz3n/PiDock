@@ -81,6 +81,13 @@ export interface PidockBridge {
    */
   providerOp?: (request: Record<string, unknown>) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
+   * [Pencil T15] issue 150 `shell/mcpOp`: Pi's native `mcp.json` as a bounded
+   * management surface. list/save/remove/enable/disable/test only. The request
+   * names a server or a form draft — never a file, a path, an agent directory
+   * or a credential value; no reply reads a credential value back.
+   */
+  mcpOp?: (request: Record<string, unknown>) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
    * [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The page names a task and one
    * of that task's own file roots — nothing else: main reads the editor program
    * from its own user settings and launches it at the resolved root. There is no

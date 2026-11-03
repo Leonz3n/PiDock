@@ -5,6 +5,7 @@ import { clampThinkingLevel, type Api, type Model, type ModelThinkingLevel } fro
 import {
   createAgentSession,
   createExtensionRuntime,
+  DefaultResourceLoader,
   formatSkillsForPrompt,
   ModelRuntime,
   SessionManager,
@@ -20,6 +21,12 @@ import {
   SDK_AGENT_TOOL_NAMES,
   type SdkAgentToolCaller,
 } from "./sdk-agent-tool-contract.js";
+import { mcpExtension, readManagedMcpConfig, type McpBinding } from "./sdk-mcp.js";
+
+/** `mcp__<server>__<tool>`: the only extension tools this kernel admits. */
+function isMcpToolName(name: string): boolean {
+  return /^mcp__[A-Za-z0-9][A-Za-z0-9_-]{0,127}__[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(name);
+}
 
 type SdkTextEventData =
   | { type: "delta"; text: string }
@@ -116,6 +123,13 @@ function safeId(id: string): void {
 /** The opt-in model/runtime are test-only until #44 supplies an authorized profile resolver. */
 export class PiSdkTextKernel {
   private readonly sessions = new Map<string, AgentSession>();
+  /**
+   * [Pencil T15] #150: sessions whose MCP extension is bound. A stop/cancel
+   * disposes one of these so Pi's `session_shutdown` closes the real MCP child
+   * (no orphan); the transcript survives, and the next turn reopens it and
+   * re-reads mcp.json.
+   */
+  private readonly mcpSessions = new Map<string, McpBinding>();
   private readonly opening = new Map<string, Promise<AgentSession>>();
   private readonly active = new Map<string, Promise<void>>();
   private starting = false;
@@ -156,6 +170,12 @@ export class PiSdkTextKernel {
        * what the fail-closed `provider-not-configured`/no-tools paths rely on.
        */
       callTool?: SdkAgentToolCaller;
+      /**
+       * [Pencil T15] issue 150: the exact native `mcp.json` a session loads when
+       * it starts. Absent means this context offers no MCP surface at all (the
+       * fail-closed default for a Host that was not given one).
+       */
+      mcpConfigPath?: string;
       /**
        * [#151] The app-private Skills source document
        * (`skill-sources.json` under `userData`). Read once per session creation:
@@ -231,6 +251,7 @@ export class PiSdkTextKernel {
       await live.waitForIdle();
       live.dispose();
       this.sessions.delete(sessionId);
+      await this.closeMcp(sessionId);
     }
     const requested = binding.thinkingLevel ?? this.selection.thinkingLevel ?? "off";
     this.bindings.set(sessionId, { modelId: model.id, thinkingLevel: requested });
@@ -333,14 +354,38 @@ export class PiSdkTextKernel {
       if (!binding) throw new Error("sdk-configuration-mismatch");
       manager.appendModelChange(model.provider, model.id);
     }
-    // The Agent's tool set is exactly the declared task tools ([PiDock 02m] #5),
-    // and only when this kernel was given a Host-side caller. The allowlist is
-    // what keeps a tool the SDK adds later out: `createAgentSession` exposes only
-    // the names listed here, so an unlisted built-in or extension tool can never
-    // reach the model, and the mismatch check below fails closed if the session
-    // ever reports anything else.
+    // The Agent's tool set is exactly the declared task tools ([PiDock 02m] #5)
+    // plus, when this Host supplied an MCP config path, the MCP extension's own
+    // `mcp__…` tools. The allowlist is what keeps a tool the SDK adds later out:
+    // `createAgentSession` exposes only the names listed here, so an unlisted
+    // built-in or extension tool can never reach the model, and the mismatch
+    // check below fails closed if the session ever reports anything else.
     const callTool = this.selection.callTool;
-    const expectedTools: string[] = callTool ? [...SDK_AGENT_TOOL_NAMES] : [];
+    const mcpPath = callTool === undefined ? undefined : this.selection.mcpConfigPath;
+    const mcpBound = mcpPath !== undefined;
+    const baseTools: string[] = callTool ? [...SDK_AGENT_TOOL_NAMES] : [];
+    const skillPrompt = sessionSkillPrompt(this.selection.skillSourcesFile);
+    let resourceLoader: ResourceLoader = callTool ? taskResources(this.taskDir, skillPrompt) : emptyResources;
+    let mcpBinding: McpBinding | undefined;
+    if (callTool && mcpPath !== undefined) {
+      // The file is read HERE, once per session start. That is the session
+      // boundary: a manager save applies to the next session, never this one.
+      const managed = readManagedMcpConfig(mcpPath);
+      mcpBinding = mcpExtension(sessionId, callTool, managed.loadConfig, join(this.agentDir, "mcp.log"));
+      const loader = new DefaultResourceLoader({
+        cwd: this.taskDir,
+        agentDir: this.agentDir,
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+        systemPrompt: sdkAgentSystemPrompt({ taskDir: this.taskDir, worktrees: taskWorktreePaths(this.taskDir) }) + skillPrompt,
+        extensionFactories: [mcpBinding.factory],
+      });
+      await loader.reload();
+      resourceLoader = loader;
+    }
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd: this.taskDir,
       agentDir: this.agentDir,
@@ -348,19 +393,31 @@ export class PiSdkTextKernel {
       modelRuntime: this.selection.modelRuntime,
       sessionManager: manager,
       settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
-      resourceLoader: callTool ? taskResources(this.taskDir, sessionSkillPrompt(this.selection.skillSourcesFile)) : emptyResources,
+      resourceLoader,
       noTools: "all",
-      tools: expectedTools,
+      // `mcp__*` keeps extension-registered MCP tools enabled/registered. Only
+      // this kernel loads the MCP extension, so the wildcard admits no other
+      // extension's tool.
+      tools: [...baseTools, ...(mcpBound ? ["mcp__*"] : [])],
       ...(callTool ? { customTools: buildSdkAgentToolDefinitions(sessionId, callTool) } : {}),
       thinkingLevel: binding?.thinkingLevel ?? this.selection.thinkingLevel ?? "off",
     });
+    if (mcpBound && mcpBinding !== undefined) {
+      // Connects the configured servers in the background; direct tools are
+      // awaited by the first prompt. `print` mode gives the extension no UI.
+      await session.bindExtensions({ mode: "print" });
+      this.mcpSessions.set(sessionId, mcpBinding);
+    }
     const offered = [...session.getActiveToolNames()].sort();
     const registered = session.getAllTools().map((tool) => tool.name).sort();
+    const admitted = (name: string) => baseTools.includes(name) || (mcpBound && isMcpToolName(name));
     if (modelFallbackMessage || session.model?.provider !== model.provider ||
         session.model?.id !== model.id ||
-        JSON.stringify(offered) !== JSON.stringify([...expectedTools].sort()) ||
-        JSON.stringify(registered) !== JSON.stringify([...expectedTools].sort())) {
+        !baseTools.every((name) => offered.includes(name)) ||
+        offered.some((name) => !admitted(name)) ||
+        registered.some((name) => !admitted(name))) {
       session.dispose();
+      await this.closeMcp(sessionId);
       throw new Error("sdk-configuration-mismatch");
     }
     this.sessions.set(sessionId, session);
@@ -515,16 +572,34 @@ export class PiSdkTextKernel {
     while (session?.isIdle && this.active.has(sessionId)) await new Promise((resolve) => setTimeout(resolve, 10));
     if (session && !session.isIdle) await session.abort();
     await run.catch(() => {});
+    if (session && this.mcpSessions.has(sessionId)) {
+      // [Pencil T15] #150: stop really recycles the MCP child. The extension's
+      // own shutdown handler closes the real connection; the JSONL stays, so
+      // the next prompt reopens this session and re-reads mcp.json.
+      await session.waitForIdle();
+      await this.closeMcp(sessionId);
+      session.dispose();
+      this.sessions.delete(sessionId);
+    }
   }
 
   async dispose(): Promise<void> {
     this.closing = true;
     await Promise.allSettled(this.opening.values());
     for (const sessionId of [...this.active.keys()]) await this.cancel(sessionId);
+    for (const sessionId of [...this.sessions.keys()]) await this.closeMcp(sessionId);
     for (const session of this.sessions.values()) {
       await session.waitForIdle();
       session.dispose();
     }
     this.sessions.clear();
+  }
+
+  /** One idempotent close of a session's MCP connections (no orphan child). */
+  private async closeMcp(sessionId: string): Promise<void> {
+    const binding = this.mcpSessions.get(sessionId);
+    if (!binding) return;
+    this.mcpSessions.delete(sessionId);
+    await binding.close();
   }
 }

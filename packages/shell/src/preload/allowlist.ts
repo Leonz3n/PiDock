@@ -37,6 +37,10 @@ export const ALLOWED_INVOKE_CHANNELS = [
   // names no path, no file and no unverified Pi action.
   "shell/preferencesOp",
   "shell/providerOp",
+  // [Pencil T15] issue 150 the MCP management surface over Pi's native
+  // mcp.json: list/save/remove/enable/disable/test only. The page names a
+  // server (or a form draft), never a file, a path or a credential value.
+  "shell/mcpOp",
   // [Pencil T16] #151 local Skills sources: one channel, four named ops. The
   // page names a directory or a source id; main owns the app-private document
   // and the real-disk scan.

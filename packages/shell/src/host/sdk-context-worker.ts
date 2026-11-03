@@ -35,11 +35,21 @@ export interface SdkContextInput {
   toolsEnabled: boolean;
   /** Reasoning level selected for the bound model; absent = `off`. */
   thinkingLevel?: ModelThinkingLevel;
+  /**
+   * [Pencil T15] issue 150: the exact native `mcp.json` this session loads when
+   * it starts. Absent means no MCP surface. Absolute; validated here again.
+   */
+  mcpConfigPath?: string;
   /** [#151] App-private Skills source document; read at each session creation. */
   skillSourcesFile?: string;
 }
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+function mcpConfigPath(value: unknown): string {
+  if (typeof value !== "string" || !isAbsolute(value) || value.includes("\0") || value.length > 4096) throw new Error("sdk-context-input-invalid");
+  return value;
+}
 
 function thinkingLevel(value: unknown): ModelThinkingLevel | undefined {
   if (value === undefined) return undefined;
@@ -158,6 +168,7 @@ function input(value: unknown): SdkContextInput {
     // context nobody wired a broker to, and must not advertise one.
     toolsEnabled: record["toolsEnabled"] === true,
     ...(record["thinkingLevel"] === undefined ? {} : { thinkingLevel: thinkingLevel(record["thinkingLevel"]) }),
+    ...(record["mcpConfigPath"] === undefined ? {} : { mcpConfigPath: mcpConfigPath(record["mcpConfigPath"]) }),
     ...(record["skillSourcesFile"] === undefined ? {} : { skillSourcesFile: skillSourcesFile(record["skillSourcesFile"]) }),
   };
 }
@@ -192,6 +203,7 @@ async function main(): Promise<void> {
     bindingIdentity,
     ...(parsed.thinkingLevel === undefined ? {} : { thinkingLevel: parsed.thinkingLevel }),
     ...(tools ? { callTool: (sessionId, request) => tools.callTool(sessionId, request) } : {}),
+    ...(parsed.mcpConfigPath === undefined ? {} : { mcpConfigPath: parsed.mcpConfigPath }),
     ...(parsed.skillSourcesFile === undefined ? {} : { skillSourcesFile: parsed.skillSourcesFile }),
   });
   const send = (message: SdkContextMessage) => port.postMessage(message);
