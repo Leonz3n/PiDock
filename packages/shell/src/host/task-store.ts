@@ -72,6 +72,17 @@ export interface RepoSourceRecord {
   /** Device/inode of the in-task worktree folder, re-verified on open. */
   targetDevice?: string;
   targetInode?: string;
+  /**
+   * [Pencil T07] #142: the ACTUAL checkout identity observed right after this
+   * creation's `git worktree add` — the resolved target real path, the branch
+   * the checkout is really on and the HEAD it really points at. Recorded
+   * beside the declared baseline (`baseCommit`) instead of being derived from
+   * it, so a record never claims an observation it did not take. Optional on
+   * records written before it existed.
+   */
+  targetRealPath?: string;
+  targetBranch?: string;
+  targetHead?: string;
 }
 
 /**
@@ -140,7 +151,15 @@ export interface TaskDiskRecord {
   taskId: string;
   name: string;
   dirId: string;
+  /**
+   * The task's own branch. `branchKind` says what that spelling MEANS:
+   * `task-worktree` (the default, and every record written before this field)
+   * is a real local task branch created with the worktree; `none` means this
+   * mode creates no task branch at all, and `branch` is then the empty string
+   * rather than a fictitious `task/<id>` ([Pencil T07] #142, #137 leftover).
+   */
   branch: string;
+  branchKind?: "task-worktree" | "none";
   root: string;
   taskDir: string;
   remoteBranch: string;
@@ -214,6 +233,7 @@ export function buildTaskDiskRecord(input: {
   name: string;
   dirId: string;
   branch: string;
+  branchKind?: TaskDiskRecord["branchKind"];
   root: string;
   taskDir: string;
   remoteBranch: string;
@@ -231,6 +251,7 @@ export function buildTaskDiskRecord(input: {
     name: input.name,
     dirId: input.dirId,
     branch: input.branch,
+    ...(input.branchKind !== undefined ? { branchKind: input.branchKind } : {}),
     root: input.root,
     taskDir: input.taskDir,
     remoteBranch: input.remoteBranch,
@@ -257,10 +278,23 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
     throw new Error("invalid-payload: task record must be an object");
   }
   const record = value as Record<string, unknown>;
-  for (const key of ["taskId", "name", "dirId", "branch", "root", "taskDir"] as const) {
+  for (const key of ["taskId", "name", "dirId", "root", "taskDir"] as const) {
     if (typeof record[key] !== "string" || (record[key] as string).length === 0) {
       throw new Error(`invalid-payload: task record.${key} must be a non-empty string`);
     }
+  }
+  // [Pencil T07] #142 (#137 leftover): `branchKind` makes the branch spelling
+  // explicit. A record without it predates the field and always carried a real
+  // task branch; `none` is the only kind that may (and must) spell no branch.
+  if (record["branchKind"] !== undefined && record["branchKind"] !== "task-worktree" && record["branchKind"] !== "none") {
+    throw new Error("invalid-payload: task record.branchKind must be a known kind");
+  }
+  const branchKind = (record["branchKind"] as "task-worktree" | "none" | undefined) ?? "task-worktree";
+  if (typeof record["branch"] !== "string" ||
+      (branchKind === "none" ? (record["branch"] as string).length > 0 : (record["branch"] as string).length === 0)) {
+    throw new Error(branchKind === "none"
+      ? "invalid-payload: task record.branch must be empty when branchKind is none"
+      : "invalid-payload: task record.branch must be a non-empty string");
   }
   if (!Array.isArray(record["repos"]) || !(record["repos"] as unknown[]).every((item) => typeof item === "string")) {
     throw new Error("invalid-payload: task record.repos must be a string array");
@@ -286,6 +320,18 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
         if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
           throw new Error(`invalid-payload: task record.repoSources.${key} must be a non-empty string`);
         }
+      }
+      // [Pencil T07] #142 optional observed checkout identity: absent on older
+      // records, but a present value is a complete, non-blank reading (a
+      // half-written identity cannot be trusted as an observation).
+      for (const key of ["sourcePath", "sourceRealPath", "sourceDevice", "sourceInode", "commonDir", "remoteDigest",
+        "targetDevice", "targetInode", "targetRealPath", "targetBranch", "targetHead"] as const) {
+        if (entry[key] !== undefined && (typeof entry[key] !== "string" || (entry[key] as string).length === 0)) {
+          throw new Error(`invalid-payload: task record.repoSources.${key} must be a non-empty string when present`);
+        }
+      }
+      if (entry["targetHead"] !== undefined && !/^[a-f0-9]{40}$/.test(entry["targetHead"] as string)) {
+        throw new Error("invalid-payload: task record.repoSources.targetHead must be a full commit");
       }
     }
   }

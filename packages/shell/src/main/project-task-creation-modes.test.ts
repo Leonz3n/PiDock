@@ -86,6 +86,9 @@ describe("task workspace modes through the real creation path", { timeout: 30_00
     await performCreationOperation(env.service, { op: "commit", id: prepared.intent.id }, async () => null, () => undefined);
     const record = readTaskRecordOnDisk(prepared.intent.taskDir);
     expect(record?.workspaceMode).toBe("worktree");
+    // A worktree task really has a task branch, and the record says so.
+    expect(record?.branch).toBe(prepared.intent.branch);
+    expect(record?.branchKind).toBe("task-worktree");
     expect(record?.repos).toHaveLength(1);
     expect(record?.sharedRepos).toBeUndefined();
     const facts = env.files(prepared.intent.taskDir);
@@ -122,6 +125,12 @@ describe("task workspace modes through the real creation path", { timeout: 30_00
     await performCreationOperation(env.service, { op: "commit", id: prepared.intent.id }, async () => null, () => undefined);
     const record = readTaskRecordOnDisk(prepared.intent.taskDir);
     expect(record?.workspaceMode).toBe("existing-git");
+    // [Pencil T07] #142 (#137 leftover): no task branch is created in this
+    // mode, so the record must not spell a fictitious `task/<id>` as if one
+    // existed. The checkout's own branch/HEAD ride `sharedRepos` instead.
+    expect(record?.branch).toBe("");
+    expect(record?.branchKind).toBe("none");
+    expect(record?.branch).not.toBe(prepared.intent.branch);
     expect(record?.repos).toEqual([]);
     expect(record?.sharedRepos).toHaveLength(1);
     expect(record?.sharedRepos?.[0]).toMatchObject({
@@ -225,6 +234,8 @@ describe("task workspace modes through the real creation path", { timeout: 30_00
     await env.service.commit(prepared.id);
     const record = readTaskRecordOnDisk(prepared.taskDir);
     expect(record?.workspaceMode).toBe("plain-dirs");
+    expect(record?.branch).toBe("");
+    expect(record?.branchKind).toBe("none");
     expect(record?.repos).toEqual([]);
     expect(env.files(prepared.taskDir).facts().map((root) => root.kind)).toEqual(["shared-dir"]);
   });
