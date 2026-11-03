@@ -45,6 +45,7 @@ import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creatio
 import { performCreationOperation } from "./project-task-ipc.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { WorktreeMetadataLock } from "./worktree-metadata-lock.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 const TEST_TIMEOUT_MS = 90_000;
 const homes: string[] = [];
@@ -94,6 +95,7 @@ async function setup(options: { lock?: boolean } = {}) {
   const projects = new ProjectRegistry(profile);
   const project = await projects.create({ name: "Real", description: "", repositories: [{ name: "source", path: repo }], directories: [] });
   const roots = new TaskRootIndex(profile, root);
+  saveTestDeliverySettings(profile);
   const storage = new CreationIntentStore(profile);
   const host = {
     routeTaskOp: async ({ taskId, payload }: { taskId: string; op: string; payload: Record<string, unknown> }) => {
@@ -331,6 +333,8 @@ process.exit(result.status === null ? 1 : result.status);
     // one shared repository-level lock (the production exclusion).
     const secondProfile = join(env.home, "profile-2");
     mkdirSync(secondProfile);
+    // The second app data directory carries the same saved convention/remote.
+    saveTestDeliverySettings(secondProfile);
     const serviceA = env.service;
     const serviceB = new ProjectTaskCreation(new CreationIntentStore(secondProfile), env.projects, env.roots,
       { routeTaskOp: async ({ taskId, payload }: { taskId: string; op: string; payload: Record<string, unknown> }) => {

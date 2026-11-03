@@ -12,6 +12,7 @@ import { ProjectRegistry } from "./project-registry.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { buildLinkName } from "./multi-repo-provision.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 const homes: string[] = [];
 
@@ -44,6 +45,7 @@ async function setupPureDirectoryEnv() {
   });
 
   const roots = new TaskRootIndex(profile, root);
+  saveTestDeliverySettings(profile);
   const storage = new CreationIntentStore(profile);
   let provisionCalls = 0;
   const host = {

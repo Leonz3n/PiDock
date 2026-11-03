@@ -11,6 +11,7 @@ import { ProjectTaskCreation, CreationIntentStore } from "./project-task-creatio
 import { previewTaskPaths } from "./task-provision.js";
 import { performCreationOperation } from "./project-task-ipc.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 const homes: string[] = [];
 function git(cwd: string, ...args: string[]) { return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
@@ -30,6 +31,10 @@ async function setup(options: { rootAbsent?: boolean } = {}) {
   const projects = new ProjectRegistry(profile);
   const project = await projects.create({ name: "Genuine", description: "", repositories: [{ name: "source", path: repo }], directories: [{ name: "shared", path: shared }] });
   const roots = new TaskRootIndex(profile, root), storage = new CreationIntentStore(profile);
+  // [Pencil T13] #148b: a worktree creation names its branch through the saved
+  // convention and refuses by name when it is unset, so every fixture saves the
+  // workspace settings first (`task/{taskId}` keeps the historical spelling).
+  saveTestDeliverySettings(profile);
   let calls = 0;
   const instances = new Map<string, TaskWorkspaceHost>();
   const scheduleCalls: Record<string, unknown>[] = [];

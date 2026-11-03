@@ -64,6 +64,29 @@ export async function performCreationOperation(
   if (!object(request) || typeof request.op !== "string") throw new TrustDomainViolation("invalid-payload", "invalid creation operation");
   switch (request.op) {
     case "current": exact(request, ["op"]); return service.current();
+    // [Pencil T13] #148 the SAVED branch convention + push remote, readable
+    // WITHOUT a task: the create-task form reads them before anything exists
+    // (the delivery sheet's `task/deliverySettings` needs a created task).
+    case "deliverySettings": {
+      exact(request, ["op"]);
+      return { settings: service.deliverySettings() };
+    }
+    case "saveDeliverySettings": {
+      exact(request, ["op", "branchTemplate", "remote"]);
+      if (typeof request.branchTemplate !== "string" || typeof request.remote !== "string") {
+        throw new TrustDomainViolation("invalid-payload", "invalid delivery settings payload");
+      }
+      // Both values are validated by main (`git-delivery.ts`); an unset or
+      // invalid pair is NAMED back to the page, never replaced by a default.
+      return { settings: service.saveDeliverySettings({ branchTemplate: request.branchTemplate, remote: request.remote }) };
+    }
+    // [Pencil T13] #148 the pre-creation preview: per-repository local branch
+    // and push target computed by main from the saved settings and the real
+    // checkouts. Read-only: no fetch, no worktree, no branch, no write.
+    case "deliveryPreview": {
+      exact(request, ["op", "input"]);
+      return await service.previewDelivery(input(request.input));
+    }
     case "prepare": {
       exact(request, ["op", "input"]);
       const selected = input(request.input);

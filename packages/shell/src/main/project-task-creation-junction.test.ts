@@ -9,6 +9,7 @@ import { buildLinkName } from "./multi-repo-provision.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 // Partial mock (repo precedent: `service-host-binding.test.ts`): only `symlinkSync`
 // is replaced. It throws the real de-privileged EPERM shape for a directory
@@ -53,6 +54,7 @@ async function setupPureDirectoryEnv() {
   });
 
   const roots = new TaskRootIndex(profile, root);
+  saveTestDeliverySettings(profile);
   const storage = new CreationIntentStore(profile);
   const host = {
     routeTaskOp: async ({ taskId, payload }: { taskId: string; payload: Record<string, unknown> }) => {
