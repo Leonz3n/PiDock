@@ -24,7 +24,7 @@ it("encrypts a credential and decrypts the same value back", () => {
 });
 
 it("persists ciphertext only, with private file modes", () => {
-  const { file, store: secrets } = store();
+  const { dir, file, store: secrets } = store();
   secrets.set(PROFILE, SECRET);
   const raw = readFileSync(file, "utf8");
   expect(raw).not.toContain(SECRET);

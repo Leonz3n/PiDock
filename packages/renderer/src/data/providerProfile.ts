@@ -11,10 +11,21 @@
  */
 
 export type ProviderProtocol = "openai-completions" | "openai-responses" | "anthropic-messages";
-export const PROVIDER_PROTOCOLS: { id: ProviderProtocol; label: string; hint: string }[] = [
-  { id: "openai-completions", label: "OpenAI Chat Completions", hint: "POST /chat/completions · Bearer" },
-  { id: "openai-responses", label: "OpenAI Responses", hint: "POST /responses · Bearer" },
-  { id: "anthropic-messages", label: "Anthropic Messages", hint: "POST /messages · x-api-key" },
+/**
+ * The three protocols PiDock registers verbatim with Pi. `baseHint` is the one
+ * place the version-prefix rule is spelled out: Pi's OpenAI transports append
+ * `/chat/completions` or `/responses` to a base that already ends in `/v1`,
+ * while its Anthropic transport appends `/v1/messages` itself, so that base is
+ * the API root. The probe and discovery use the same rule, so what the user
+ * tests is exactly what a turn will call.
+ */
+export const PROVIDER_PROTOCOLS: { id: ProviderProtocol; label: string; hint: string; baseHint: string }[] = [
+  { id: "openai-completions", label: "OpenAI Chat Completions", hint: "POST /chat/completions · Bearer",
+    baseHint: "填到版本前缀，例如 https://api.openai.com/v1（Pi 会在其后追加 /chat/completions）" },
+  { id: "openai-responses", label: "OpenAI Responses", hint: "POST /responses · Bearer",
+    baseHint: "填到版本前缀，例如 https://api.openai.com/v1（Pi 会在其后追加 /responses）" },
+  { id: "anthropic-messages", label: "Anthropic Messages", hint: "POST /v1/messages · x-api-key",
+    baseHint: "填 API 根地址，例如 https://api.anthropic.com（Pi 会补上 /v1/messages）" },
 ];
 
 export type ProviderState = "configured" | "not-configured" | "pending" | "credential-missing" | "binding-stale" | "install-failed";
@@ -98,7 +109,11 @@ export function draftFromView(view: ProviderView): ProviderDraft {
     apiKey: "", hasStoredKey: view.credentialSource === "store" && view.credentialAvailable,
     models: view.models.map((model) => ({
       id: model.id, name: model.name, contextWindow: String(model.contextWindow), maxTokens: String(model.maxTokens),
-      reasoning: model.reasoning, levels: model.reasoningLevels.filter((level) => level !== "off"),
+      // The declared levels are kept verbatim, including whether 关闭 itself is
+      // one of them: the form must not add a level the model did not declare.
+      // A non-reasoning model declares no levels at all (`["off"]` from main is
+      // the SDK's "only off is available", not a level the user can configure).
+      reasoning: model.reasoning, levels: model.reasoning ? model.reasoningLevels : [],
       cost: model.cost === null ? "" : String(model.cost.input),
     })),
     modelId: view.modelId,
@@ -300,6 +315,7 @@ export function draftIssues(draft: ProviderDraft, existing: ProviderView[] = [],
       issues.push({ field: `${at}.maxTokens`, message: "最大输出不能大于上下文窗口" });
     }
     if (row.levels.length > 0 && !row.reasoning) issues.push({ field: `${at}.reasoning`, message: "只有声明支持思维链的模型才能设置推理档位" });
+    if (row.reasoning && row.levels.length === 0) issues.push({ field: `${at}.reasoning`, message: "请至少声明一个支持的推理档位（关闭也算一个）" });
     if (row.cost.trim() !== "") {
       const cost = Number(row.cost);
       if (!Number.isFinite(cost) || cost < 0) issues.push({ field: `${at}.cost`, message: "输入价格需要是不小于 0 的数字" });
@@ -324,7 +340,7 @@ export function draftRequest(draft: ProviderDraft): { profile: Record<string, un
     id: row.id.trim(), name: row.name.trim() || row.id.trim(),
     contextWindow: Number(row.contextWindow), maxTokens: Number(row.maxTokens),
     reasoning: row.reasoning,
-    ...(row.reasoning && row.levels.length > 0 ? { reasoningLevels: ["off", ...row.levels] } : {}),
+    ...(row.reasoning && row.levels.length > 0 ? { reasoningLevels: REASONING_LEVELS.filter((level) => row.levels.includes(level)) } : {}),
     ...(row.cost.trim() === "" ? {} : { cost: { input: Number(row.cost), output: 0, cacheRead: 0, cacheWrite: 0 } }),
   }));
   return {

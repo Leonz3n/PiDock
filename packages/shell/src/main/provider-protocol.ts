@@ -29,8 +29,13 @@ export interface ProtocolDescriptor {
   /** Body field carrying tool declarations. */
   toolField: string;
   /**
-   * Path appended to the profile's base URL for one model request (the base URL
-   * already carries the API version prefix, e.g. `https://api.openai.com/v1`).
+   * Path appended to the profile's base URL for one model request.
+   *
+   * OpenAI-compatible bases already carry the version prefix
+   * (`https://api.openai.com/v1` + `/chat/completions`). Anthropic's transport
+   * appends the version segment itself, so its base is the API root
+   * (`https://api.anthropic.com` + `/v1/messages`) — the probe has to mirror
+   * that exactly or it would test a different URL than a real turn uses.
    */
   requestPath: string;
   /** Frame name carrying a text delta in the stream. */
@@ -43,8 +48,8 @@ export interface ProtocolDescriptor {
   usagePath: readonly string[];
   /**
    * Model-discovery endpoint this protocol exposes, appended to the profile's
-   * configured base URL (which already carries the API version prefix, e.g.
-   * `https://api.deepseek.com/v1`), or `null` when the protocol declares none
+   * configured base URL with the same version rule as `requestPath`, or `null`
+   * when the protocol declares none
    * (the UI must then not offer 模型发现). A connection can additionally
    * report `unsupported` at runtime when its own endpoint answers 404/405.
    */
@@ -108,12 +113,12 @@ const DESCRIPTORS: Record<ProviderProtocol, ProtocolDescriptor> = {
     messageField: "messages",
     systemField: "system",
     toolField: "tools",
-    requestPath: "/messages",
+    requestPath: "/v1/messages",
     textFrame: "content_block_delta",
     toolFrame: "input_json_delta",
     doneFrame: "message_stop",
     usagePath: ["usage"],
-    modelListPath: "/models",
+    modelListPath: "/v1/models",
     modelListAuth: "x-api-key",
     // Anthropic takes an explicit thinking block; `off` sends no block at all
     // (the API has no "disabled" budget value).

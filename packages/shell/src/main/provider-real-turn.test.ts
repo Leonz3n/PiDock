@@ -300,3 +300,58 @@ it("continues after a restart with the credential still coming from safeStorage"
     expect(secrets.revision(saved.profile.id)).toBe(reopenedSecrets.revision(saved.profile.id));
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
+
+it("speaks each protocol's own wire shape through the real SDK (anthropic-messages, openai-responses)", async () => {
+  for (const protocol of ["anthropic-messages", "openai-responses"] as const) {
+    const { root, dir } = task(`task-shape-${protocol}`);
+    const { secrets, profiles, providers } = management(root);
+    const seen: { method: string; url: string; headers: IncomingMessage["headers"]; body: Record<string, unknown> }[] = [];
+    const server = createServer((request, response) => {
+      void (async () => {
+        seen.push({ method: request.method ?? "", url: request.url ?? "", headers: request.headers, body: await body(request) });
+        // A terminal 400: the turn fails closed, but the request on the wire is
+        // exactly what this protocol declares.
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { type: "invalid_request_error", message: "synthetic" } }));
+      })();
+    });
+    const port = await listen(server);
+    try {
+      // Anthropic's transport appends `/v1/messages` to an API-root base; the
+      // OpenAI protocols take their version prefix in the base itself.
+      const baseUrl = protocol === "anthropic-messages" ? `http://127.0.0.1:${port}` : `http://127.0.0.1:${port}/v1`;
+      const saved = await providers.perform({ op: "save", profile: { ...SAVE, protocol, baseUrl }, apiKey: SECRET }, 1) as { profile: { id: string } };
+      const config = profiles.config(saved.profile.id, "fixture-model");
+      expect(config.protocol).toBe(protocol);
+      const { runtime, model, bindingIdentity } = await createExplicitTextRuntime(config, secrets.resolve(saved.profile.id));
+      const kernel = new PiSdkTextKernel(`task-shape-${protocol}`, dir, { model, modelRuntime: runtime, bindingIdentity });
+      await kernel.open("main");
+      const result = await kernel.prompt("main", "ping");
+      expect(result.state).toBe("failed");
+      expect(seen).toHaveLength(1);
+      const request = seen[0]!;
+      if (protocol === "anthropic-messages") {
+        expect(request.url).toBe("/v1/messages?beta=true");
+        expect(request.headers["x-api-key"]).toBe(SECRET);
+        expect(request.headers["anthropic-version"]).toBeDefined();
+        expect(request.headers.authorization).toBeUndefined();
+        expect(request.body).toMatchObject({ model: "fixture-model", stream: true, max_tokens: expect.any(Number) });
+        const messages = request.body["messages"] as { role: string; content: { type: string; text?: string }[] }[];
+        expect(messages.map((message) => [message.role, message.content.filter((part) => part.type === "text").map((part) => part.text)]))
+          .toEqual([["user", ["ping"]]]);
+        // Anthropic's cache_control marker is the transport's own decoration of
+        // the text block, not part of the conversation PiDock describes.
+        expect(messages[0]?.content[0]).toMatchObject({ type: "text", text: "ping" });
+      } else {
+        expect(request.url).toBe("/v1/responses");
+        expect(request.headers.authorization).toBe(`Bearer ${SECRET}`);
+        expect(request.body).toMatchObject({ model: "fixture-model", stream: true });
+        expect(JSON.stringify(request.body)).toContain("ping");
+        expect(request.body["messages"]).toBeUndefined();
+      }
+      // Neither the credential nor the upstream body text crosses back.
+      expect(JSON.stringify(result)).not.toContain(SECRET);
+      await kernel.dispose();
+    } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+  }
+});

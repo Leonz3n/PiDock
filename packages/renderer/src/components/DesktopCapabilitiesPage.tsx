@@ -39,15 +39,17 @@ export function DesktopCapabilitiesPage({
   const [status, setStatus] = useState<ProviderStatus | null>(null);
   const [error, setError] = useState("");
 
+  // With a task the list also reports that task's live selection (configured /
+  // pending / credential-missing); without one it is the global config list.
   const reload = useCallback(async () => {
     try {
-      setStatus(parseProviderStatus(await providerCall({ op: "list" })));
+      setStatus(parseProviderStatus(await providerCall({ op: "list", ...(taskId === null ? {} : { taskId }) })));
       setError("");
     } catch (caught) {
       setStatus(null);
       setError(caught instanceof Error ? caught.message : "Provider 配置不可用");
     }
-  }, []);
+  }, [taskId]);
   useEffect(() => { void reload(); }, [reload]);
 
   return <div data-testid="desktop-capabilities-page" className="flex min-h-0 w-full flex-1">

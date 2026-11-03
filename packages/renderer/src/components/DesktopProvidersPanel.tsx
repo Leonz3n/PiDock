@@ -48,7 +48,7 @@ const PRESETS: Preset[] = [
     models: [presetRow("deepseek-chat"), presetRow("deepseek-reasoner", true, ["low", "medium", "high"])] },
   { key: "openai", name: "OpenAI", notes: "官方预设 · Chat Completions", protocol: "openai-completions", baseUrl: "https://api.openai.com/v1",
     models: [presetRow("gpt-5-mini"), presetRow("gpt-5")] },
-  { key: "anthropic", name: "Anthropic", notes: "官方预设 · Messages 协议", protocol: "anthropic-messages", baseUrl: "https://api.anthropic.com/v1",
+  { key: "anthropic", name: "Anthropic", notes: "官方预设 · Messages 协议", protocol: "anthropic-messages", baseUrl: "https://api.anthropic.com",
     models: [presetRow("claude-sonnet-4-5")] },
   { key: "local", name: "本机兼容端点", notes: "本地推理服务 · 端口与协议请核对", protocol: "openai-completions", baseUrl: "http://127.0.0.1:8080/v1",
     models: [presetRow("local-model")] },
@@ -213,7 +213,9 @@ export function DesktopProvidersPanel({
     draft={draft} presetKey={presetKey} issues={issues} notice={notice} conflict={conflict} busy={busy} showKey={showKey}
     discovery={discovery} probe={probe} formRef={formRef} issueFor={issueFor}
     onPatch={patch} onPatchRow={patchRow} onApplyPreset={applyPreset} onToggleReasoning={(index, reasoning) => patchRow(index, {
-      reasoning, levels: reasoning ? (draft.models[index]?.levels.length ? draft.models[index]!.levels : ["low", "medium", "high"]) : [],
+      // A newly declared reasoning model declares 关闭 first and nothing else
+      // until the user ticks the levels the endpoint documents.
+      reasoning, levels: reasoning ? (draft.models[index]?.levels.length ? draft.models[index]!.levels : ["off"]) : [],
     })} onToggleLevel={(index, level) => {
       const row = draft.models[index];
       if (!row) return;
@@ -300,7 +302,7 @@ export function DesktopProvidersPanel({
               </select>
               <Button type="button" disabled={busy || taskId === null}
                 title={taskId === null ? "请先打开一个任务" : undefined}
-                onClick={() => void act({ op: "select", taskId, profileId: view.id, modelId: selectedModel[view.id] ?? view.modelId }, "Provider 选用失败")}>
+                onClick={() => void act({ op: "select", ...(taskId === null ? {} : { taskId }), profileId: view.id, modelId: selectedModel[view.id] ?? view.modelId }, "Provider 选用失败")}>
                 选用
               </Button>
               <Button type="button" onClick={() => openEdit(view)}>编辑</Button>
@@ -396,7 +398,8 @@ function ProviderForm({
         </select>{error("protocol")}</label>
       <label className="block"><span className={label}>Base URL</span>
         <input aria-label="Base URL" className={`${field} font-mono`} value={draft.baseUrl} data-invalid={issueFor("baseUrl") ? "true" : undefined}
-          onChange={(event) => onPatch({ baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />{error("baseUrl")}</label>
+          onChange={(event) => onPatch({ baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />{error("baseUrl")}
+        <p className="mt-1 text-[10px] text-muted">{PROVIDER_PROTOCOLS.find((protocol) => protocol.id === draft.protocol)?.baseHint}</p></label>
     </div>
 
     <fieldset className="mt-4 border border-line bg-paper px-3 py-3">
@@ -462,18 +465,19 @@ function ProviderForm({
               onChange={(event) => onPatchRow(index, { maxTokens: event.target.value })} />{error(`models.${index}.maxTokens`)}</td>
             <td className="py-1.5 pr-2"><input type="checkbox" aria-label={`思维链推理 ${index + 1}`} checked={row.reasoning}
               onChange={(event) => onToggleReasoning(index, event.target.checked)} />{error(`models.${index}.reasoning`)}</td>
-            <td className="py-1.5 pr-2">{row.reasoning ? <div className="flex flex-wrap gap-1">{REASONING_LEVELS.filter((level) => level !== "off").map((level) =>
+            <td className="py-1.5 pr-2">{row.reasoning ? <div className="flex flex-wrap gap-1">{REASONING_LEVELS.map((level) =>
               <label key={level} className={`cursor-pointer border px-1 ${row.levels.includes(level) ? "border-[#5773ae] text-ink" : "border-line text-muted"}`}>
                 <input type="checkbox" className="sr-only" aria-label={`${levelText(level)}档位 ${index + 1}`} checked={row.levels.includes(level)}
                   onChange={() => onToggleLevel(index, level)} />{levelText(level)}</label>)}</div>
-              : <span className="text-muted">仅关闭{row.levels.length === 0 ? "" : "（未声明）"}</span>}</td>
+              : <span className="text-muted">仅关闭</span>}</td>
             <td className="py-1.5 pr-2"><input aria-label={`输入价格 ${index + 1}`} className={field} value={row.cost} placeholder="未声明"
               onChange={(event) => onPatchRow(index, { cost: event.target.value })} />{error(`models.${index}.cost`)}</td>
             <td className="py-1.5"><Button type="button" disabled={draft.models.length === 1} onClick={() => onRemoveRow(index)}>移除</Button></td>
           </tr>)}</tbody>
         </table>
       </div>
-      <p className="mt-1 text-[10px] text-muted">价格留空表示「未声明」，不会被当成 0；推理档位来自模型自己声明的能力。</p>
+      <p className="mt-1 text-[10px] text-muted">价格留空表示「未声明」，不会被当成 0；推理档位来自模型自己声明的能力。
+        上下文窗口与最大输出同样是本机声明值：Pi 不会向端点探测模型能力，端点拒绝时会在会话里给出真实错误。</p>
       <label className="mt-3 block max-w-[320px]"><span className={label}>默认模型</span>
         <select aria-label="默认模型" className={field} value={draft.modelId} onChange={(event) => onPatch({ modelId: event.target.value })}>
           <option value="">请选择</option>

@@ -65,7 +65,7 @@ describe("S03 capability nav", () => {
     const nav = screen.getByRole("navigation", { name: "能力管理" });
     for (const label of ["Providers", "MCP", "Skills"]) expect(within(nav).getByRole("button", { name: new RegExp(label) })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: /Extensions|Packages/ })).toBeNull();
-    expect(calls[0]).toEqual({ op: "list" });
+    expect(calls[0]).toEqual({ op: "list", taskId: "task-1" });
     await waitFor(() => expect(screen.getByTestId("native-path")).toHaveTextContent("/Users/test/.pi/agent/models.json"));
   });
 
@@ -220,12 +220,16 @@ describe("S03B provider form", () => {
     const form = await screen.findByTestId("provider-form");
     expect(within(form).queryByLabelText("低档位 1")).toBeNull();
     await user.click(within(form).getByLabelText("思维链推理 1"));
-    for (const level of ["低档位 1", "中档位 1", "高档位 1", "极高档位 1"]) expect(within(form).getByLabelText(level)).toBeInTheDocument();
-    expect(within(form).queryByLabelText("关闭档位 1")).toBeNull();
-    expect(within(form).getByLabelText("低档位 1")).toBeChecked();
+    for (const level of ["关闭档位 1", "低档位 1", "中档位 1", "高档位 1", "极高档位 1"]) expect(within(form).getByLabelText(level)).toBeInTheDocument();
+    // Enabling reasoning declares only 关闭 (= no thinking) until the user ticks
+    // the levels the endpoint documents — nothing is pre-ticked as supported.
+    expect(within(form).getByLabelText("关闭档位 1")).toBeChecked();
+    expect(within(form).getByLabelText("低档位 1")).not.toBeChecked();
     expect(within(form).getByLabelText("极高档位 1")).not.toBeChecked();
+    await user.click(within(form).getByLabelText("低档位 1"));
     await user.click(within(form).getByLabelText("极高档位 1"));
     expect(within(form).getByLabelText("极高档位 1")).toBeChecked();
+    expect(within(form).getByLabelText("低档位 1")).toBeChecked();
     // Unchecking the capability removes the level controls entirely.
     await user.click(within(form).getByLabelText("思维链推理 1"));
     expect(within(form).queryByLabelText("低档位 1")).toBeNull();
