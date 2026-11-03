@@ -51,6 +51,7 @@ function readers(overrides: Partial<WorkspaceFileReaders> = {}): WorkspaceFileRe
     runGit: () => ({ ok: true, stdout: "" }),
     // Tests that do not care about symlinks: every path is its own real path.
     realPath: (path) => path,
+    identity: (path) => ({ kind: "dir", realPath: path, device: "1", inode: "1" }),
     ...overrides,
   };
 }

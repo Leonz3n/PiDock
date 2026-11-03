@@ -33,6 +33,8 @@
 import type { TaskPathProtection } from "./protected-application-path.js";
 import { execFileSync } from "node:child_process";
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { resolve } from "node:path";
+import { remoteDigest } from "../main/remote-identity.js";
 import { describeReadFailure } from "../main/service-code-observation.js";
 import {
   MAX_PREVIEW_CHARS,
@@ -42,15 +44,19 @@ import {
   deliveryTarget,
   findWorkspaceRoot,
   resolveWorkspacePath,
+  verifyWorkspaceSource,
   workspaceAttribution,
   workspaceRoots,
+  type ObservedSourceIdentity,
   type WorkspaceAttribution,
   type WorkspaceDeliveryResult,
   type WorkspaceDiffResult,
+  type WorkspaceMode,
   type WorkspaceObservation,
   type WorkspacePreview,
   type WorkspaceRoot,
   type WorkspaceTree,
+  type WorkspaceVerification,
 } from "../main/workspace-files.js";
 import type { TaskDiskRecord } from "./task-store.js";
 import type { TaskStore } from "./task-host.js";
@@ -66,6 +72,13 @@ export interface WorkspaceFileReaders {
    * cannot point the reader at another task's folder or an out-of-task file.
    */
   realPath(path: string): string;
+  /**
+   * Read one path's current identity ([Pencil T02] #137): device/inode of a
+   * real directory, or the named `missing`/`other` answer. A path that is gone
+   * is an observation, never an exception the facts surface would turn into a
+   * blank row.
+   */
+  identity(path: string): { kind: "dir" | "other" | "missing"; realPath?: string; device?: string; inode?: string };
 }
 
 /** Read cap: a file bigger than this is refused rather than loaded. */
@@ -206,6 +219,23 @@ export const realWorkspaceFileReaders: WorkspaceFileReaders = {
       return path;
     }
   },
+  identity(path) {
+    let stat;
+    try {
+      stat = lstatSync(path, { bigint: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+      return { kind: "other" };
+    }
+    if (!stat.isDirectory() || stat.dev <= 0n || stat.ino <= 0n) return { kind: "other" };
+    let realPath: string | undefined;
+    try {
+      realPath = realpathSync(path);
+    } catch {
+      realPath = undefined;
+    }
+    return { kind: "dir", ...(realPath !== undefined ? { realPath } : {}), device: String(stat.dev), inode: String(stat.ino) };
+  },
 };
 
 export class TaskWorkspaceFiles {
@@ -224,16 +254,32 @@ export class TaskWorkspaceFiles {
   ) {}
 
   /** Browsable roots of this task, derived from its record. */
+  /**
+   * The task's declared workspace mode ([Pencil T02] #137). A record written
+   * before the mode existed is derived from its sources (shared checkouts =>
+   * existing-git, worktree repos => worktree, otherwise plain directories),
+   * never from the UI.
+   */
+  workspaceMode(): WorkspaceMode {
+    const record = this.requireRecord();
+    if (record.workspaceMode !== undefined) return record.workspaceMode;
+    if ((record.sharedRepos?.length ?? 0) > 0) return "existing-git";
+    return record.repos.length > 0 ? "worktree" : "plain-dirs";
+  }
+
   roots(): WorkspaceRoot[] {
     const record = this.requireRecord();
     this.protection?.assert(this.taskDir);
     for (const link of record.dirLinks ?? []) this.protection?.assert(link.sourcePath);
+    for (const shared of record.sharedRepos ?? []) this.protection?.assert(shared.sourcePath);
     const roots = workspaceRoots({
       taskId: this.taskId,
       taskDir: this.taskDir,
       repos: record.repos,
       ...(record.repoSources ? { repoSources: record.repoSources } : {}),
       ...(record.dirLinks ? { dirLinks: record.dirLinks } : {}),
+      ...(record.sharedRepos ? { sharedRepos: record.sharedRepos } : {}),
+      ...(record.workspaceMode !== undefined ? { workspaceMode: record.workspaceMode } : {}),
       baselineBranch: record.remoteBranch,
       // The record's own task branch (`task/<dirId>`) is the DECLARED
       // expectation, kept apart from `record.remoteBranch` (the pinned
@@ -257,6 +303,107 @@ export class TaskWorkspaceFiles {
     return this.roots().map((root) =>
       root.kind === "worktree" ? { ...root, ...this.observeWorktree(root) } : root,
     );
+  }
+
+  /**
+   * The full facts readout the task facts surface renders ([Pencil T02] #137):
+   * every root, its observed branch/HEAD (where the root has Git), and the
+   * per-source result of re-verifying the identity the record holds. Reads the
+   * record and the filesystem; never writes the record back, so a moved source
+   * is reported as `missing`/`mismatch` instead of being silently rewritten.
+   */
+  facts(): WorkspaceRoot[] {
+    const record = this.requireRecord();
+    return this.observedRoots().map((root) => {
+      if (root.kind === "existing-git") {
+        return { ...root, ...this.observeSharedGit(root), ...this.verifyRoot(root, record) };
+      }
+      return { ...root, ...this.verifyRoot(root, record) };
+    });
+  }
+
+  /** Observed branch/HEAD/uncommitted state of one existing checkout in place. */
+  private observeSharedGit(root: WorkspaceRoot): {
+    workingBranch: WorkspaceObservation<string>;
+    headCommit: WorkspaceObservation<string>;
+    dirty: WorkspaceObservation<boolean>;
+  } {
+    const branch = observeBranch(this.readers.runGit(["rev-parse", "--abbrev-ref", "HEAD"], root.path));
+    const head = this.readers.runGit(["rev-parse", "--verify", "HEAD"], root.path);
+    const headCommit: WorkspaceObservation<string> = head.ok && /^[a-f0-9]{40}$/.test(head.stdout.trim())
+      ? { state: "observed", value: head.stdout.trim() }
+      : { state: "unknown", reason: head.ok ? "来源 HEAD 不是完整提交" : head.error };
+    const status = this.readers.runGit(["status", "--porcelain"], root.path);
+    return { workingBranch: branch, headCommit, dirty: observeDirty(status) };
+  }
+
+  /**
+   * Re-verify one root's recorded identity. Recorded fields come from the
+   * record (`repoSources` target identity, `sharedRepos`, `dirLinks`); a record
+   * with no identity is `repair-required`, never assumed ready.
+   */
+  private verifyRoot(root: WorkspaceRoot, record: TaskDiskRecord): { verification: WorkspaceVerification } {
+    if (root.kind === "worktree") {
+      const source = record.repoSources?.find((entry) => entry.repoDir === root.id);
+      const recorded = {
+        path: root.path,
+        ...(source?.targetDevice !== undefined && source.targetInode !== undefined
+          ? { device: source.targetDevice, inode: source.targetInode } : {}),
+        ...(source?.commonDir !== undefined ? { commonDir: source.commonDir } : {}),
+        ...(source?.remoteDigest !== undefined ? { remoteDigest: source.remoteDigest } : {}),
+      };
+      const identity = this.readers.identity(root.path);
+      if (identity.kind !== "dir") return { verification: verifyWorkspaceSource(recorded, identity) };
+      const readGit = source?.commonDir !== undefined || source?.remoteDigest !== undefined;
+      return {
+        verification: verifyWorkspaceSource(recorded, {
+          ...identity,
+          ...(readGit ? this.observeGitIdentity(root.path, source?.remote) : {}),
+        }),
+      };
+    }
+    if (root.kind === "existing-git") {
+      const source = record.sharedRepos?.find((entry) => entry.rootId === root.id);
+      if (!source) return { verification: { state: "repair-required", reason: "待修复：任务记录缺少该已有 Git 目录的来源身份，无法核验" } };
+      const recorded = {
+        path: source.sourcePath,
+        ...(source.sourceRealPath !== undefined ? { realPath: source.sourceRealPath } : {}),
+        ...(source.sourceDevice !== undefined && source.sourceInode !== undefined
+          ? { device: source.sourceDevice, inode: source.sourceInode } : {}),
+        commonDir: source.commonDir,
+        remoteDigest: source.remoteDigest,
+      };
+      const identity = this.readers.identity(source.sourcePath);
+      if (identity.kind !== "dir") return { verification: verifyWorkspaceSource(recorded, identity) };
+      return { verification: verifyWorkspaceSource(recorded, { ...identity, ...this.observeGitIdentity(source.sourcePath, source.remote) }) };
+    }
+    const link = record.dirLinks?.find((entry) => entry.linkName === root.id);
+    if (!link) return { verification: { state: "repair-required", reason: "待修复：任务记录缺少该普通目录的来源身份，无法核验" } };
+    const recorded = {
+      path: link.sourcePath,
+      ...(link.sourceDevice !== undefined && link.sourceInode !== undefined
+        ? { device: link.sourceDevice, inode: link.sourceInode } : {}),
+    };
+    return { verification: verifyWorkspaceSource(recorded, this.readers.identity(link.sourcePath)) };
+  }
+
+  /** Current Git common dir + remote digest of one real checkout, or named nulls. */
+  private observeGitIdentity(path: string, remote?: string): Pick<ObservedSourceIdentity, "commonDir" | "remoteDigest"> {
+    let commonDir: string | null = null;
+    const common = this.readers.runGit(["rev-parse", "--git-common-dir"], path);
+    if (common.ok && common.stdout.trim().length > 0) commonDir = this.readers.realPath(resolve(path, common.stdout.trim()));
+    let digest: string | null = null;
+    if (remote !== undefined && remote.length > 0) {
+      const url = this.readers.runGit(["remote", "get-url", remote], path);
+      if (url.ok) {
+        try {
+          digest = remoteDigest(url.stdout.trim());
+        } catch {
+          digest = null;
+        }
+      }
+    }
+    return { commonDir, remoteDigest: digest };
   }
 
   /**

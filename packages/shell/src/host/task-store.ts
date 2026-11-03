@@ -56,6 +56,53 @@ export interface RepoSourceRecord {
   remoteBranch: string;
   /** Pinned full commit fixed at fetch time (never a stale ref). */
   baseCommit: string;
+  /**
+   * [Pencil T02] #137 source binding, recorded when known: the registered
+   * checkout the worktree came from (`sourcePath` as registered,
+   * `sourceRealPath` resolved), its device/inode, the Git common dir and the
+   * remote URL digest. Optional on older records; a record without identity is
+   * reported as `待修复` on reopen, never treated as verified.
+   */
+  sourcePath?: string;
+  sourceRealPath?: string;
+  sourceDevice?: string;
+  sourceInode?: string;
+  commonDir?: string;
+  remoteDigest?: string;
+  /** Device/inode of the in-task worktree folder, re-verified on open. */
+  targetDevice?: string;
+  targetInode?: string;
+}
+
+/**
+ * [Pencil T02] #137: one existing registered Git checkout used IN PLACE by a
+ * task (`workspaceMode: "existing-git"`). It is the original, not a copy:
+ * writes modify it, and there is no task worktree, task branch or baseline
+ * diff. The real source path, current branch, observed HEAD and recorded
+ * identity are what the facts surface re-verifies on open.
+ */
+export interface SharedRepoRecord {
+  /** Stable root id within the task (the repo's safe child name). */
+  rootId: string;
+  /** Absolute registered source path (as registered). */
+  sourcePath: string;
+  /** Real path resolved when recorded. */
+  sourceRealPath?: string;
+  /** Remote name used to pin the source identity. */
+  remote: string;
+  /** Branch the checkout was on when the task was created. */
+  remoteBranch: string;
+  /** Full commit HEAD pointed at when the task was created. */
+  headCommit: string;
+  /** Git common dir recorded at creation. */
+  commonDir: string;
+  /** Remote URL digest recorded at creation. */
+  remoteDigest: string;
+  /** Device/inode of the real checkout at creation. */
+  sourceDevice?: string;
+  sourceInode?: string;
+  /** ISO time the identity was snapshot. */
+  snapshotAt: string;
 }
 
 export interface PlainDirLinkRecord {
@@ -119,6 +166,13 @@ export interface TaskDiskRecord {
    * drops a failed repo. Absent when nothing failed.
    */
   repoPrepareErrors?: RepoPrepareErrorRecord[];
+  /**
+   * [Pencil T02] #137: the explicit task workspace mode. Optional on records
+   * written before it existed; the facts read derives the legacy shape then.
+   */
+  workspaceMode?: "worktree" | "existing-git" | "plain-dirs";
+  /** [Pencil T02] #137: existing Git checkouts used in place (no copy). */
+  sharedRepos?: SharedRepoRecord[];
   createdAt: string;
   updatedAt: string;
 }
@@ -168,6 +222,8 @@ export function buildTaskDiskRecord(input: {
   repoSources?: RepoSourceRecord[];
   dirLinks?: PlainDirLinkRecord[];
   repoPrepareErrors?: RepoPrepareErrorRecord[];
+  workspaceMode?: TaskDiskRecord["workspaceMode"];
+  sharedRepos?: SharedRepoRecord[];
   now: string;
 }): TaskDiskRecord {
   const record: TaskDiskRecord = {
@@ -186,6 +242,8 @@ export function buildTaskDiskRecord(input: {
   if (input.repoSources !== undefined) record.repoSources = input.repoSources.map((source) => ({ ...source }));
   if (input.dirLinks !== undefined) record.dirLinks = input.dirLinks.map((link) => ({ ...link }));
   if (input.repoPrepareErrors !== undefined) record.repoPrepareErrors = input.repoPrepareErrors.map((error) => ({ ...error }));
+  if (input.workspaceMode !== undefined) record.workspaceMode = input.workspaceMode;
+  if (input.sharedRepos !== undefined) record.sharedRepos = input.sharedRepos.map((repo) => ({ ...repo }));
   return record;
 }
 
@@ -279,6 +337,43 @@ export function parseTaskRecord(raw: string): TaskDiskRecord {
       for (const key of ["repoDir", "code", "message"] as const) {
         if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
           throw new Error(`invalid-payload: task record.repoPrepareErrors.${key} must be a non-empty string`);
+        }
+      }
+    }
+  }
+  // [Pencil T02] #137 workspace mode + existing-Git-dir sources: optional on
+  // records written before the mode existed, fully shape-checked when present.
+  if (record["workspaceMode"] !== undefined) {
+    if (record["workspaceMode"] !== "worktree" && record["workspaceMode"] !== "existing-git" && record["workspaceMode"] !== "plain-dirs") {
+      throw new Error("invalid-payload: task record.workspaceMode must be a known mode");
+    }
+  }
+  if (record["workspaceMode"] === "plain-dirs" && repos.length > 0) {
+    throw new Error("invalid-payload: task record.plain-dirs mode cannot carry worktree repos");
+  }
+  if (record["workspaceMode"] === "existing-git" && repos.length > 0) {
+    throw new Error("invalid-payload: task record.existing-git mode cannot carry worktree repos");
+  }
+  if (record["sharedRepos"] !== undefined) {
+    if (!Array.isArray(record["sharedRepos"])) {
+      throw new Error("invalid-payload: task record.sharedRepos must be an array");
+    }
+    for (const shared of record["sharedRepos"] as unknown[]) {
+      if (typeof shared !== "object" || shared === null || Array.isArray(shared)) {
+        throw new Error("invalid-payload: task record.sharedRepos entries must be objects");
+      }
+      const entry = shared as Record<string, unknown>;
+      for (const key of ["rootId", "sourcePath", "remote", "remoteBranch", "headCommit", "commonDir", "remoteDigest", "snapshotAt"] as const) {
+        if (typeof entry[key] !== "string" || (entry[key] as string).length === 0) {
+          throw new Error(`invalid-payload: task record.sharedRepos.${key} must be a non-empty string`);
+        }
+      }
+      if (!/^[a-f0-9]{40}$/.test(entry["headCommit"] as string)) {
+        throw new Error("invalid-payload: task record.sharedRepos.headCommit must be a full commit");
+      }
+      for (const key of ["sourceRealPath", "sourceDevice", "sourceInode"] as const) {
+        if (entry[key] !== undefined && (typeof entry[key] !== "string" || (entry[key] as string).length === 0)) {
+          throw new Error(`invalid-payload: task record.sharedRepos.${key} must be a non-empty string when present`);
         }
       }
     }
