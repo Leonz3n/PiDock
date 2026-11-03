@@ -459,6 +459,27 @@ it("records production scheduled triggers as failed without a synthetic session"
   await host.dispose();
 });
 
+it("refuses a SECOND session's turn with the named task-wide busy state instead of queueing it", async () => {
+  // [#139] One task runs one turn at a time: a session is not a separate
+  // scheduler. The second session's prompt is refused by name (`task-locked`) —
+  // it is never queued, never merged into the running turn and never silently
+  // dropped.
+  const dir = task("task-a");
+  const pending = await kernel(dir, () => "wait");
+  await pending.instance.open("main");
+  // The second session exists and has its own SDK dir before the collision.
+  expect((await pending.instance.open("s-1a2b3c4d")).file).toContain("s-1a2b3c4d");
+  const running = pending.instance.prompt("main", "wait");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await expect(pending.instance.prompt("s-1a2b3c4d", "second")).rejects.toThrow("task-locked");
+  await pending.instance.cancel("main");
+  expect((await running).state).toBe("cancelled");
+  // The refused session kept its own (empty) history: nothing was appended to it.
+  const digest = await pending.instance.digest("s-1a2b3c4d");
+  expect(digest).toMatchObject({ sessionId: "s-1a2b3c4d", turns: 0, usage: null });
+  await pending.instance.dispose();
+});
+
 it("offers no tools even when a local provider emits a write tool call", async () => {
   const dir = task("task-a");
   const source = join(dir, "source.txt");
