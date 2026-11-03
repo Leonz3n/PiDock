@@ -111,6 +111,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 1.5.0
         version: 1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(supports-color@7.2.0)(ws@8.21.3)(zod@4.6.5)
+      '@earendil-works/pi-mcp':
+        specifier: 1.5.0
+        version: 1.5.0
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
