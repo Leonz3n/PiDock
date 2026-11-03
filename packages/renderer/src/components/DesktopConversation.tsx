@@ -334,7 +334,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const [unwired, setUnwired] = useState<string | null>(null);
   const [readoutRead, setReadoutRead] = useState<ReadoutRead>({ phase: "reading" });
   const [executionRead, setExecutionRead] = useState<ExecutionRead>({ phase: "reading" });
-  // [Pencil T05] #140 本会话真实的确认记录（`task/listApprovals`）：待批准的工具调用
+  // [Pencil T05] ticket 140 本会话真实的确认记录（`task/listApprovals`）：待批准的工具调用
   // 只有从这里来。`reading`/`failed` 是各自具名的状态，读取失败不渲染成「无待确认」。
   const [approvalRead, setApprovalRead] = useState<ApprovalRead>({ phase: "reading" });
   const [modelOpen, setModelOpen] = useState(false);
@@ -693,7 +693,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     // [#139] The execution readout is per SESSION: switching sessions re-reads it.
   }, [attemptPhase, sessionId, taskId]);
   /**
-   * [Pencil T05] #140 本会话的确认记录。和上面同一条既有读取节奏：挂载、会话切换、
+   * [Pencil T05] ticket 140 本会话的确认记录。和上面同一条既有读取节奏：挂载、会话切换、
    * 回合阶段变化时各读一次，不自己开定时器。批准/拒绝之后由 `resolveToolApproval`
    * 直接重读一次，因此卡片上看到的是 Host 结算后的状态，而不是本页的乐观猜测。
    */
@@ -1030,7 +1030,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       </div>
     </div>
     <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} />
-    {/* [Pencil T05] #140 S01 的审批位：只呈现 Host 已记录的确认，批准/拒绝走
+    {/* [Pencil T05] ticket 140 S01 的审批位：只呈现 Host 已记录的确认，批准/拒绝走
         `task/approve|reject`。没有待确认时也说明「记录为空」，不把空读数当成功。 */}
     <DesktopApprovalCard read={approvalRead} onResolve={resolveToolApproval} />
     {/* [Pencil T07] ticket 142: a created task lands on its `main` conversation entry

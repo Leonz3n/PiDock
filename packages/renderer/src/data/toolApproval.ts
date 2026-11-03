@@ -1,5 +1,5 @@
 /**
- * [Pencil T05] #140 会话工具审批的渲染层规则。
+ * [Pencil T05] ticket 140 会话工具审批的渲染层规则。
  *
  * 审批的**事实**在 Host：`task/listApprovals` 返回本任务（可按会话收窄）真实持久
  * 化的确认记录，`task/approve` / `task/reject` 是唯一的两个决定入口。本模块只
@@ -110,12 +110,12 @@ export function approvalRefusal(approval: TaskApproval): string | null {
  * 三条必须让读者看到的影响，按真实语义分开写：
  * - 批准只授权**这一次**，不授权未来；
  * - 普通目录链接不是副本，写入直接改动原始目录的真实文件；
- * - `#141` 之前跨任务共享写入仍由 Host 拒绝，此处不宣称已跨进程协调。
+ * - `ticket 141` 之前跨任务共享写入仍由 Host 拒绝，此处不宣称已跨进程协调。
  */
 export const APPROVAL_IMPACT_TEXT =
   "批准仅授权这一次操作，不自动授权未来执行；拒绝、过期和停止都不产生副作用。";
 export const SHARED_ROOT_IMPACT_TEXT =
-  "本任务的普通目录链接不是副本：写入直接改动原始目录的真实文件；跨任务共享写入在 #141 完成前仍由 Host 拒绝，界面不宣称已跨进程协调。";
+  "本任务的普通目录链接不是副本：写入直接改动原始目录的真实文件；跨任务共享写入在 ticket 141 完成前仍由 Host 拒绝，界面不宣称已跨进程协调。";
 export const APPROVAL_EXPIRY_TEXT = "有效期由 Host 判定；过期后批准不会执行。";
 
 /**

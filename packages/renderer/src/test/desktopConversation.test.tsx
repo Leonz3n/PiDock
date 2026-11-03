@@ -124,7 +124,7 @@ afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.rest
 
 describe("Desktop SDK conversation", () => {
   it("requires Provider configuration on the conversation entry instead of choosing a model or calling one", async () => {
-    // [Pencil T07] #142: landing on a freshly created task's `main` entry must
+    // [Pencil T07] ticket 142: landing on a freshly created task's `main` entry must
     // not invent a Provider/model selection and must not auto-call a model. The
     // conversation entry stays open; the missing configuration is a named state
     // with the route to 能力管理 → Providers.
@@ -797,7 +797,7 @@ describe("Desktop SDK conversation", () => {
     // execution-status read (`task/executionState`, read only) are not the dialog:
     // confirming is what may write, so no other op — and no write op at all — has
     // left the page here. The exact call set is pinned so a new op cannot slip in.
-    // [Pencil T05] #140 会话内的确认记录读取（`task/listApprovals`）也是只读，
+    // [Pencil T05] ticket 140 会话内的确认记录读取（`task/listApprovals`）也是只读，
     // 与执行读数一起被钉在同一个集合里。
     expect(taskOp.mock.calls.map(([, op]) => op).sort()).toEqual(["task/executionState", "task/listApprovals", "task/sessionList", "task/sessionReadout"]);
     fireEvent.click(screen.getByRole("button", { name: "确认归档" }));

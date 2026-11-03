@@ -12,7 +12,7 @@ import {
 } from "./toolApproval";
 
 /**
- * [Pencil T05] #140 审批的渲染层规则：Host 的记录怎么解析、一次决定发什么、以及
+ * [Pencil T05] ticket 140 审批的渲染层规则：Host 的记录怎么解析、一次决定发什么、以及
  * 哪些读数必须被当成「不可用」而不是「没有」。
  */
 
@@ -36,7 +36,7 @@ function row(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("#140 审批读数解析", () => {
+describe("ticket 140 审批读数解析", () => {
   it("解析本任务的确认记录并保留真实际命令与会话身份", () => {
     const approvals = parseTaskApprovals({ approvals: [row()] }, TASK_ID, SESSION);
     expect(approvals).not.toBeNull();
@@ -77,7 +77,7 @@ describe("#140 审批读数解析", () => {
   });
 });
 
-describe("#140 一次决定只发两个键", () => {
+describe("ticket 140 一次决定只发两个键", () => {
   const pending: TaskApproval = parseTaskApprovals({ approvals: [row()] }, TASK_ID, SESSION)![0];
 
   it("批准发 task/approve，拒绝发 task/reject，载荷恰好是 sessionId/approvalId", () => {
@@ -104,7 +104,7 @@ describe("#140 一次决定只发两个键", () => {
   });
 });
 
-describe("#140 状态与影响文本不夸大", () => {
+describe("ticket 140 状态与影响文本不夸大", () => {
   it("已批准不等于已执行", () => {
     const pending: TaskApproval = parseTaskApprovals({ approvals: [row()] }, TASK_ID, SESSION)![0];
     expect(approvalStatusText(pending)).toBe("待批准");
@@ -113,10 +113,10 @@ describe("#140 状态与影响文本不夸大", () => {
     expect(approvalStatusText({ ...pending, status: "expired" })).toBe("已过期（未执行）");
   });
 
-  it("影响文本写明一次性授权、共享原目录真实影响与 #141 前的跨任务边界", () => {
+  it("影响文本写明一次性授权、共享原目录真实影响与 ticket 141 前的跨任务边界", () => {
     expect(APPROVAL_IMPACT_TEXT).toContain("仅授权这一次");
     expect(SHARED_ROOT_IMPACT_TEXT).toContain("不是副本");
-    expect(SHARED_ROOT_IMPACT_TEXT).toContain("#141");
+    expect(SHARED_ROOT_IMPACT_TEXT).toContain("ticket 141");
   });
 
   it("工具名有中文标签，未知工具名不被改写", () => {

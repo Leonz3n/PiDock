@@ -884,7 +884,7 @@ export async function executionStateThroughShell(input: {
 }
 
 /**
- * [Pencil T05] #140 本会话真实的确认记录：Host 持久化的 `PiApproval` 行（工具、
+ * [Pencil T05] ticket 140 本会话真实的确认记录：Host 持久化的 `PiApproval` 行（工具、
  * 目标、真实际命令、载荷版本、状态、是否已执行）。只读，不改写任何状态；读取
  * 失败是 `{ok:false}` 信封，页面据此显示具名读取失败而不是「无待确认」。
  */
@@ -900,7 +900,7 @@ export async function listApprovalsThroughShell(input: {
 }
 
 /**
- * [Pencil T05] #140 批准或拒绝一次确认。载荷只有 `{sessionId, approvalId}` 两个键：
+ * [Pencil T05] ticket 140 批准或拒绝一次确认。载荷只有 `{sessionId, approvalId}` 两个键：
  * Host 的批准路径会重新校验（路径仍在任务内、目标未变、操作未执行）并最多执行一次，
  * 多带的字段不会被 Host 记录，因此这里不发。
  */

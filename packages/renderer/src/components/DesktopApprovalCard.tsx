@@ -13,7 +13,7 @@ import {
 } from "../data/toolApproval";
 
 /**
- * [Pencil T05] #140 会话内的审批卡（S01 的 `approval-preview` 位置，密度不变、
+ * [Pencil T05] ticket 140 会话内的审批卡（S01 的 `approval-preview` 位置，密度不变、
  * 不新增导航）。
  *
  * 这张卡只呈现 Host 已经记录的确认，并把两个决定交给 `task/approve` /

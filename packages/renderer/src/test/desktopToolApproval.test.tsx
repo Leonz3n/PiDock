@@ -4,7 +4,7 @@ import { DesktopConversation } from "../components/DesktopConversation";
 import type { PidockBridge } from "../data/shellBridge";
 
 /**
- * [Pencil T05] #140 生产对话页的审批卡。
+ * [Pencil T05] ticket 140 生产对话页的审批卡。
  *
  * 事实来源只有 Host：`task/listApprovals` 读本会话真实持久化的确认记录，
  * `task/approve` / `task/reject` 是唯一的两个决定。这里把四件事钉住：
@@ -105,7 +105,7 @@ function mount() {
 
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
-describe("#140 会话内审批卡", () => {
+describe("ticket 140 会话内审批卡", () => {
   it("显示 Host 记录的工具、目标、真实际命令、载荷版本与会话", async () => {
     setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow()] } }) });
     mount();
@@ -114,9 +114,9 @@ describe("#140 会话内审批卡", () => {
     expect(screen.getByTestId("desktop-approval-operation")).toHaveTextContent("pnpm test");
     expect(screen.getByTestId("desktop-approval-version")).toHaveTextContent("v3");
     expect(screen.getByTestId("desktop-approval-session")).toHaveTextContent("main");
-    // 影响与边界必须写出来：一次性授权、共享原目录真实影响、#141 之前的跨任务边界。
+    // 影响与边界必须写出来：一次性授权、共享原目录真实影响、ticket 141 之前的跨任务边界。
     expect(screen.getByTestId("desktop-approval-impact")).toHaveTextContent("仅授权这一次");
-    expect(screen.getByTestId("desktop-approval-shared")).toHaveTextContent("#141");
+    expect(screen.getByTestId("desktop-approval-shared")).toHaveTextContent("ticket 141");
     expect(screen.getByTestId("desktop-approval-expiry")).toHaveTextContent("有效期由 Host 判定");
     expect(screen.getByTestId("desktop-approval-approve")).toBeTruthy();
   });
