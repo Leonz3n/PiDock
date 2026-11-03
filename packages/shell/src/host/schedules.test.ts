@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskSchedules, type SchedulePorts, type ScheduleStartResult } from "./schedules.js";
@@ -13,6 +13,9 @@ import { memoryTaskStore as memoryStore } from "./task-host.js";
 
 const TASK_ID = "task-a";
 const TASK_DIR = join(mkdtempSync(join(tmpdir(), "pidock-s18-")), "task-abcdef12");
+// [Pencil T17] #152: a schedule definition requires its fixed task workspace
+// to exist, even on the in-memory store the legacy wiring tests use.
+mkdirSync(TASK_DIR, { recursive: true });
 const BASE = { name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "检查风险", providerId: "provider-anthropic", model: "claude-sonnet", permission: "default" as const };
 
 function memorySchedules(): { store: { readSchedules(taskDir: string): ScheduleDiskRecord; writeSchedules(taskDir: string, record: ScheduleDiskRecord): void }; record(): ScheduleDiskRecord } {

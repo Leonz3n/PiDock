@@ -126,6 +126,15 @@ export class SdkTurnTransport {
     return [...this.active.values()].some(({ record }) => record.sessionId === sessionId);
   }
 
+  /**
+   * [Pencil T17] #152 whether a NEW turn could be accepted right now. The task
+   * is single-turn: an in-flight turn (or an uncommitted terminal journal) makes
+   * the next trigger refuse instead of queueing behind it.
+   */
+  available(): boolean {
+    return !this.closing && !this.acceptanceUncertain && this.uncommitted === null && !this.starting && this.active.size === 0;
+  }
+
   async start(sessionId: string, requestId: string, text: string, deliver: (event: SdkTextEvent) => void, settled?: (turn: TurnRecord) => void,
     context?: PromptContext): Promise<TurnRecord> {
     if (this.closing) throw new Error("sdk-host-closing");
