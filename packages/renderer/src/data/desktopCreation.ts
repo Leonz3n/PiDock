@@ -13,14 +13,29 @@ export interface CreationIntentView {
   id: string; taskId: string; name: string; projectId: string; taskDir: string; root: string; branch: string;
   state: "pending" | "complete";
   workspaceMode: WorkspaceModeView;
+  kind?: "normal" | "scheduled";
   repos: { id: string; name: string; remote: string; remoteBranch: string; commit: string; repoDir: string; path?: string }[];
   directories: { id: string; name: string; linkName: string; path: string }[];
+}
+/** [Pencil T17] the definition saved with a dedicated scheduled task. */
+export interface CreationScheduleInput {
+  name: string;
+  ruleText: string;
+  timezone: string;
+  prompt: string;
+  providerId: string;
+  model: string;
+  permission: "read" | "default" | "auto";
+  enabled?: boolean;
 }
 export interface CreationInput {
   projectId: string; name: string;
   repositories: { sourceId: string; remote: string; remoteBranch: string }[];
   directoryIds: string[]; sharedWriteConfirmed: boolean; override: boolean;
   workspaceMode: WorkspaceModeView;
+  /** [Pencil T17]: omitted = ordinary task; `scheduled` requires a definition. */
+  kind?: "normal" | "scheduled";
+  schedule?: CreationScheduleInput;
 }
 function parse(value: unknown): CreationIntentView {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("本机任务创建意图返回异常");
@@ -40,7 +55,9 @@ function parse(value: unknown): CreationIntentView {
     ? ((row.repos as unknown[]).length > 0 ? "worktree" : "plain-dirs")
     : row.workspaceMode;
   if (mode !== "worktree" && mode !== "existing-git" && mode !== "plain-dirs") throw new Error("本机任务创建意图返回异常");
-  return { ...(value as CreationIntentView), workspaceMode: mode };
+  const kind = row.kind === undefined ? "normal" : row.kind;
+  if (kind !== "normal" && kind !== "scheduled") throw new Error("本机任务创建意图返回异常");
+  return { ...(value as CreationIntentView), workspaceMode: mode, kind };
 }
 async function request(bridge: PidockBridge, input: Parameters<NonNullable<PidockBridge["createTask"]>>[0]): Promise<unknown> {
   if (typeof bridge.createTask !== "function") throw new Error("桌面壳真实任务创建接口不可用，请重启应用");
