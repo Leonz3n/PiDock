@@ -27,6 +27,7 @@ import { defaultTasksRoot } from "./task-resolver.js";
 import { initializeDefaultTaskRoot } from "./default-root-init.js";
 import { TaskRootIndex } from "./task-root-index.js";
 import { ProjectRegistry } from "./project-registry.js";
+import { resolveTaskVariables, TaskVariableStore, variableEnvironment } from "./workspace-variables.js";
 import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { ProviderProfileStore } from "./provider-profile-store.js";
 import { ProviderSecretStore } from "./provider-secret-store.js";
@@ -173,12 +174,32 @@ async function run(): Promise<void> {
     console.error(`[main] 默认任务根保持待修复状态（${defaultRootInit.reason}）：${defaultRootInit.root}`);
   }
   const taskRoots = new TaskRootIndex(userData, defaultRoot);
+  // [Pencil T09] #144: workspace variables (registry) + task overrides (this
+  // store) are resolved once per Host fork. The resolver is read at fork time,
+  // so a variable edit never rewrites a running Host's environment or turn.
+  const taskVariables = new TaskVariableStore(userData);
+  const taskEnvironment = (taskId: string): Record<string, string> => {
+    try {
+      const association = projects.association(taskId, taskRoots);
+      const project = association.projectId === null ? undefined : projects.get(association.projectId);
+      const resolved = resolveTaskVariables(project?.environment ?? [], taskVariables.list(taskId));
+      if (resolved.refused.length > 0) {
+        // Keys only: a value never reaches a log, even when a legacy row is refused.
+        console.error(`[main] task ${taskId} workspace variables refused: ${resolved.refused.map((row) => row.key).join(", ")}`);
+      }
+      return variableEnvironment(resolved.rows);
+    } catch (error) {
+      console.error(`[main] task ${taskId} variables unavailable: ${errorMessage(error)}`);
+      return {};
+    }
+  };
   const tasks = new PerTaskHostRegistry(
     workspaceId,
-    (ws, task) => createHost(ws, true, task),
+    (ws, task, variables) => createHost(ws, true, task, variables),
     (taskId) => taskRoots.resolve(taskId),
     browsers.registry,
     taskRoots,
+    taskEnvironment,
   );
   const catalog = new ServiceCatalog(userData, serviceCatalogAuthority(taskRoots, projects));
   // [PiDock 03] (#6 盒子 9) repository-level mutual exclusion: ONE app-private
@@ -225,7 +246,7 @@ async function run(): Promise<void> {
     if (tasks) { await tasks.routeTaskOp(request); return; }
     await client.task(request);
   }, process.env, { secrets: providerSecrets, native: nativeModels });
-  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers, catalog, undefined, append);
+  registerIpc(client, views.registry, tasks, projects, taskRoots, undefined, creation, providers, catalog, undefined, append, taskVariables);
   // [PiDock 18] (#20) the Host-borne scheduler: main owns the Host processes, so
   // the driver asks each *running* Host to evaluate its own due triggers. It
   // never forks a Host and never overlaps its own ticks; stop it wherever the

@@ -293,7 +293,7 @@ describe("Desktop production data", () => {
       return { ok: true, payload: { tasks: [], roots: broken } };
     });
     fireEvent.click(screen.getByRole("button", { name: "重试读取默认任务根" }));
-    fireEvent.click(screen.getByRole("button", { name: "本机设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await screen.findByTestId("desktop-settings-page");
     releaseRead?.();
     await waitFor(() => expect(screen.getByRole("button", { name: "重试读取默认任务根" })).toBeEnabled());
@@ -301,7 +301,7 @@ describe("Desktop production data", () => {
     expect(screen.queryByTestId("desktop-project-overview")).toBeNull();
   });
 
-  it("routes 能力管理 and 本机设置 to their real pages instead of a 未接线 placeholder", async () => {
+  it("routes 能力管理 and 设置 to their real pages instead of a 未接线 placeholder", async () => {
     window.pidock = bridge();
     render(<App />);
     expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
@@ -320,10 +320,10 @@ describe("Desktop production data", () => {
     expect(screen.queryByRole("heading", { name: "能力管理 · 未接线" })).toBeNull();
     expect(screen.queryByText(/此入口保留，接入后在此页展示真实状态/)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "本机设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(await screen.findByTestId("desktop-settings-page")).toBeInTheDocument();
     expect(screen.queryByTestId("desktop-capabilities-page")).toBeNull();
-    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("本机设置")).toBeInTheDocument();
+    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("设置")).toBeInTheDocument();
     expect(screen.queryByTestId("desktop-unwired")).toBeNull();
     expect(screen.queryByRole("heading", { name: "本机设置 · 未接线" })).toBeNull();
   });

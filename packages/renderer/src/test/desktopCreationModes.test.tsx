@@ -83,7 +83,8 @@ describe("task workspace mode in the S02 create form", () => {
     fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "Refactor Auth" } });
     expect(screen.getByText(/运行环境变量（继承自工作区）/)).toBeInTheDocument();
     expect(screen.getByText(/NODE_ENV=development/)).toBeInTheDocument();
-    expect(screen.getByText(/已读取 2 个工作区变量（仅展示；任务级注入见 #144）/)).toBeInTheDocument();
+    expect(screen.getByText(/已读取 2 个工作区变量，创建后默认继承；可在任务事实中按单个键局部覆盖（删除覆盖恢复继承）。/)).toBeInTheDocument();
+    expect(screen.getAllByText("工作区").length).toBeGreaterThan(0);
     expect(screen.getByText("origin/feature/refactor-auth")).toBeInTheDocument();
     expect(screen.getByText(/本任务创建不会推送.*#148/)).toBeInTheDocument();
     expect(screen.getByText(/跨任务隔离尚未完成（T06）/)).toBeInTheDocument();
