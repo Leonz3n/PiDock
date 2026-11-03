@@ -166,6 +166,11 @@ describe("[#139] task sessions in the conversation", () => {
     expect(fixture.ops.filter((entry) => entry.op === "task/sessionReadout").map((entry) => entry.payload["sessionId"]))
       .toEqual(["s-1a2b3c4d"]);
     expect(screen.getByTestId("desktop-session-identity")).toHaveTextContent("会话 · 重构认证");
+    // The header names this session's model, reasoning level and context next to
+    // its name; the composer carries the same three as controls.
+    expect(screen.getByTestId("desktop-session-model")).toHaveTextContent("模型 · Large");
+    await waitFor(() => expect(screen.getByTestId("desktop-session-reasoning")).toHaveTextContent("推理 · 高"));
+    await waitFor(() => expect(screen.getByTestId("desktop-session-context")).toHaveTextContent("上下文 1.2k / 200k"));
   });
 
   it("creates a session through the Host and subscribes to the id the Host returned", async () => {

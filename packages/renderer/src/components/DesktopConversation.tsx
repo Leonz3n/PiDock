@@ -890,6 +890,16 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
                 (`sdk-agent-tool-broker.ts` `runWithGate`). What is NOT claimed
                 here is a confirmation per write: under `default` only command
                 and browser tools ask (`pi-session.ts` `previewGate`). */}
+            {/* [#139] The session header names the four facts a reader needs about
+                THIS session: its name (above), the model it is bound to, the
+                reasoning level the model declares, and the context it occupies.
+                The composer carries the same three as controls; here they are
+                read-only, and every unknown stays named as unknown. */}
+            <span data-testid="desktop-session-meta" className="inline-flex min-w-0 flex-wrap items-center gap-2" title={contextTitle}>
+              <span data-testid="desktop-session-model" className="truncate">模型 · {boundModel?.name ?? (sessionList.phase === "read" ? "未绑定" : "未读取")}</span>
+              <span data-testid="desktop-session-reasoning" className="truncate">推理 · {readoutRead.phase !== "read" ? (readoutRead.phase === "reading" ? "未读取" : "读取失败") : reasoningLevels.length === 0 ? "该模型不支持" : thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}</span>
+              <span data-testid="desktop-session-context" className="truncate">{contextLabel}</span>
+            </span>
             <Badge variant="soft">工具由 Host 代执行</Badge>
             <Badge variant="soft">写操作受 Host 写权约束</Badge>
             <Badge>{ready ? "已连接" : invalidated ? "已失效" : "未连接"}</Badge>
