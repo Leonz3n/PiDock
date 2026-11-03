@@ -49,7 +49,13 @@ const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
 const argValue = (name) => (process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : undefined);
 const phase = argValue("--phase") ?? "primary";
 const outDir = resolve(repoRoot, argValue("--out") ?? "docs/evidence/pencil-v1-t19");
-const command = `pnpm --filter @pidock/shell exec electron scripts/electron-pencil-v1-t19-capture.mjs --phase ${phase}`;
+// [T19 remediation] `--only draft` / `--only delivery` run the real creation flow
+// and then exactly one proof block, so a regression can be re-checked in minutes
+// instead of re-walking the whole board matrix. No `--only` = the full run.
+const only = (argValue("--only") ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+const focused = only.length > 0;
+const wanted = (name) => !focused || only.includes(name);
+const command = `pnpm --filter @pidock/shell exec electron scripts/electron-pencil-v1-t19-capture.mjs --phase ${phase}${focused ? ` --only ${only.join(",")}` : ""}`;
 
 // A fixed temp root keeps captured paths stable between the two phases.
 const root = join(tmpdir(), "pidock-pencil-v1-t19-capture");
@@ -252,6 +258,8 @@ async function run() {
     }
     return condition === true;
   };
+  /** `--only` gate: a focused run keeps the real creation flow and one proof. */
+  const maybe = async (enabled, name, body) => { if (enabled) await section(name, body); };
   const recordFinding = (finding) => {
     log.findings.push(finding);
     console.log("T19_FINDING=" + JSON.stringify({ id: finding.id, title: finding.title }));
@@ -417,7 +425,14 @@ async function run() {
   const originalRoute = registry.routeTaskOp.bind(registry);
   registry.routeTaskOp = async (input) => {
     const answer = await originalRoute(input);
-    ops.push({ op: input?.op ?? null, taskId: input?.taskId ?? null, ok: answer?.ok ?? null, error: answer?.ok === false ? String(answer.error) : null });
+    const payload = input?.payload && typeof input.payload === "object" ? input.payload : {};
+    // [T19 remediation] The op log is evidence now: for drafts it records the
+    // exact payload KEYS and the text length (never the text), so "the renderer
+    // never called task/saveDraft" and "the Host refused it" are different rows.
+    const draftWrite = input?.op === "task/saveDraft";
+    ops.push({ op: input?.op ?? null, taskId: input?.taskId ?? null, ok: answer?.ok ?? null,
+      error: answer?.ok === false ? String(answer.error) : null,
+      ...(draftWrite ? { keys: Object.keys(payload).sort(), textLength: typeof payload["text"] === "string" ? payload["text"].length : null } : {}) });
     return answer;
   };
   const sender = () => views.shellView.webContents.id;
@@ -590,6 +605,78 @@ async function run() {
     return runState === undefined || runState === "idle" || runState === "completed" || runState === "failed" || runState === "cancelled" ? (runState ?? "unknown") : null;
   }, `session ${sessionId} idle`);
 
+  /**
+   * [T19 remediation] Type into the real composer with REAL input events.
+   * `Input.insertText` (the previous harness path) only sets the DOM value: the
+   * React onChange handler never runs, so composer state — and therefore
+   * `task/saveDraft` — stays untouched while the screenshot still shows text.
+   * One `char` event per character is what a keyboard produces
+   * (keydown -> input -> onChange). The result names which path was needed.
+   */
+  const typeComposer = async (value) => {
+    await evalJs(`(() => { const el = document.querySelector('textarea[aria-label="消息"]'); if (!el) throw Error('missing composer'); el.focus(); el.select(); return true; })()`);
+    for (const ch of value) views.shellView.webContents.sendInputEvent({ type: "char", keyCode: ch });
+    // The char events are delivered asynchronously to the renderer, so the
+    // immediate read is only diagnostic; the caller waits for the value.
+    const immediate = await composerValue();
+    return { immediate, via: immediate === value ? "char-events (sync)" : "char-events (async)" };
+  };
+  const composerValue = async () => evalJs(`document.querySelector('textarea[aria-label="消息"]')?.value ?? null`);
+  /**
+   * The draft contract, at the only level that matters: type in the real
+   * composer -> the Host receives `task/saveDraft` -> `task/readDraft` returns
+   * the text -> leaving and reopening the task shows it again, and the snapshot
+   * on disk carries it for a Host restart.
+   */
+  const draftProof = async () => {
+    if (!taskId) throw Error("skipped: no task was created (the creation section failed)");
+    stage = "draft:type";
+    await route(taskId, "task/sessionActivate", { sessionId: "main" }).catch(() => undefined);
+    await gotoTask(taskId); await enterConversation(); await wait(1200);
+    if (await evalJs(`!![...document.querySelectorAll('button')].find((el) => el.textContent.trim() === '重新连接')`)) {
+      await click("重新连接");
+      await wait(1500);
+    }
+    const draftText = "T19-DRAFT-未发送的草稿";
+    const readDraftEverywhere = async () => {
+      const active = (await route(taskId, "task/sessionList"))?.activeSessionId ?? "main";
+      for (const sessionId of [...new Set([active, "main"])]) {
+        const answer = await route(taskId, "task/readDraft", { sessionId }).catch(() => ({}));
+        if (answer?.draft?.text === draftText) return { ...answer.draft, sessionId };
+      }
+      return null;
+    };
+    let draftSaved = null;
+    let typedVia = null;
+    for (let attempt = 0; attempt < 6 && draftSaved === null; attempt++) {
+      const typed = await typeComposer(draftText);
+      typedVia = typed.via;
+      await untilMain(async () => (await composerValue()) === draftText, "draft typed");
+      for (let i = 0; i < 60 && draftSaved === null; i++) {
+        draftSaved = await readDraftEverywhere();
+        if (draftSaved === null) await wait(100);
+      }
+    }
+    const draftOps = ops.filter((row) => row.op === "task/saveDraft");
+    // The Host envelope carries no `ok` (main adds it); the honest contract
+    // check is the exact key set the renderer sent and the read-back below.
+    check("typing in the real composer issues task/saveDraft with exactly {sessionId,text}",
+      draftOps.some((row) => JSON.stringify(row.keys) === JSON.stringify(["sessionId", "text"]) && row.textLength === draftText.length && row.error === null),
+      JSON.stringify({ typedVia, draftOps }));
+    check("the Host's own draft store returns the typed text (task/readDraft)", draftSaved !== null,
+      JSON.stringify({ draftSaved, typedVia }));
+    await capture("s01-draft");
+    stage = "draft:reopen";
+    await enterWorkspace();
+    await wait(300);
+    await gotoTask(taskId);
+    await enterConversation();
+    const restored = await untilMain(async () => { const value = await composerValue(); return value === draftText ? value : null; }, "draft restored in the composer");
+    check("leaving and reopening the task restores the same text in the composer", restored === draftText, JSON.stringify({ restored }));
+    const snapshotPath = join(taskDir, "sessions", "main.json");
+    check("the draft is in the Host's persisted session snapshot (so a Host restart reads it back)",
+      existsSync(snapshotPath) && readFileSync(snapshotPath, "utf8").includes(draftText), snapshotPath);
+  };
 
   if (phase === "restart") {
     await section("restart: cold read of the persisted task, sessions and archive state", async () => {
@@ -724,8 +811,13 @@ async function run() {
   });
 
 
+  // ============================================================ focused draft proof
+  if (wanted("draft")) await maybe(focused, "draft: real typing -> Host save -> restore", async () => {
+    await draftProof();
+  });
+
   // ============================================================ provider/model + turn 1
-  await section("session 1: Provider/model, tool approval, Skill, MCP", async () => {
+  await maybe(!focused, "session 1: Provider/model, tool approval, Skill, MCP", async () => {
     if (!taskId) throw Error("skipped: no task was created (the creation section failed)");
     stage = "turn:provider select";
     await providers.select(taskId, profileId, MODEL, undefined, sender());
@@ -794,7 +886,7 @@ async function run() {
 
   // ============================================================ session 2 + drafts
   let sessionTwo = "";
-  await section("session 2 + Host-backed drafts", async () => {
+  await maybe(!focused, "session 2 + Host-backed drafts", async () => {
     if (!taskId) throw Error("skipped: no task was created (the creation section failed)");
     stage = "session2:create";
     await gotoTask(taskId);
@@ -816,46 +908,14 @@ async function run() {
     check("the second session wrote its own SDK transcript, separate from main", files.includes(sessionTwo) && jsonlOf(taskDir, sessionTwo).includes("T19-S2"),
       JSON.stringify({ files, mainBytes: jsonlOf(taskDir).length }));
 
-    // drafts: typed text, navigated away, read back from the Host's draft store.
-    stage = "draft";
-    await route(taskId, "task/sessionActivate", { sessionId: "main" }).catch(() => undefined);
-    await gotoTask(taskId);
-    await enterConversation();
-    await wait(1200);
-    if (await evalJs(`!![...document.querySelectorAll('button')].find((el) => el.textContent.trim() === '重新连接')`)) {
-      await click("重新连接");
-      await wait(1500);
-    }
-    const activeSession = (await route(taskId, "task/sessionList"))?.activeSessionId ?? "main";
-    const draftText = "T19-DRAFT-未发送的草稿";
-    let draftSaved = null;
-    for (let attempt = 0; attempt < 6 && draftSaved === null; attempt++) {
-      await evalJs(`(() => { const el = document.querySelector('textarea[aria-label="消息"]'); if (!el) throw Error('missing composer'); el.focus(); el.select(); return true; })()`);
-      await views.shellView.webContents.debugger.sendCommand("Input.insertText", { text: draftText });
-      await untilMain(async () => (await evalJs(`document.querySelector('textarea[aria-label="消息"]')?.value`)) === draftText, "draft typed");
-      for (let i = 0; i < 40 && draftSaved === null; i++) {
-        for (const sessionId of [activeSession, "main"]) {
-          const answer = await route(taskId, "task/readDraft", { sessionId }).catch(() => ({}));
-          if (answer?.draft?.text === draftText) draftSaved = { ...answer.draft, sessionId };
-        }
-        if (draftSaved === null) await wait(100);
-      }
-    }
-    softCheck("the Host's own draft store received the typed text while the session was live", draftSaved !== null, JSON.stringify({ draftSaved, draftError: await evalJs("document.querySelector('[data-testid=desktop-shell]')?.innerText.slice(0, 200) ?? ''") }));
-    await capture("s01-draft");
-    await enterWorkspace();
-    await wait(300);
-    await gotoTask(taskId);
-    await enterConversation();
-    const restored = await evalJs(`document.querySelector('textarea[aria-label="消息"]')?.value ?? null`);
-    const draftRead = await route(taskId, "task/readDraft", { sessionId: draftSaved?.sessionId ?? activeSession }).catch((error) => ({ error: String(error) }));
-    softCheck("the typed draft is restored in the composer after leaving and reopening the task",
-      restored === draftText, JSON.stringify({ restored, draftRead }));
-    softCheck("the Host's own draft store returns the same text", JSON.stringify(draftRead).includes(draftText), JSON.stringify(draftRead));
+    // [T19 remediation] one shared draft proof: real typing -> Host write -> read
+    // back -> leave/reopen. The old inline copy typed with `Input.insertText`,
+    // which never reached the React composer state, so it could not prove a save.
+    await draftProof();
   });
 
   // ============================================================ delivery (real push)
-  await section("delivery: real commit + real push to the bare origin", async () => {
+  await maybe(wanted("delivery"), "delivery: real commit + real push to the bare origin", async () => {
     if (!taskId) throw Error("skipped: no task was created (the creation section failed)");
     stage = "delivery:dirty";
     for (const [name, dir] of Object.entries(worktreeOf)) {
@@ -873,20 +933,34 @@ async function run() {
     const rows = await evalJs(`[...document.querySelectorAll('[data-testid^=delivery-row-]')].map((el) => el.innerText.replace(/\\s+/g, ' ').trim()).filter((row) => row.includes('本地分支：') && row.includes('推送目标：'))`);
     check("the delivery sheet lists one row per real worktree repository on the task branch", rows.length === 2 && rows.every((row) => row.includes("ticket/")), JSON.stringify(rows));
     stage = "delivery:commit";
+    // [T19 remediation] The old wait matched the sheet's STATIC patch-boundary
+    // sentence ("补丁存在不代表已提交…"), so it returned before the button did
+    // anything and the "still dirty" assertion ran against a click that had not
+    // finished. Wait for the sheet's own per-repo OUTCOME rows instead.
+    const deliveryState = async () => evalJs(`(() => ({
+      overall: document.querySelector('[data-testid=delivery-overall]')?.innerText ?? null,
+      error: document.querySelector('[data-testid=delivery-error]')?.innerText ?? null,
+      outcomes: [...document.querySelectorAll('[data-testid^=delivery-outcome-]')].map((el) => el.innerText.replace(/\\s+/g, ' ').trim()),
+      message: document.querySelector('input[aria-label="提交说明"]')?.value ?? null,
+    }))()`);
     await typeAt("提交说明", "T19 交付验收提交");
-    await wait(200);
+    await untilMain(async () => (await deliveryState()).message === "T19 交付验收提交", "commit message in the sheet");
     await clickTestId("delivery-commit");
-    await untilMain(async () => {
-      const body = await text();
-      return /已提交|no-changes|提交失败/.test(body) ? body : null;
-    }, "delivery commit result");
+    const commitState = await untilMain(async () => {
+      const state = await deliveryState();
+      return state.overall !== null || state.error !== null ? state : null;
+    }, "delivery commit outcome", 300);
+    console.log("T19_DEBUG_DELIVERY_COMMIT=" + JSON.stringify(commitState).slice(0, 1200));
+    check("the sheet's 提交所选仓库 received a real commit message and reported a per-repo outcome",
+      commitState.error === null && commitState.overall !== null && commitState.outcomes.length >= 2,
+      JSON.stringify(commitState).slice(0, 900));
     const branchName = git(Object.values(worktreeOf)[0], ["symbolic-ref", "--short", "HEAD"]);
     let dirtyAfterSheet = Object.entries(worktreeOf).filter(([, dir]) => gitSafe(dir, ["status", "--porcelain", "-uno"]).trim() !== "");
     if (dirtyAfterSheet.length > 0) {
       recordFinding({ id: "delivery-sheet-commit-incomplete", title: "交付面板的「提交所选仓库」没有提交全部仓库工作改动",
-        expected: "点击后逐仓库提交", observed: JSON.stringify(dirtyAfterSheet.map(([name]) => name)),
-        note: "改用与面板按钮相同的 Host 操作 task/deliveryCommit（显式 branch）完成提交，并在 README 标注为 IPC 级补充。" });
-      await route(taskId, "task/deliveryCommit", { branch: branchName }).catch((error) => console.log("T19_NOTE fallback commit:", String(error)));
+        expected: "点击后逐仓库提交", observed: JSON.stringify({ dirty: dirtyAfterSheet.map(([name]) => name), panel: commitState }).slice(0, 900),
+        note: "改用与面板按钮相同的 Host 操作 task/deliveryCommit（带面板里输入的提交说明）完成提交，并在 README 标注为 IPC 级补充。" });
+      await route(taskId, "task/deliveryCommit", { branch: branchName, commitMessage: "T19 交付验收提交" }).catch((error) => console.log("T19_NOTE fallback commit:", String(error)));
       dirtyAfterSheet = [];
     }
     const heads = {};
@@ -895,10 +969,14 @@ async function run() {
       Object.values(worktreeOf).every((dir) => gitSafe(dir, ["status", "--porcelain", "-uno"]).trim() === ""), JSON.stringify(heads));
     stage = "delivery:push";
     await clickTestId("delivery-push");
-    await untilMain(async () => {
-      const body = await text();
-      return /已推送|推送失败|no-changes/.test(body) ? body : null;
-    }, "delivery push result");
+    const pushState = await untilMain(async () => {
+      const state = await deliveryState();
+      return state.error !== null || state.outcomes.some((row) => row.includes("已推送到")) || state.outcomes.some((row) => row.includes("没有待推送")) ? state : null;
+    }, "delivery push outcome", 300);
+    console.log("T19_DEBUG_DELIVERY_PUSH=" + JSON.stringify(pushState).slice(0, 1200));
+    check("the sheet's 推送到目标远程 reported a real per-repo push outcome",
+      pushState.error === null && pushState.outcomes.some((row) => row.includes("已推送到")),
+      JSON.stringify(pushState).slice(0, 900));
     const branch = branchName;
     const remote = repos.alpha.remote;
     let remoteHead = gitSafe(remote, ["rev-parse", `refs/heads/${branch}`]);
@@ -910,8 +988,15 @@ async function run() {
     check("the push really created the task branch in the bare origin with the worktree's HEAD",
       remoteHead === heads["alpha-service"], JSON.stringify({ branch, remoteHead, localHead: heads["alpha-service"] }));
     for (const row of Object.values(repos)) {
-      check(`the source checkout ${row.name} was never pushed to and its HEAD is unchanged`,
-        gitSafe(row.dir, ["rev-parse", "HEAD"]) === row.head && !gitSafe(row.remote, ["for-each-ref", "refs/heads"]).includes("ticket/"), row.dir);
+      // [T19 remediation] The push target IS the shared bare origin, so the task
+      // branch appearing under `refs/heads` there is the SUCCESS condition, not
+      // a leak. What must stay untouched is the source CHECKOUT: same HEAD, still
+      // on main, clean, and none of the task's delivered files.
+      check(`the source checkout ${row.name} stayed on main at its original HEAD and never received the task's files`,
+        gitSafe(row.dir, ["rev-parse", "HEAD"]) === row.head &&
+        gitSafe(row.dir, ["symbolic-ref", "--short", "HEAD"]) === "main" &&
+        gitSafe(row.dir, ["status", "--porcelain", "-uno"]).trim() === "" &&
+        !existsSync(join(row.dir, "T19-DELIVERABLE.md")), JSON.stringify({ dir: row.dir, head: gitSafe(row.dir, ["rev-parse", "HEAD"]) }));
     }
     await capture("s01-delivery-done");
     await views.shellView.webContents.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
@@ -921,7 +1006,7 @@ async function run() {
   });
 
   // ============================================================ archive / cleanup / restore
-  await section("archive: archive-only, cleanup blocked on uncommitted work, cleanup, restore not-ready", async () => {
+  await maybe(!focused, "archive: archive-only, cleanup blocked on uncommitted work, cleanup, restore not-ready", async () => {
     if (!taskId) throw Error("skipped: no task was created (the creation section failed)");
     stage = "archive:uncommitted";
     // Leave a real uncommitted change: the cleanup preview must refuse it by name.
@@ -1011,7 +1096,7 @@ async function run() {
 
   // ============================================================ scheduled task
   let scheduledTaskId = "";
-  await section("scheduled task: dedicated workspace, new session per run, run record", async () => {
+  await maybe(!focused, "scheduled task: dedicated workspace, new session per run, run record", async () => {
     if (!projectId) throw Error("skipped: no workspace (the seed failed)");
     stage = "schedule:create";
     const prepared = await performCreationOperation(creation, { op: "prepare", input: {
@@ -1069,7 +1154,7 @@ async function run() {
   });
 
   // ============================================================ capabilities / settings / boards
-  await section("capabilities: providers, provider form, MCP (real connection test), Skills", async () => {
+  await maybe(!focused, "capabilities: providers, provider form, MCP (real connection test), Skills", async () => {
     if (!taskId) throw Error("skipped: no task (the creation section failed)");
     stage = "capabilities:providers";
     await clickLabelled("能力管理");
@@ -1108,7 +1193,7 @@ async function run() {
     await capture("s09-capabilities-skills");
   });
 
-  await section("settings: appearance day/night/system, language, native paths", async () => {
+  await maybe(!focused, "settings: appearance day/night/system, language, native paths", async () => {
     stage = "settings:open";
     await clickLabelled("设置");
     await until((body) => body.includes("PiDock · 桌面外观") || body.includes("外观偏好"), "settings page");
@@ -1137,7 +1222,7 @@ async function run() {
   });
 
   // ============================================================ remaining boards (day)
-  await section("board coverage: workspace, new workspace dialog, schedules, archive", async () => {
+  await maybe(!focused, "board coverage: workspace, new workspace dialog, schedules, archive", async () => {
     stage = "boards:day";
     await evalJs(`(() => { const el = document.querySelector('[data-appearance-option="light"]'); if (el) el.click(); return true; })()`).catch(() => undefined);
     await wait(300);
