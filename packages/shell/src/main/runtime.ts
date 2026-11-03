@@ -55,6 +55,7 @@ import { performEditorSettingsOperation } from "./external-editor-settings.js";
 // [Pencil T14] #149: PiDock's own appearance document plus Pi's native
 // keybindings/settings as a bounded projection (see `native-preferences.ts`).
 import { performPreferencesOperation } from "./preferences-route.js";
+import { performSkillSourcesOperation } from "./skill-sources-ipc.js";
 import type { SchedulerStateView } from "./schedule-supervision.js";
 import { resolveAgentDir } from "./native-models-config.js";
 import { homedir } from "node:os";
@@ -2420,6 +2421,19 @@ export function registerIpc(
         agentDir: resolveAgentDir(process.env, homedir()),
       });
       return result.ok ? { ok: true as const, payload: result.payload } : { ok: false as const, error: result.error };
+    } catch (error) {
+      if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
+      return { ok: false as const, error: errorMessage(error) };
+    }
+  });
+
+  // [Pencil T16] #151 local Skills sources: main owns the app-private document
+  // and the real-disk scan; the page names only an op, a directory or an id.
+  ipcMain.handle("shell/skillsOp", async (event, payload?: unknown) => {
+    try {
+      registry.requireShellSender(event);
+      const result = performSkillSourcesOperation(payload, app.getPath("userData"));
+      return result.ok ? { ok: true as const, payload: result.view } : { ok: false as const, error: result.error };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
       return { ok: false as const, error: errorMessage(error) };

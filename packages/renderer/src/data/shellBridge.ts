@@ -98,6 +98,12 @@ export interface PidockBridge {
   editorSettingsOp?: (request: EditorSettingsRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /** [Pencil T14] #149 PiDock 外观偏好 + Pi 原生 keybindings 的有界投影（一个通道，四个具名 op）。 */
   preferencesOp?: (request: PreferencesRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * [Pencil T16] #151 local Skills sources: `list` / `add` / `remove` /
+   * `setEnabled`. The page names a directory or a source id only; main owns the
+   * app-private document and the real-disk scan.
+   */
+  skillsOp?: (request: Record<string, unknown>) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /** [Pencil T18] 工单 153 scheduler phase + last unconfirmed quit (read-only). */
   schedulerState?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;

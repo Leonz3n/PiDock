@@ -37,6 +37,10 @@ export const ALLOWED_INVOKE_CHANNELS = [
   // names no path, no file and no unverified Pi action.
   "shell/preferencesOp",
   "shell/providerOp",
+  // [Pencil T16] #151 local Skills sources: one channel, four named ops. The
+  // page names a directory or a source id; main owns the app-private document
+  // and the real-disk scan.
+  "shell/skillsOp",
   // [Pencil T18] #153 the scheduler phase (active / asleep / quitting) plus the
   // last unconfirmed quit. Read-only and main-owned; the page names no field.
   "shell/schedulerState",
