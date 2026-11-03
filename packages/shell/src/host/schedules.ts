@@ -23,6 +23,8 @@
  */
 
 import {
+  reconcileScheduledRuns,
+  wakeSchedulesForward,
   applyScheduleTemplate,
   describeRule,
   highestSequence,
@@ -102,6 +104,13 @@ export interface SchedulePorts {
   credentialPresent?(providerId: string): boolean;
   /** The fixed task workspace still exists and is a directory. */
   directoryPresent?(): boolean;
+  /**
+   * [Pencil T18] #153 what a fresh process can prove about a persisted `running`
+   * record (a live transport in THIS process, a dead one, or unreadable). Absent
+   * = this Host just started, so no earlier process's execution can be present:
+   * `absent` is the honest default and never turns a run into success.
+   */
+  runPresence?(run: ScheduledRunRecord): "live" | "absent" | "unknown";
 }
 
 export interface SaveScheduleInput {
@@ -151,6 +160,42 @@ export class TaskSchedules {
       this.recordState.runs.map((run) => run.runId),
       "run",
     );
+    // [Pencil T18] #153 restart reconciliation: this process owns no transport of
+    // an earlier one, so a persisted `running` record can never be left looking
+    // live (it would suppress every future trigger) nor be claimed as success.
+    this.recoverInterruptedRuns();
+  }
+
+  /** Persisted `running` records a fresh process resolved; empty = nothing in flight. */
+  get recoveredRuns(): readonly { runId: string; result: "interrupted" | "uncertain" }[] {
+    return this.recovered.slice();
+  }
+
+  private recovered: { runId: string; result: "interrupted" | "uncertain" }[] = [];
+
+  private recoverInterruptedRuns(): void {
+    const outcome = reconcileScheduledRuns({
+      record: this.recordState,
+      presence: this.ports.runPresence ?? (() => "absent" as const),
+      resolvedAt: this.ports.now(),
+    });
+    if (outcome.recovered.length === 0) return;
+    this.recovered = outcome.recovered.map((item) => ({ runId: item.runId, result: item.result }));
+    this.recordState = outcome.record;
+    this.persist();
+  }
+
+  /**
+   * [Pencil T18] #153 sleep/wake: move every enabled schedule's plan forward to
+   * the resume instant. Nothing that elapsed during sleep is replayed and no
+   * skipped row is minted for the sleep window.
+   */
+  resumeForward(at: string = this.ports.now()): { moved: string[] } {
+    const outcome = wakeSchedulesForward({ schedules: this.recordState.schedules, resumedAt: at });
+    if (outcome.moved.length === 0) return { moved: [] };
+    this.recordState = { ...this.recordState, schedules: outcome.schedules };
+    this.persist();
+    return { moved: outcome.moved };
   }
 
   /** Copy of the persisted record (read-only callers never mutate the live one). */
@@ -528,6 +573,26 @@ export class TaskSchedules {
     const rule = parseRuleText(schedule.ruleText, schedule.timezone);
     // A confirmation a scheduled run waits on expires at min(24h, next plan) (盒子 4).
     const nextPlan = rule.ok ? nextTriggerAt(rule.rule, { after: input.occurrence }) : null;
+    // [Pencil T18] #153: the trigger record is persisted BEFORE the execution
+    // starts. A crash between the write and the accepted turn therefore leaves an
+    // explicit in-flight record (no session id) that restart reconciliation names
+    // `uncertain`; the occurrence key is already there, so it can never run twice.
+    const intent: ScheduledRunRecord = {
+      runId,
+      scheduleId: schedule.scheduleId,
+      taskId: this.taskId,
+      configVersion: schedule.configVersion,
+      trigger: input.trigger,
+      occurrenceKey: input.occurrenceKey,
+      scheduledAt: input.occurrence,
+      startedAt,
+      result: "running",
+      providerId: schedule.providerId,
+      model: schedule.model,
+      permission: schedule.permission,
+      ruleText: schedule.ruleText,
+    };
+    this.appendRun(intent);
     let result: ScheduleStartResult;
     try {
       result = this.ports.startRun({
@@ -539,38 +604,45 @@ export class TaskSchedules {
     } catch (error) {
       result = { state: "failed", failureReason: error instanceof Error ? error.message : String(error) };
     }
-    const run: ScheduledRunRecord = {
-      runId,
-      scheduleId: schedule.scheduleId,
-      taskId: this.taskId,
-      configVersion: schedule.configVersion,
-      trigger: input.trigger,
-      occurrenceKey: input.occurrenceKey,
-      scheduledAt: input.occurrence,
-      startedAt,
-      // An asynchronous run has not ended yet: `settleRun` is the only place
-      // that may write its terminal state, model and failure code.
-      ...(result.state === "running" ? {} : { endedAt: this.ports.now() }),
-      result: toRunResult(result),
-      providerId: schedule.providerId,
-      model: schedule.model,
-      permission: schedule.permission,
-      ruleText: schedule.ruleText,
-      // A failed run created no usable session; only a started/accepted one is
-      // recorded, with the session id the real trigger really created.
-      ...(result.state === "failed"
-        ? {
-            reason: result.failureReason ?? "执行失败",
-            ...(result.failureCode !== undefined ? { failureCode: result.failureCode } : {}),
-          }
-        : { sessionId: result.sessionId ?? sessionId }),
-    };
-    this.appendRun(run);
+    const run = this.completeStart(runId, result, sessionId);
     // 一次性任务成功触发后自动停用: only a trigger that really started its session
     // disables the rule — a failed run keeps the schedule enabled so the user can
     // repair the config and run the still-planned occurrence.
     if (input.disableAfterRun === true && result.state !== "failed") this.disable(schedule.scheduleId);
     return { ...run };
+  }
+
+  /**
+   * Settle the pre-persisted trigger row with what the real start reported. A
+   * `running` result only binds the session it really created and stays in
+   * flight; every other state ends the row exactly once.
+   */
+  private completeStart(runId: string, result: ScheduleStartResult, plannedSessionId: string): ScheduledRunRecord {
+    const current = this.recordState.runs.find((run) => run.runId === runId);
+    if (current === undefined) throw new Error(`unknown-run: ${runId}`);
+    const settled: ScheduledRunRecord =
+      result.state === "failed"
+        ? {
+            ...current,
+            result: "failed",
+            endedAt: this.ports.now(),
+            reason: result.failureReason ?? "执行失败",
+            ...(result.failureCode !== undefined ? { failureCode: result.failureCode } : {}),
+          }
+        : {
+            ...current,
+            result: toRunResult(result),
+            // The session the real trigger created; the planned id is only used
+            // when the trigger itself reported none (legacy wiring).
+            sessionId: result.sessionId ?? plannedSessionId,
+            ...(result.state === "running" ? {} : { endedAt: this.ports.now() }),
+          };
+    this.recordState = {
+      ...this.recordState,
+      runs: this.recordState.runs.map((run) => (run.runId === runId ? settled : run)),
+    };
+    this.persist();
+    return settled;
   }
 
   /** Auto-disable one schedule without moving the evaluation watermark. */

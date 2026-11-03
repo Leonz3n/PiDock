@@ -93,6 +93,8 @@ export interface PidockBridge {
   editorSettingsOp?: (request: EditorSettingsRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /** [Pencil T14] #149 PiDock 外观偏好 + Pi 原生 keybindings 的有界投影（一个通道，四个具名 op）。 */
   preferencesOp?: (request: PreferencesRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /** [Pencil T18] 工单 153 scheduler phase + last unconfirmed quit (read-only). */
+  schedulerState?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   sdkTurn?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   onSdkTurnEvent?: (listener: (event: unknown) => void) => () => void;
@@ -222,6 +224,47 @@ export type ShellTaskOp =
  * returned (never thrown as rejected invokes): callers branch on `ok` and
  * keep the form with a retry entry instead of crashing.
  */
+/**
+ * [Pencil T18] 工单 153 the scheduler's own phase and the last quit that could not
+ * prove every Host stopped. `null` = not in the shell or the reply is malformed;
+ * the page then shows no banner rather than inventing a state.
+ */
+export async function shellSchedulerState(): Promise<{
+  phase: "active" | "asleep" | "quitting";
+  blockedReason: string | null;
+  sleepingSince?: string;
+  lastQuitUnconfirmed?: { at: string; hosts: string[]; attempts?: number };
+} | null> {
+  const bridge = shellBridge();
+  if (!bridge?.schedulerState) return null;
+  try {
+    const answer = await bridge.schedulerState();
+    if (!answer || answer.ok !== true || !answer.payload || typeof answer.payload !== "object") return null;
+    const payload = answer.payload as Record<string, unknown>;
+    const phase = payload["phase"];
+    if (phase !== "active" && phase !== "asleep" && phase !== "quitting") return null;
+    const report = payload["lastQuitUnconfirmed"];
+    const lastQuitUnconfirmed =
+      report && typeof report === "object" && typeof (report as Record<string, unknown>)["at"] === "string"
+        ? {
+            at: (report as Record<string, unknown>)["at"] as string,
+            hosts: Array.isArray((report as Record<string, unknown>)["hosts"])
+              ? ((report as Record<string, unknown>)["hosts"] as unknown[]).filter((item): item is string => typeof item === "string")
+              : [],
+            ...(typeof (report as Record<string, unknown>)["attempts"] === "number" ? { attempts: (report as Record<string, unknown>)["attempts"] as number } : {}),
+          }
+        : undefined;
+    return {
+      phase,
+      blockedReason: typeof payload["blockedReason"] === "string" ? (payload["blockedReason"] as string) : null,
+      ...(typeof payload["sleepingSince"] === "string" ? { sleepingSince: payload["sleepingSince"] as string } : {}),
+      ...(lastQuitUnconfirmed !== undefined ? { lastQuitUnconfirmed } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function shellTaskOp(
   taskId: string,
   op: ShellTaskOp,

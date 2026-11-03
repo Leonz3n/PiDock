@@ -777,7 +777,86 @@ export interface StoredSchedule {
 }
 
 export type ScheduledRunTrigger = "due" | "manual";
-export type ScheduledRunResult = "running" | "completed" | "awaiting-approval" | "skipped" | "failed";
+/**
+ * `interrupted` / `uncertain` are the only states a restart may give a persisted
+ * `running` record ([Pencil T18] #153): a dead execution is named interrupted,
+ * an unprovable one (write landed but the start was never confirmed, or the
+ * presence cannot be read) is named uncertain. Neither is ever success.
+ */
+export type ScheduledRunResult = "running" | "completed" | "awaiting-approval" | "skipped" | "failed" | "interrupted" | "uncertain";
+
+/** What a fresh process can prove about an earlier `running` record. */
+export type ScheduleRunPresence = "live" | "absent" | "unknown";
+
+/** One persisted `running` record the restart resolved (never a success). */
+export interface ScheduleRecoveredRun {
+  runId: string;
+  scheduleId: string;
+  result: "interrupted" | "uncertain";
+  failureCode: string;
+  reason: string;
+}
+
+/**
+ * Restart reconciliation ([Pencil T18] #153): every persisted `running` record is
+ * compared with what a fresh process can really observe. A still-present
+ * execution keeps running; a dead one becomes `interrupted`; anything unprovable
+ * becomes `uncertain` with a named reason. The occurrence key is preserved, so
+ * the next evaluation can never start the same occurrence again, and no record
+ * is ever turned into `completed`.
+ */
+export function reconcileScheduledRuns(input: {
+  record: ScheduleDiskRecord;
+  presence: (run: ScheduledRunRecord) => ScheduleRunPresence;
+  resolvedAt: string;
+}): { record: ScheduleDiskRecord; recovered: ScheduleRecoveredRun[] } {
+  const recovered: ScheduleRecoveredRun[] = [];
+  const runs = input.record.runs.map((run) => {
+    if (run.result !== "running") return run;
+    const presence = input.presence(run);
+    if (presence === "live") return run;
+    // No session id means the trigger record was written but the start was never
+    // confirmed: whether a session exists cannot be proven, so it is uncertain.
+    const bound = run.sessionId !== undefined;
+    const result: "interrupted" | "uncertain" = presence === "absent" && bound ? "interrupted" : "uncertain";
+    const failureCode = result === "interrupted" ? "execution-interrupted" : bound ? "execution-presence-unknown" : "trigger-unconfirmed";
+    const reason =
+      result === "interrupted"
+        ? "执行已中断：上次进程已不在，未完成，不记为成功"
+        : bound
+          ? "执行状态不确定：无法确认上次执行是否仍在运行，重启后不重复触发"
+          : "触发状态不确定：触发记录已写入但会话启动未确认，重启后不重复触发";
+    const settled: ScheduledRunRecord = { ...run, result, endedAt: input.resolvedAt, failureCode, reason };
+    recovered.push({ runId: run.runId, scheduleId: run.scheduleId, result, failureCode, reason });
+    return settled;
+  });
+  return { record: recovered.length === 0 ? input.record : { ...input.record, runs }, recovered };
+}
+
+/**
+ * Sleep / wake ([Pencil T18] #153): waking never backfills. Every enabled schedule
+ * moves its evaluation watermark to the resume instant and recomputes its plan
+ * forward, so the next trigger is a future occurrence — nothing between sleep
+ * and wake runs now and no skipped row is minted for the sleep window.
+ */
+export function wakeSchedulesForward(input: {
+  schedules: readonly StoredSchedule[];
+  resumedAt: string;
+}): { schedules: StoredSchedule[]; moved: string[] } {
+  const moved: string[] = [];
+  const schedules = input.schedules.map((schedule) => {
+    if (!schedule.enabled) return schedule;
+    moved.push(schedule.scheduleId);
+    const parsed = parseRuleText(schedule.ruleText, schedule.timezone);
+    return {
+      ...schedule,
+      lastEvaluatedAt: input.resumedAt,
+      nextRunAt: parsed.ok ? nextTriggerAt(parsed.rule, { after: input.resumedAt }) : null,
+      updatedAt: input.resumedAt,
+    };
+  });
+  return { schedules, moved };
+}
 
 /**
  * One trigger result (盒子 4 定时执行是独立记录): the schedule config version it

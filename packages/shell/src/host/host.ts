@@ -2827,6 +2827,19 @@ async function performTaskOp(
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
       }
+      case "task/scheduleWake": {
+        // [Pencil T18] #153 sleep/wake: main observed the machine resume and asks
+        // each running Host to plan its enabled schedules forward. No catch-up,
+        // no skipped row for the sleep window, no session created here.
+        const host = taskHostFor(taskId);
+        if ("error" in host) return { ok: false, error: host.error };
+        try {
+          const at = typeof record["at"] === "string" ? (record["at"] as string) : new Date().toISOString();
+          return { ok: true, payload: { ...host.resumeSchedulesAfterWake(at), at } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
       case "task/scheduleRuns": {
         const host = taskHostFor(taskId);
         if ("error" in host) return { ok: false, error: host.error };

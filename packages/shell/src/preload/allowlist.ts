@@ -37,6 +37,9 @@ export const ALLOWED_INVOKE_CHANNELS = [
   // names no path, no file and no unverified Pi action.
   "shell/preferencesOp",
   "shell/providerOp",
+  // [Pencil T18] #153 the scheduler phase (active / asleep / quitting) plus the
+  // last unconfirmed quit. Read-only and main-owned; the page names no field.
+  "shell/schedulerState",
   "shell/taskOp",
   "shell/sdkTurn",
 ] as const;

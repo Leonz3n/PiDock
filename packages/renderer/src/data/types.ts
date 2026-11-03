@@ -535,7 +535,7 @@ export type ScheduledRun = {
    * `running` is an accepted SDK turn that has not settled yet — neither is a
    * finished run, and neither is reported as success.
    */
-  result: "running" | "completed" | "awaiting-approval" | "skipped" | "failed";
+  result: "running" | "completed" | "awaiting-approval" | "skipped" | "failed" | "interrupted" | "uncertain";
   /** [Pencil T17] the model that actually served the run (absent = never started). */
   actualModel?: string;
   /** Named failure code (`credential-missing`, `directory-missing`, …). */
