@@ -170,6 +170,12 @@ export type ShellTaskOp =
   | "task/filePreview"
   | "task/fileDiff"
   | "task/deliveryInfo"
+  // [Pencil T13] #148 explicit Git delivery (settings, preview, commit, push).
+  | "task/deliverySettings"
+  | "task/saveDeliverySettings"
+  | "task/deliveryPlan"
+  | "task/deliveryCommit"
+  | "task/deliveryPush"
   | "task/planTerminal"
   | "task/terminalProfiles"
   | "task/terminalControl"
@@ -1013,6 +1019,71 @@ export async function fileDiffThroughShell(input: {
 export async function deliveryInfoThroughShell(input: { taskId: string; rootId: string }): Promise<ShellTaskOpResult> {
   try {
     return await shellTaskOp(input.taskId, "task/deliveryInfo", { rootId: input.rootId });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 the saved branch convention + target remote (a read). */
+export async function deliverySettingsThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/deliverySettings");
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 save both settings; an invalid pair is named, not coerced. */
+export async function saveDeliverySettingsThroughShell(input: {
+  taskId: string;
+  branchTemplate: string;
+  remote: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/saveDeliverySettings", {
+      branchTemplate: input.branchTemplate,
+      remote: input.remote,
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 the per-repo branch + push target preview (a read). */
+export async function deliveryPlanThroughShell(taskId: string): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(taskId, "task/deliveryPlan");
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 explicit commit, one named repository set at a time. */
+export async function deliveryCommitThroughShell(input: {
+  taskId: string;
+  branch: string;
+  commitMessage: string;
+  repoIds?: string[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { branch: input.branch, commitMessage: input.commitMessage };
+  if (input.repoIds) payload["repoIds"] = input.repoIds;
+  try {
+    return await shellTaskOp(input.taskId, "task/deliveryCommit", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** [Pencil T13] #148 explicit push; never a force push, never implicit. */
+export async function deliveryPushThroughShell(input: {
+  taskId: string;
+  branch: string;
+  repoIds?: string[];
+}): Promise<ShellTaskOpResult> {
+  const payload: Record<string, unknown> = { branch: input.branch };
+  if (input.repoIds) payload["repoIds"] = input.repoIds;
+  try {
+    return await shellTaskOp(input.taskId, "task/deliveryPush", payload);
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

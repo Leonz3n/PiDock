@@ -23,6 +23,7 @@ import {
 } from "../data/directories";
 import { isShellConnected, prepareStatusThroughShell, provisionTaskThroughShell, shellTaskPrepareResume } from "../data/shellBridge";
 import { TaskPrepareRecovery } from "./TaskPrepareRecovery";
+import { DesktopDeliverySheet } from "./DesktopDeliverySheet";
 import {
   CONTEXT_WINDOW_SOURCE_LABEL,
   DEFAULT_MODEL_CONTEXT_WINDOW,
@@ -3332,70 +3333,18 @@ function RepoBindingModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Prototype `delivery` + `delivery-preview`: per-repository review and commit draft. */
+/**
+ * [Pencil T13] #148 S07 `CbsS5` / S10 `d0dQe`: the delivery sheet.
+ *
+ * The prototype body that "simulated" a commit draft is gone: the sheet reads
+ * the saved branch convention + target remote from the Host, previews one row
+ * per real worktree repository, and only commits/pushes when the user clicks
+ * the matching button. See `DesktopDeliverySheet` for the honesty rules.
+ */
 function DeliveryModal({ task, onClose }: { task: Task; onClose: () => void }) {
-  const workspace = useHostStore((state) => state.workspace);
-  const pushToast = useUiStore((state) => state.pushToast);
-  const repositories = (workspace?.repositories ?? []).filter((repository) => task.repos.includes(repository.id));
-  const [message, setMessage] = useState("");
-  const [preview, setPreview] = useState(false);
   return (
-    <Modal
-      title={preview ? "提交变更" : "审阅与交付"}
-      onClose={onClose}
-      footer={
-        <Button
-          size="sm"
-          variant="primary"
-          onClick={() => {
-            if (!preview) {
-              if (!message.trim()) {
-                pushToast("请填写提交说明");
-                return;
-              }
-              setPreview(true);
-              return;
-            }
-            onClose();
-            pushToast("已模拟提交草稿；此原型不连接 Git，未提交任何变更");
-          }}
-        >
-          {preview ? "确认提交草稿" : "查看提交面板示意"}
-        </Button>
-      }
-    >
-      {preview ? (
-        <>
-          <p className="text-xs text-muted">仓库、目标分支、变更文件和验证记录会在此呈现。跨仓库交付失败需保留逐仓库结果。</p>
-          <p className="mt-2 text-xs text-ink">
-            提交说明：{message} · 目标分支 task/{task.workspaceKey} · {repositories.length} 个仓库
-          </p>
-        </>
-      ) : (
-        <>
-          <p className="text-xs text-muted">各仓库分别审阅。提交、推送和合并需要明确触发。此原型不连接 Git。</p>
-          <div className="mt-2 flex flex-col gap-2">
-            {repositories.map((repository) => (
-              <div key={repository.id} className="rounded-md border border-line px-3 py-2 text-xs">
-                <strong className="block font-mono text-[11px] text-ink">{repository.name}</strong>
-                <small className="text-muted">本地路径 {repository.localPath ?? "未绑定"} · 待审阅变更</small>
-              </div>
-            ))}
-            {repositories.length === 0 ? <EmptyState>本任务没有 Git 仓库，交付不适用。</EmptyState> : null}
-          </div>
-          {repositories.length > 0 ? (
-            <Field label="提交说明">
-              <input
-                aria-label="提交说明"
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                className="w-full rounded-md border border-line px-2 py-1.5 text-xs"
-                placeholder="描述当前任务的代码变更"
-              />
-            </Field>
-          ) : null}
-        </>
-      )}
+    <Modal title="审阅与交付" onClose={onClose}>
+      <DesktopDeliverySheet taskId={task.id} />
     </Modal>
   );
 }

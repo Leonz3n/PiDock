@@ -56,6 +56,18 @@ import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import type { PromptContextEntry } from "./sdk-prompt-context.js";
 import { availableReasoningLevels, validateExplicitTextProvider } from "./explicit-text-provider.js";
 import { SESSION_PERMISSIONS, SESSION_THINKING_LEVELS, type SessionIndex, type SessionThinkingLevel } from "./session-index.js";
+import {
+  commitRepos,
+  planDelivery,
+  pullRequestGuidance,
+  pushRepos,
+  readCurrentBranch,
+  readDeliverySettings,
+  readRemoteUrl,
+  runGit,
+  saveDeliverySettings,
+  type RepoPreviewInput,
+} from "../main/git-delivery.js";
 import { sessionCreatedPayload, sessionListPayload } from "./session-list-payload.js";
 import { switchSessionModel } from "./session-switch.js";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -289,6 +301,61 @@ function workspaceFilesFor(taskId: string): TaskWorkspaceFiles | { error: string
     workspaceFiles = new TaskWorkspaceFiles(host.taskId, host.taskDir, host.store, undefined, () => [...privateSecretValues], protectedPaths());
   }
   return workspaceFiles;
+}
+
+/** [Pencil T13] #148 the app-private settings directory this Host was given. */
+function protectedProfile(): string {
+  return process.env["PIDOCK_PROTECTED_PROFILE"] ?? "";
+}
+
+/**
+ * [Pencil T13] #148 the real repositories a delivery would touch: this task's
+ * worktree roots only (an existing-Git shared checkout has no task branch, and
+ * a plain link is not a repository). Branch and remote URL are read from the
+ * checkout itself so the preview cannot drift from what git would do.
+ */
+function deliveryRowsFor(
+  taskId: string,
+): { taskTitle: string; repos: RepoPreviewInput[]; settings: ReturnType<typeof readDeliverySettings> } | { error: string } {
+  const files = workspaceFilesFor(taskId);
+  if ("error" in files) return { error: files.error };
+  const host = taskHostFor(taskId);
+  if ("error" in host) return { error: host.error };
+  const settings = readDeliverySettings(protectedProfile());
+  const repos = files
+    .roots()
+    .filter((root) => root.kind === "worktree")
+    .map((root) => ({
+      repoId: root.repoDir ?? root.id,
+      name: root.label,
+      repoPath: root.path,
+      currentBranch: readCurrentBranch(runGit, root.path),
+      remoteUrl: readRemoteUrl(runGit, root.path, settings.remote) ?? undefined,
+    }));
+  return { taskTitle: host.store.readTask(host.taskDir)?.name ?? taskId, repos, settings };
+}
+
+/**
+ * [Pencil T13] #148 turn the previewed rows into commit/push targets for the
+ * repositories the user actually selected. The branch comes from the explicit
+ * action (the one the sheet showed); a repository that is not on it is refused
+ * by `commitOneRepo` instead of being silently switched.
+ */
+function deliveryTargets(
+  repos: readonly RepoPreviewInput[],
+  record: Record<string, unknown>,
+): { targets: { repoId: string; repoPath: string; branch: string; remote: string }[] } | { error: string } {
+  const branch = String(record["branch"] ?? "");
+  const remote = readDeliverySettings(protectedProfile()).remote;
+  const selected = record["repoIds"];
+  const ids = Array.isArray(selected) ? selected.map(String) : repos.map((repo) => repo.repoId);
+  const unknown = ids.filter((id) => !repos.some((repo) => repo.repoId === id));
+  if (unknown.length > 0) return { error: `unknown-repo: 本任务没有仓库 ${unknown.join(",")}` };
+  const targets = repos
+    .filter((repo) => ids.includes(repo.repoId))
+    .map((repo) => ({ repoId: repo.repoId, repoPath: repo.repoPath, branch, remote }));
+  if (targets.length === 0) return { error: "no-repositories: 没有可交付的 Git 仓库" };
+  return { targets };
 }
 
 function terminalRegistryFor(taskId: string): TaskTerminalRegistry | { error: string } {
@@ -2229,6 +2296,65 @@ async function performTaskOp(
         if ("error" in files) return { ok: false, error: files.error };
         const result = files.delivery({ rootId: record["rootId"] });
         return result.ok ? { ok: true, payload: { target: result.target } } : { ok: false, error: result.error };
+      }
+      // [Pencil T13] #148 the saved branch convention + target remote. Read and
+      // write are app-private settings documents; nothing here touches a repo.
+      case "task/deliverySettings": {
+        const userData = protectedProfile();
+        if (userData.length === 0) return { ok: false, error: "git-delivery-settings-unavailable: 应用数据目录未知，无法读取交付设置" };
+        return { ok: true, payload: { settings: readDeliverySettings(userData) } };
+      }
+      case "task/saveDeliverySettings": {
+        const userData = protectedProfile();
+        if (userData.length === 0) return { ok: false, error: "git-delivery-settings-unavailable: 应用数据目录未知，无法保存交付设置" };
+        const saved = saveDeliverySettings(userData, { branchTemplate: record["branchTemplate"], remote: record["remote"] });
+        return saved.ok ? { ok: true, payload: { settings: saved.settings } } : { ok: false, error: `${saved.code}: ${saved.message}` };
+      }
+      // [Pencil T13] #148 the per-repo preview the create-task form and the
+      // delivery sheet show BEFORE anything is created or pushed.
+      case "task/deliveryPlan": {
+        const rows = deliveryRowsFor(taskId);
+        if ("error" in rows) return { ok: false, error: rows.error };
+        const plan = planDelivery({ taskId, taskTitle: rows.taskTitle, settings: rows.settings, repos: rows.repos });
+        return { ok: true, payload: { plan } };
+      }
+      // [Pencil T13] #148 explicit user actions. Both are per-repository and
+      // both run under the #141 real-path cross-task lock.
+      case "task/deliveryCommit": {
+        const rows = deliveryRowsFor(taskId);
+        if ("error" in rows) return { ok: false, error: rows.error };
+        const targets = deliveryTargets(rows.repos, record);
+        if ("error" in targets) return { ok: false, error: targets.error };
+        const userData = protectedProfile();
+        const result = commitRepos({
+          run: runGit,
+          repos: targets.targets,
+          message: String(record["commitMessage"] ?? ""),
+          ...(userData.length > 0 ? { lock: { userData, taskId, label: "任务交付提交" } } : {}),
+        });
+        return { ok: true, payload: { ...result, branch: String(record["branch"]), remote: rows.settings.remote } };
+      }
+      case "task/deliveryPush": {
+        const rows = deliveryRowsFor(taskId);
+        if ("error" in rows) return { ok: false, error: rows.error };
+        const targets = deliveryTargets(rows.repos, record);
+        if ("error" in targets) return { ok: false, error: targets.error };
+        const userData = protectedProfile();
+        const result = pushRepos({
+          run: runGit,
+          repos: targets.targets,
+          ...(userData.length > 0 ? { lock: { userData, taskId, label: "任务交付推送" } } : {}),
+        });
+        // PR guidance follows the ACTUAL push target of each repository, and
+        // never claims a PR exists (see `pullRequestGuidance`).
+        const pr = result.outcomes.map((entry) => ({
+          repoId: entry.repoId,
+          ...pullRequestGuidance({
+            remoteUrl: rows.repos.find((repo) => repo.repoId === entry.repoId)?.remoteUrl ?? null,
+            branch: entry.branch,
+          }),
+        }));
+        return { ok: true, payload: { ...result, pr, branch: String(record["branch"]), remote: rows.settings.remote } };
       }
       // [PiDock 10] (#15 box 28) 从任务打开外部编辑器. The Host is the actor: it
       // resolves the same root the file tree shows, re-probes the user's

@@ -33,7 +33,8 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { WorktreeMetadataLock } from "./worktree-metadata-lock.js";
 import { normalizeScopePath } from "../host/path-coordination.js";
 import { isSafeTaskBranchRef } from "./task-provision.js";
@@ -234,7 +235,6 @@ export function planDelivery(input: {
   repos: readonly RepoPreviewInput[];
 }): DeliveryPlan {
   const template = typeof input.settings.branchTemplate === "string" ? input.settings.branchTemplate : "";
-  const remote = typeof input.settings.remote === "string" ? input.settings.remote : "";
   const slug = slugifyTaskTitle(input.taskTitle);
   const branchCheck = previewBranchName(template, { taskId: input.taskId, title: input.taskTitle });
   const remoteCheck = validateRemoteName(input.settings.remote);
@@ -266,7 +266,7 @@ export function planDelivery(input: {
     if (branch.length > 0 && !isSafeTaskBranchRef(branch)) {
       return { ...row, branch: "", pushTarget: "", problem: { code: "branch-name-unsafe" as const, message: `仓库已在的分支 ${branch} 不是合法的 git 分支名` } };
     }
-    if (repo.currentBranch && repo.currentBranch.length > 0 && branch !== branchCheck.value) {
+    if (repo.currentBranch && repo.currentBranch.length > 0 && branchCheck.ok && branch !== branchCheck.value) {
       // Honest note: the checkout is already on another branch, so the commit
       // would land there. The UI shows the actual one instead of the template's.
       return { ...row, problem: null };
@@ -684,7 +684,7 @@ export function pullRequestGuidance(input: { remoteUrl: string | null; branch: s
       text: "无法从推送目标解析出 PR 地址：请在远端仓库手动打开创建 PR。",
     };
   }
-  const { host, path, webUrl } = identity;
+  const { host, webUrl } = identity;
   const encodedBranch = encodeURIComponent(branch);
   const encodedBase = encodeURIComponent(base);
   let url: string | null = null;
@@ -748,4 +748,64 @@ export function exportRepoPatch(run: GitRunner, target: { repoId: string; repoPa
 /** Stable hex digest of a repo path, for app-private settings/audit keys. */
 export function repoKeyDigest(repoPath: string): string {
   return createHash("sha256").update(normalizeScopePath(repoPath)).digest("hex").slice(0, 16);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Persisted workspace settings (app-private, never inside a repository)      */
+/* -------------------------------------------------------------------------- */
+
+/** App-private settings document under `userData`; never a repo or `.git` path. */
+export const GIT_DELIVERY_SETTINGS_FILE = "git-delivery-settings.json";
+
+export interface StoredDeliverySettings {
+  branchTemplate: string;
+  remote: string;
+  savedAt: string | null;
+}
+
+/**
+ * Read the saved settings. An absent document returns empty strings — the UI
+ * shows "未设置" instead of a hidden default, and every operation stays
+ * refused until the user saves a valid convention.
+ */
+export function readDeliverySettings(userData: string): StoredDeliverySettings {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(userData, GIT_DELIVERY_SETTINGS_FILE), "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { branchTemplate: "", remote: "", savedAt: null };
+    const row = parsed as Record<string, unknown>;
+    return {
+      branchTemplate: typeof row["branchTemplate"] === "string" ? row["branchTemplate"] : "",
+      remote: typeof row["remote"] === "string" ? row["remote"] : "",
+      savedAt: typeof row["savedAt"] === "string" ? row["savedAt"] : null,
+    };
+  } catch {
+    return { branchTemplate: "", remote: "", savedAt: null };
+  }
+}
+
+/** Save both settings only when both validate; an invalid pair is named. */
+export function saveDeliverySettings(
+  userData: string,
+  input: { branchTemplate: unknown; remote: unknown; now?: Date },
+): { ok: true; settings: StoredDeliverySettings } | { ok: false; code: GitDeliveryProblem; message: string } {
+  const template = validateBranchTemplate(input.branchTemplate);
+  if (!template.ok) return template;
+  const remote = validateRemoteName(input.remote);
+  if (!remote.ok) return remote;
+  const settings: StoredDeliverySettings = {
+    branchTemplate: template.value,
+    remote: remote.value,
+    savedAt: (input.now ?? new Date()).toISOString(),
+  };
+  try {
+    mkdirSync(userData, { recursive: true });
+    writeFileSync(join(userData, GIT_DELIVERY_SETTINGS_FILE), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  } catch (error) {
+    return {
+      ok: false,
+      code: "git-unavailable",
+      message: `git-delivery-settings-unwritable: 无法写入应用数据目录下的交付设置（${error instanceof Error ? error.message : String(error)}）`,
+    };
+  }
+  return { ok: true, settings };
 }
