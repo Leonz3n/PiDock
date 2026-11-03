@@ -15,7 +15,7 @@ import {
 import type { PidockBridge } from "../data/shellBridge";
 
 /**
- * [Pencil T16] #151 · S09 能力管理 → Skills.
+ * [Pencil T16] Pencil T16 · S09 能力管理 → Skills.
  *
  * Every row is main's real-disk scan (`shell/skillsOp {op:"list"}`): a source
  * directory the user added, its named state (`ok` / `disabled` / `missing` /
@@ -33,7 +33,7 @@ import type { PidockBridge } from "../data/shellBridge";
 const BUTTON = "inline-flex min-h-6 items-center gap-1 rounded-[3px] border border-line bg-paper px-1.5 text-[10px] text-ink hover:bg-bg disabled:opacity-50";
 const INPUT = "min-w-0 rounded-[3px] border border-line bg-paper px-1.5 py-1 font-mono text-[10px] text-ink outline-none focus:border-accent";
 const SOURCE_TONE: Record<SkillSourceScanView["status"], string> = {
-  ok: "border-[#b8d6c2] text-[#2f6b46]",
+  ok: "border-line text-accent",
   disabled: "border-line text-muted",
   missing: "border-orange/45 text-orange",
   unreadable: "border-orange/45 text-orange",

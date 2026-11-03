@@ -43,10 +43,11 @@ export function CapabilitiesPage() {
   // No session is attached to this page, so the tier shown is the standard
   // `default` session tier: it is the tier where a capability asking for more
   // is visibly capped, and the row says which tier it assumes.
-  // [Pencil T16] #151: the Skills tab is the real local-source pane, not a
-  // fixture row list. 全部 keeps the summary of every capability kind, but a
-  // skill row there says where it comes from instead of pretending it loaded.
-  const rows = capabilityRows(capabilities, "default").filter((row) => (kind === "all" || row.capability.kind === kind) && row.capability.kind !== "skill");
+  // [Pencil T16] Pencil T16: the Skills TAB is the real local-source pane, not a
+  // fixture row list. 全部 keeps every declared capability row (#18) so the
+  // source/version summary stays one list, while a skill's real load state is
+  // reported by the Skills pane's own scan instead of a static card.
+  const rows = capabilityRows(capabilities, "default").filter((row) => kind === "all" || row.capability.kind === kind);
   const addKind: "skill" | "extension" | "package" | "mcp" = kind === "all" ? "skill" : kind;
   const addLabel = (KINDS.find((entry) => entry.value === kind) ?? KINDS[1]).addLabel;
   const enabledOf = (entries: readonly Capability[]) => `${entries.filter((entry) => isCapabilityEnabled(entry)).length} / ${entries.length} 已启用`;

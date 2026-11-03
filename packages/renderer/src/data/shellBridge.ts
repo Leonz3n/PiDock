@@ -99,7 +99,7 @@ export interface PidockBridge {
   /** [Pencil T14] #149 PiDock 外观偏好 + Pi 原生 keybindings 的有界投影（一个通道，四个具名 op）。 */
   preferencesOp?: (request: PreferencesRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
-   * [Pencil T16] #151 local Skills sources: `list` / `add` / `remove` /
+   * [Pencil T16] Pencil T16 local Skills sources: `list` / `add` / `remove` /
    * `setEnabled`. The page names a directory or a source id only; main owns the
    * app-private document and the real-disk scan.
    */

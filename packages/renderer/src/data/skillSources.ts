@@ -1,5 +1,5 @@
 /**
- * Renderer view of the local Skills sources ([Pencil T16] #151).
+ * Renderer view of the local Skills sources ([Pencil T16] Pencil T16).
  *
  * The shapes mirror `packages/shell/src/host/skill-sources.ts`: every row the
  * pane shows came from main's real-disk scan, and every action is one named

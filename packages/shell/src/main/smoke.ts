@@ -51,6 +51,8 @@ export const SHELL_BRIDGE_SURFACE = [
   "schedulerState",
   "sdkTurn",
   "serviceCatalogOp",
+  // [Pencil T16] local Skills sources (list / add / remove / setEnabled).
+  "skillsOp",
   "taskOp",
 ] as const;
 

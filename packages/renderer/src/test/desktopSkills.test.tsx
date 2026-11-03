@@ -1,5 +1,5 @@
 /**
- * [Pencil T16] #151 · S09 Skills pane states.
+ * [Pencil T16] Pencil T16 · S09 Skills pane states.
  *
  * jsdom has no layout, so the 900/560 contract is asserted on the tier classes
  * the pane uses (`below-mid` = max-width 960px, `below-stack` = max-width
@@ -69,7 +69,7 @@ function harness(initial: SkillSourcesView) {
   return { bridge, skillsOp };
 }
 
-describe("Skills pane (S09 · #151)", () => {
+describe("Skills pane (S09 · Pencil T16)", () => {
   it("renders the real scan: descriptions, source paths, resources, duplicates and named failures", async () => {
     const { bridge } = harness(view());
     const { container } = render(<DesktopSkills bridge={bridge} />);

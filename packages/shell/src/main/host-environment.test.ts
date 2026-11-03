@@ -47,6 +47,9 @@ describe("createHost startup environment", () => {
       PATH: "/usr/bin:/bin", HOME: root, TMPDIR: root,
       PIDOCK_WORKSPACE_ID: "workspace", PIDOCK_TASK_ID: "task-a", PIDOCK_TASK_DIR: join(root, "task-a"),
       PIDOCK_PROTECTED_PROFILE: "/synthetic-profile", PIDOCK_DEFAULT_ROOT: root,
+      // [Pencil T16] the Skills document main derives from the protected
+      // profile (never from a payload or the ambient environment).
+      PIDOCK_SKILL_SOURCES_FILE: "/synthetic-profile/skill-sources.json",
       // A bound task Host must load the strict service-owner inventory before
       // it can serve anything; this marker is the only extra task-host key.
       PIDOCK_SERVICE_OWNER_REQUIRED: "1",
@@ -73,6 +76,7 @@ describe("createHost startup environment", () => {
       PATH: "/usr/bin:/bin", HOME: root, TMPDIR: root,
       PIDOCK_WORKSPACE_ID: "workspace",
       PIDOCK_PROTECTED_PROFILE: "/synthetic-profile", PIDOCK_DEFAULT_ROOT: root,
+      PIDOCK_SKILL_SOURCES_FILE: "/synthetic-profile/skill-sources.json",
     });
   });
 
