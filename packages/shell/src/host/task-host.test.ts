@@ -1792,7 +1792,14 @@ describe("[PiDock 14] (#17) cleanup usage goes through the recorded clearUsage s
         keepRoot,
       );
       owner.archive();
-      const result = owner.runCleanup({ selection: { exportSessions: false, exportDrafts: false, exportUsage: false }, keepRoot });
+      // [T12] #147: every repo whose uncommitted/delivery state is not provably
+      // safe has to be kept explicitly; this fixture's dirs are not git repos,
+      // so the user keeps them and the usage/session steps still run.
+      const repoScopes = Object.fromEntries(
+        owner.cleanupPreview({ selection: { exportSessions: false, exportDrafts: false, exportUsage: false }, keepRoot }).repos
+          .map((row) => [row.repoDir, "keep" as const]),
+      );
+      const result = owner.runCleanup({ selection: { exportSessions: false, exportDrafts: false, exportUsage: false }, keepRoot, repoScopes });
 
       // The failed step is named with its own reason, and a partial cleanup
       // never claims the project was released.

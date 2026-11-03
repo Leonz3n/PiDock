@@ -407,6 +407,22 @@ function browserStateOf(record: Record<string, unknown>): { retained: boolean | 
   return { retained: retained === true || retained === false ? retained : null };
 }
 
+/**
+ * [T12] #147 per-repo keep/export/clean choices from the dialog. Only the two
+ * known scope words are accepted per repo path; anything else keeps the
+ * conservative default (keep) instead of letting the caller invent a scope.
+ */
+function repoScopesOf(record: Record<string, unknown>): Record<string, "keep" | "export" | "clean"> {
+  const value = record["repoScopes"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const out: Record<string, "keep" | "export" | "clean"> = {};
+  for (const [repoDir, scope] of Object.entries(value as Record<string, unknown>)) {
+    if (repoDir.trim().length === 0) continue;
+    if (scope === "keep" || scope === "export" || scope === "clean") out[repoDir] = scope;
+  }
+  return out;
+}
+
 function lifecycleFor(taskId: string): TaskLifecycleHost | { error: string } {
   const host = taskHostFor(taskId);
   if ("error" in host) return host;
@@ -2601,10 +2617,13 @@ async function performTaskOp(
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         try {
           if (op === "task/archive") {
-            const archived = lifecycle.archive(browserStateOf(record));
+            // [T12] #147: the two entry points are named explicitly; an unknown
+            // mode is treated as archive-only (never an implicit cleanup).
+            const mode = record["mode"] === "archive-and-cleanup" ? "archive-and-cleanup" as const : "archive-only" as const;
+            const archived = lifecycle.archive(browserStateOf(record), { mode });
             // [PiDock 18] (#20) box 6: archiving pauses this task's schedules too.
             const pausedSchedules = host.pauseSchedulesForArchive();
-            return { ok: true, payload: { lifecycle: archived.record, plan: archived.plan, pausedSchedules } };
+            return { ok: true, payload: { lifecycle: archived.record, plan: archived.plan, pausedSchedules, mode: archived.mode, cleanupRequired: archived.cleanupRequired } };
           }
           const restored = lifecycle.restore();
           return { ok: true, payload: { lifecycle: restored.record, scheduleResumed: restored.scheduleResumed, servicesStarted: restored.servicesStarted } };
@@ -2680,7 +2699,7 @@ async function performTaskOp(
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         const selection = record["selection"] as { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
         try {
-          return { ok: true, payload: { preview: lifecycle.cleanupPreview({ selection, keepRoot: record["keepRoot"] as string | undefined, browserState: browserStateOf(record) }) } };
+          return { ok: true, payload: { preview: lifecycle.cleanupPreview({ selection, keepRoot: record["keepRoot"] as string | undefined, browserState: browserStateOf(record), repoScopes: repoScopesOf(record) }) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
@@ -2695,7 +2714,9 @@ async function performTaskOp(
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         const selection = record["selection"] as { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
         try {
-          return { ok: true, payload: { cleanup: lifecycle.runCleanup({ selection, keepRoot: record["keepRoot"] as string | undefined, browserState: browserStateOf(record) }) } };
+          // [T12] #147: cleanup waits for this task's in-flight executions and
+          // write rights before it removes anything.
+          return { ok: true, payload: { cleanup: await lifecycle.runCleanupWaiting({ selection, keepRoot: record["keepRoot"] as string | undefined, browserState: browserStateOf(record), repoScopes: repoScopesOf(record) }) } };
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error) };
         }

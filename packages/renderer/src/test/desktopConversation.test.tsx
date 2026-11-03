@@ -806,6 +806,26 @@ describe("Desktop SDK conversation", () => {
     expect(f.calls.some((call) => call.action === "projection")).toBe(true);
   });
 
+  // [Pencil T12] (#147) the two task-level entry points are separate and named;
+  // "归档并清理" archives first and only opens the guarded per-repo cleanup.
+  it("offers archive-only and archive-and-cleanup as separate task-level choices", async () => {
+    const f = setup();
+    const taskOp = vi.fn(async (taskId: string, op: string) => ({ ok: true, payload: { lifecycle: { taskId, archived: op === "task/archive", archivedAt: "2026-09-29T09:00:00Z" } } }));
+    f.bridge.taskOp = taskOp;
+    window.pidock = f.bridge;
+    const onArchived = vi.fn();
+    render(<DesktopConversation taskId="task-a" name="Task" branch="task/main" repoCount={1} roots={JSON.stringify(roots)} association={JSON.stringify(association("task-a"))} onBack={vi.fn()} onOpenProviders={vi.fn()} onArchived={onArchived} />);
+    await screen.findByText(/尚未开始/);
+    fireEvent.click(screen.getByRole("button", { name: "任务操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "归档当前任务" }));
+    const dialog = screen.getByRole("dialog", { name: "归档当前任务" });
+    expect(dialog).toHaveTextContent("仅归档保留副本：保留每个仓库的工作副本，不删除任何文件");
+    expect(dialog).toHaveTextContent("未知交付状态不当作已交付");
+    fireEvent.click(screen.getByRole("button", { name: "归档并清理…" }));
+    await waitFor(() => expect(onArchived).toHaveBeenCalledOnce());
+    expect(taskOp).toHaveBeenCalledWith("task-a", "task/archive", { mode: "archive-and-cleanup" });
+  });
+
   it("blocks archive during an active SDK turn", async () => {
     const f = setup();
     const ops: string[] = [];

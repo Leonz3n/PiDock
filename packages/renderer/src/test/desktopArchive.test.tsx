@@ -203,3 +203,50 @@ it("shows a Host cleanup refusal verbatim without reporting success", async () =
   expect(screen.queryByText("清理已执行")).toBeNull();
   expect(taskOp.mock.calls.some(([, op]) => op === "task/runCleanup")).toBe(true);
 });
+
+// [Pencil T12] (#147) per-repo rows and restore readiness.
+const repoPreview = {
+  ...preview,
+  repos: [
+    { repoDir: "/task/a/clean", scope: "clean", uncommitted: false, delivered: true, blocked: false, detail: "无未提交修改；已交付；可清理（仍需身份核验）" },
+    { repoDir: "/task/a/dirty", scope: "keep", uncommitted: true, delivered: null, blocked: true, detail: "有未提交修改；交付状态未知：不当作已交付；保留工作副本" },
+  ],
+  repoWarnings: ["/task/a/dirty：未提交／未交付修改默认保留，必须先保留或导出后才能清理"],
+};
+
+it("shows one keep/export/clean row per repo with the real git state and sends the chosen scopes", async () => {
+  const taskOp = cleanupBridge({ ok: true, payload: { cleanup: cleanupResult } }, { ok: true, payload: { preview: repoPreview } });
+  render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "清理…" }));
+  fireEvent.click(screen.getByRole("button", { name: "生成清单" }));
+  const panel = await screen.findByRole("region", { name: "任务 A清理预览" });
+  expect(panel).toHaveTextContent("/task/a/clean：无未提交修改；已交付；可清理（仍需身份核验）");
+  // Unknown delivery is never shown as delivered.
+  expect(panel).toHaveTextContent("交付：未知（不当作已交付）");
+  expect(panel).toHaveTextContent("/task/a/dirty：未提交／未交付修改默认保留，必须先保留或导出后才能清理");
+  // The dialog states the blocked row and lets the user choose 导出 for it.
+  const exportRadio = screen.getAllByRole("radio", { name: "导出" })[1]!;
+  fireEvent.click(exportRadio);
+  expect(exportRadio).toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: "生成清单" }));
+  await waitFor(() =>
+    expect(taskOp).toHaveBeenLastCalledWith("a", "task/cleanupPreview", {
+      selection: { exportSessions: false, exportDrafts: false, exportUsage: false },
+      repoScopes: { "/task/a/dirty": "export" },
+    }));
+});
+
+it("does not present a cleaned task's workspace as ready after restore", async () => {
+  const cleanedReadiness = {
+    ready: false,
+    cleaned: true,
+    rows: [{ repoDir: "/task/a/invoice", state: "missing", reason: "该任务已清理：工作副本已按记录移除", repair: "从工作空间原始仓库重新准备该任务的工作副本（不会沿用已清理路径）" }],
+    warnings: ["部分仓库不可用：恢复后需先修复工作区，界面不显示为就绪"],
+  };
+  bridge((taskId) => ({ ok: true, payload: { lifecycle: { taskId, archived: true, archivedAt: "2026-09-29T09:00:00Z", restore: cleanedReadiness } } }));
+  render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
+  const region = await screen.findByTestId("restore-readiness-a");
+  expect(region).toHaveTextContent("该任务已清理：工作副本已按记录移除，恢复不等于工作区就绪。");
+  expect(region).toHaveTextContent("修复入口：从工作空间原始仓库重新准备该任务的工作副本");
+  expect(region).not.toHaveTextContent("身份仍然匹配");
+});

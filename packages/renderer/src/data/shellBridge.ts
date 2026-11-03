@@ -1300,9 +1300,12 @@ export async function setTaskArchivedThroughShell(input: {
   taskId: string;
   archived: boolean;
   label?: string;
+  /** [T12] #147 task-level archive choice; archive-only is the Host default. */
+  mode?: "archive-only" | "archive-and-cleanup";
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = {};
   if (input.label !== undefined) payload["label"] = input.label;
+  if (input.mode !== undefined) payload["mode"] = input.mode;
   try {
     return await shellTaskOp(input.taskId, input.archived ? "task/archive" : "task/restore", payload);
   } catch (error) {
@@ -1315,9 +1318,12 @@ export async function cleanupPreviewThroughShell(input: {
   taskId: string;
   selection: { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
   keepRoot?: string;
+  /** [T12] #147 explicit per-repo keep/export/clean choice. */
+  repoScopes?: Readonly<Record<string, "keep" | "export" | "clean">>;
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { selection: input.selection };
   if (input.keepRoot !== undefined) payload["keepRoot"] = input.keepRoot;
+  if (input.repoScopes !== undefined && Object.keys(input.repoScopes).length > 0) payload["repoScopes"] = input.repoScopes;
   try {
     return await shellTaskOp(input.taskId, "task/cleanupPreview", payload);
   } catch (error) {
@@ -1331,10 +1337,13 @@ export async function runCleanupThroughShell(input: {
   selection: { exportSessions: boolean; exportDrafts: boolean; exportUsage: boolean };
   keepRoot?: string;
   label?: string;
+  /** [T12] #147 explicit per-repo keep/export/clean choice. */
+  repoScopes?: Readonly<Record<string, "keep" | "export" | "clean">>;
 }): Promise<ShellTaskOpResult> {
   const payload: Record<string, unknown> = { selection: input.selection };
   if (input.keepRoot !== undefined) payload["keepRoot"] = input.keepRoot;
   if (input.label !== undefined) payload["label"] = input.label;
+  if (input.repoScopes !== undefined && Object.keys(input.repoScopes).length > 0) payload["repoScopes"] = input.repoScopes;
   try {
     return await shellTaskOp(input.taskId, "task/runCleanup", payload);
   } catch (error) {

@@ -15,6 +15,10 @@
 
 import {
   backgroundPolicyFor,
+  planCleanupWait,
+  planRepoCleanup,
+  planRestoreReadiness,
+  planWorktreeCleanup,
   evaluateCleanupGate,
   planArchive,
   planCleanupRemoval,
@@ -37,6 +41,13 @@ import {
   type QuitPlan,
   type QuitProcessClaim,
   type RelaunchPlan,
+  type RepoCleanupPlan,
+  type RepoCleanupRow,
+  type RepoCleanupScope,
+  type RepoDeliveryObservation,
+  type RestoreReadiness,
+  type TaskArchiveMode,
+  type CleanupWaitPlan,
 } from "../main/task-lifecycle.js";
 import { buildLifecycleRecord, type CleanupReceiptRecord, type LifecycleRecord } from "./task-store.js";
 import type { TaskStore } from "./task-host.js";
@@ -86,6 +97,20 @@ export interface TaskLifecycleResources {
   originalCheckoutPaths(): readonly string[];
   otherTaskDirs(): readonly string[];
   delivery(): { uncommitted: boolean; undelivered: boolean };
+  /**
+   * [T12] #147: this task's repositories as main really read them (`git status`
+   * per repo). `null` means the read failed and is never a clean/delivered pass.
+   */
+  repoDelivery(): readonly RepoDeliveryObservation[];
+  /** Write rights this task still holds, so cleanup can wait for them. */
+  heldLocks(): readonly { resourceId: string; owner: string }[];
+  /** Wait until this task's in-flight turns/locks settle; resolves with what it waited for. */
+  waitForIdle(): Promise<readonly string[]>;
+  /**
+   * Remove one managed worktree whose identity this Host just verified. The
+   * path always comes from the task record, never from the caller payload.
+   */
+  removeManagedWorktree(repoDir: string): { ok: boolean; reason: string };
   availableFiles(): readonly string[];
   availableSkills(): readonly string[];
   liveProcesses(): readonly LiveProcessObservation[];
@@ -125,6 +150,10 @@ export interface LifecycleView {
   };
   quit: QuitPlan;
   relaunch: RelaunchPlan;
+  /** [T12] #147: real workspace readiness of the recorded repos (never assumed). */
+  restore: RestoreReadiness;
+  /** True when a cleanup receipt says this task's workspace was already cleaned. */
+  cleaned: boolean;
 }
 
 export interface CleanupPreviewView {
@@ -135,6 +164,13 @@ export interface CleanupPreviewView {
   recordsWillBeRemoved: boolean;
   selectionLabels: string[];
   keepRoot: string;
+  /** [T12] #147 per-repo keep/export/clean rows, read from real git state. */
+  repos: RepoCleanupRow[];
+  repoWarnings: string[];
+  blockedRepos: RepoCleanupRow[];
+  requiresRepoDecision: RepoCleanupRow[];
+  /** In-flight work cleanup would wait for. */
+  waiting: CleanupWaitPlan["waiting"];
 }
 
 export interface CleanupRunResult extends Omit<CleanupPlan, "receipt"> {
@@ -146,6 +182,10 @@ export interface CleanupRunResult extends Omit<CleanupPlan, "receipt"> {
   receipt: CleanupReceiptRecord | null;
   items: CleanupItemPlan[];
   record: LifecycleRecord;
+  /** [T12] #147 per-repo decisions this run used (empty when refused early). */
+  repos: RepoCleanupRow[];
+  /** What the run waited for before removing anything. */
+  waited: string[];
 }
 
 export class TaskLifecycleHost {
@@ -175,10 +215,19 @@ export class TaskLifecycleHost {
    * confirmations, pause scheduling and keep every record. Usage details are
    * never touched, so archiving can neither zero nor double count tokens.
    */
-  archive(browserState?: TaskBrowserObservation): { plan: ArchivePlan; record: LifecycleRecord } {
+  archive(
+    browserState?: TaskBrowserObservation,
+    options?: { mode?: TaskArchiveMode },
+  ): { plan: ArchivePlan; record: LifecycleRecord; mode: TaskArchiveMode; cleanupRequired: boolean } {
+    const mode: TaskArchiveMode = options?.mode ?? "archive-only";
     const current = this.record();
     const sessions = this.resources.sessions();
     const plan = planArchive({
+      external: {
+        // #147: the archive does not touch these, and says so.
+        services: this.resources.services().filter((service) => service.running).length,
+        terminals: this.resources.terminals().filter((terminal) => terminal.live).length,
+      },
       taskId: this.taskId,
       sessions: sessions.map((session) => ({ sessionId: session.sessionId, runState: session.runState })),
       pendingApprovals: sessions.flatMap((session) =>
@@ -206,7 +255,9 @@ export class TaskLifecycleHost {
       updatedAt: at,
     };
     this.store.writeLifecycle(this.taskDir, record);
-    return { plan, record };
+    // "归档并清理" archives first and then opens the guarded cleanup: it never
+    // removes anything implicitly, because cleanup needs the per-repo decision.
+    return { plan, record, mode, cleanupRequired: mode === "archive-and-cleanup" };
   }
 
   /** Restore an archived task; never resumes scheduling and never starts services. */
@@ -226,7 +277,13 @@ export class TaskLifecycleHost {
   }
 
   /** Cleanup preview, including the retain root the code copy/exports will use. */
-  cleanupPreview(input: { selection: CleanupSelection; keepRoot?: string; browserState?: TaskBrowserObservation }): CleanupPreviewView {
+  cleanupPreview(input: {
+    selection: CleanupSelection;
+    keepRoot?: string;
+    browserState?: TaskBrowserObservation;
+    /** Explicit per-repo keep/export/clean choice from the dialog. */
+    repoScopes?: Readonly<Record<string, RepoCleanupScope>>;
+  }): CleanupPreviewView {
     const record = this.record();
     const gate = evaluateCleanupGate({ archived: record.archived });
     if (!gate.ok) throw new Error(gate.error);
@@ -246,14 +303,21 @@ export class TaskLifecycleHost {
       links: this.resources.links(),
       selection: input.selection,
     });
+    const repoPlan = planRepoCleanup({ repos: this.resources.repoDelivery(), choices: input.repoScopes });
+    const items = this.withRepoScope(preview.items, repoPlan);
     return {
       taskId: this.taskId,
       archived: record.archived,
-      items: preview.items,
-      warnings: preview.warnings,
+      items,
+      warnings: [...preview.warnings, ...repoPlan.warnings],
       recordsWillBeRemoved: preview.recordsWillBeRemoved,
       selectionLabels: preview.selectionLabels,
       keepRoot: input.keepRoot ?? this.defaultKeepRoot,
+      repos: repoPlan.rows,
+      repoWarnings: repoPlan.warnings,
+      blockedRepos: repoPlan.blocked,
+      requiresRepoDecision: repoPlan.requiresDecision,
+      waiting: this.cleanupWait().waiting,
     };
   }
 
@@ -265,14 +329,48 @@ export class TaskLifecycleHost {
    * keeps the registration, the kept position and one recovery entry per
    * failed item.
    */
-  runCleanup(input: { selection: CleanupSelection; keepRoot?: string; browserState?: TaskBrowserObservation }): CleanupRunResult {
+  runCleanup(input: {
+    selection: CleanupSelection;
+    keepRoot?: string;
+    browserState?: TaskBrowserObservation;
+    repoScopes?: Readonly<Record<string, RepoCleanupScope>>;
+    /** Subjects an awaiting caller already waited for (recorded in the receipt). */
+    waited?: readonly string[];
+  }): CleanupRunResult {
     const preview = this.cleanupPreview(input);
+    const waited = [...(input.waited ?? [])];
+    // [T12] #147 box 2: uncommitted or unprovable delivery has to be kept or
+    // exported first. Nothing is removed while a repo is still blocked, so the
+    // default cleanup refuses instead of deleting work it cannot prove safe.
+    if (preview.blockedRepos.length > 0) {
+      const reasons = preview.blockedRepos.map((row) => `${row.repoDir}：${row.detail}`);
+      const error = `cleanup-repo-blocked: ${reasons.join("；")}`;
+      const at = this.now();
+      const recovery = preview.items.map((item) => ({ item: item.id, reason: "仓库未提交／未交付状态未处理，未移除任何受管资源" }));
+      const record: LifecycleRecord = {
+        ...this.record(),
+        updatedAt: at,
+        recovery: recovery.map((entry) => ({ ...entry, at })),
+      };
+      this.store.writeLifecycle(this.taskDir, record);
+      return {
+        ok: false,
+        error,
+        steps: [{ phase: "verify-keep", subject: "仓库修改检查", action: "检查未提交／未交付修改", status: "blocked", detail: reasons.join("；") }],
+        recovery,
+        receipt: null,
+        items: preview.items,
+        record,
+        repos: preview.repos,
+        waited,
+      };
+    }
     const kept = this.resources.keepAndExport({ selection: input.selection, keepRoot: preview.keepRoot });
     const outcomes: { id: string; ok: boolean; reason?: string }[] = [];
     const keepVerified = kept.codeCopyOk && kept.exportsOk;
     for (const item of preview.items) {
       if (!keepVerified) break;
-      outcomes.push(this.removeItem(item));
+      outcomes.push(this.removeItem(item, preview.repos));
     }
     const plan = planCleanupRemoval({
       items: preview.items,
@@ -294,11 +392,88 @@ export class TaskLifecycleHost {
       recovery: plan.recovery.map((entry) => ({ item: entry.item, reason: entry.reason, at })),
     };
     this.store.writeLifecycle(this.taskDir, record);
-    return { ...plan, receipt: plan.receipt === null ? null : record.cleanup, items: preview.items, record };
+    return { ...plan, receipt: plan.receipt === null ? null : record.cleanup, items: preview.items, record, repos: preview.repos, waited };
   }
 
-  private removeItem(item: CleanupItemPlan): { id: string; ok: boolean; reason?: string } {
+  /**
+   * Cleanup that first waits for this task's in-flight executions and locks
+   * ([T12] #147 box 3). The wait never cancels a turn on the user's behalf; it
+   * reports what it waited for, and only then runs the guarded cleanup.
+   */
+  async runCleanupWaiting(input: {
+    selection: CleanupSelection;
+    keepRoot?: string;
+    browserState?: TaskBrowserObservation;
+    repoScopes?: Readonly<Record<string, RepoCleanupScope>>;
+  }): Promise<CleanupRunResult> {
+    const wait = this.cleanupWait();
+    const waited = wait.ok ? [] : [...(await this.resources.waitForIdle())];
+    return this.runCleanup({ ...input, waited });
+  }
+
+  /** In-flight executions and held locks that a cleanup must wait for. */
+  cleanupWait(): CleanupWaitPlan {
+    return planCleanupWait({
+      taskId: this.taskId,
+      turns: this.resources.sessions().map((session) => ({ sessionId: session.sessionId, runState: session.runState })),
+      locks: this.resources.heldLocks(),
+    });
+  }
+
+  /**
+   * Fold the per-repo decisions into the single `code` item so the preview
+   * cannot claim "kept copy" while this run removes an identity-verified
+   * worktree (and cannot claim a removal for a kept repo).
+   */
+  private withRepoScope(items: readonly CleanupItemPlan[], repoPlan: RepoCleanupPlan): CleanupItemPlan[] {
+    const cleanable = new Set(repoPlan.cleanable);
+    return items.map((item) => {
+      if (item.id !== "code") return item;
+      const removable = repoPlan.rows.filter((row) => cleanable.has(row.repoDir));
+      const keptRows = repoPlan.rows.filter((row) => !cleanable.has(row.repoDir));
+      if (removable.length === 0) {
+        return {
+          ...item,
+          disposition: "keep-copy",
+          detail: `保留 ${String(keptRows.length)} 个仓库工作副本（未提交／未交付或未选择清理）；先核验独立副本再解除登记`,
+        };
+      }
+      return {
+        ...item,
+        disposition: "remove",
+        detail: `身份核验后移除 ${String(removable.length)} 个本任务受管工作副本（${removable.map((row) => row.repoDir).join("、")}），原仓库与分支提交保留；${String(keptRows.length)} 个仓库工作副本按选择保留`,
+      };
+    });
+  }
+
+  private removeItem(item: CleanupItemPlan, repos: readonly RepoCleanupRow[]): { id: string; ok: boolean; reason?: string } {
     if (item.disposition !== "remove") return { id: item.id, ok: true, reason: item.detail };
+    if (item.id === "code") {
+      // [T12] #147 box 4: remove only worktrees whose identity this Host just
+      // verified and whose repo scope is `clean`; a refusal keeps the path and
+      // becomes a per-repo recovery entry instead of a silent success.
+      const failures: string[] = [];
+      const removed: string[] = [];
+      for (const worktree of this.resources.worktrees()) {
+        const row = repos.find((entry) => entry.repoDir === worktree.repoDir);
+        const identity = verifyGitResourceIdentity({
+          record: { repoDir: worktree.repoDir, branch: worktree.branch, baseCommit: worktree.baseCommit },
+          observed: this.resources.observeRepo(worktree),
+        });
+        const decision = planWorktreeCleanup({
+          repoDir: worktree.repoDir,
+          identity,
+          scope: row?.scope ?? "keep",
+          originalCheckoutPaths: this.resources.originalCheckoutPaths(),
+        });
+        if (decision.action !== "remove") continue;
+        const outcome = this.resources.removeManagedWorktree(worktree.repoDir);
+        if (outcome.ok) removed.push(worktree.repoDir);
+        else failures.push(`${worktree.repoDir}：${outcome.reason}`);
+      }
+      if (failures.length > 0) return { id: item.id, ok: false, reason: failures.join("；") };
+      return { id: item.id, ok: true, reason: removed.length > 0 ? `已移除受管工作副本 ${removed.join("、")}` : item.detail };
+    }
     if (item.id === "sessions" || item.id === "drafts") {
       try {
         for (const session of this.resources.sessions()) this.resources.deleteSession(session.sessionId);
@@ -398,6 +573,17 @@ export class TaskLifecycleHost {
       resources: { worktrees, processes },
       quit: this.quitPlan(),
       relaunch: this.relaunchPlan(),
+      // [T12] #147 box 5: a cleaned task's workspace is gone. The readout says
+      // so with a named repair entry instead of presenting the task as ready.
+      restore: planRestoreReadiness({
+        cleaned: record.cleanup !== null || record.projectReleased,
+        repos: this.resources.worktrees().map((worktree) => ({
+          repoDir: worktree.repoDir,
+          record: { repoDir: worktree.repoDir, branch: worktree.branch, baseCommit: worktree.baseCommit },
+          observed: this.resources.observeRepo(worktree),
+        })),
+      }),
+      cleaned: record.cleanup !== null || record.projectReleased,
     };
   }
 
