@@ -25,7 +25,7 @@
  * `.pidock-sdk-turns/<id>/`).
  */
 
-import { closeSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { listSessionIdsOnDisk } from "./task-store.js";
@@ -372,6 +372,26 @@ export function bindSessionInIndex(index: SessionIndex, id: string, binding: Ses
     activeSessionId: index.activeSessionId,
     sessions: index.sessions.map((session) => session.id === id ? touch({ ...session, binding: bindingOf(binding) }, now) : session),
   };
+}
+
+/**
+ * Remove the SDK-owned artifacts of one deleted session: its binding directory
+ * (the `binding.json` + JSONL transcript) and its turn journal directory. Both
+ * live under task-owned, real-path-checked folders; anything else is left alone
+ * and refused by name, so a deleted id cannot be made to reach outside the task.
+ */
+export function deleteSdkSessionArtifacts(taskDir: string, sessionId: string): void {
+  if (!SESSION_ID.test(sessionId) && !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-session-id");
+  const realTask = realpathSync(taskDir);
+  for (const [parent, child] of [["sessions", "session"], [".pidock-sdk-sessions", "binding"], [".pidock-sdk-turns", "journal"]] as const) {
+    const root = join(taskDir, parent);
+    if (!existsSync(root)) continue;
+    if (!lstatSync(root).isDirectory() || realpathSync(root) !== join(realTask, parent)) throw new Error(`sdk-${child}-invalid`);
+    const target = join(root, sessionId);
+    if (!existsSync(target)) continue;
+    if (!lstatSync(target).isDirectory() || realpathSync(target) !== join(realTask, parent, sessionId)) throw new Error(`sdk-${child}-invalid`);
+    rmSync(target, { recursive: true, force: true });
+  }
 }
 
 export function sessionOf(index: SessionIndex, id: string): TaskSessionRecord {

@@ -46,6 +46,8 @@ function thinkingLevel(value: unknown): ModelThinkingLevel | undefined {
 
 export type SdkContextRequestPayload =
   | { op: "open"; sessionId: string }
+  /** [#139] Bind one session to another declared model of this profile. */
+  | { op: "bind"; sessionId: string; modelId: string; thinkingLevel?: ModelThinkingLevel }
   | { op: "prompt"; sessionId: string; text: string; issuedTurnId?: string }
   | { op: "cancel"; sessionId: string }
   | { op: "dispose" };
@@ -121,6 +123,11 @@ function request(value: unknown): SdkContextRequest {
   if (op === "dispose") return { id, op };
   if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) throw new Error("invalid-request");
   if (op === "open") return { id, op, sessionId };
+  if (op === "bind") {
+    const modelId = record["modelId"];
+    if (typeof modelId !== "string" || !/^[a-zA-Z0-9._:/-]{1,100}$/.test(modelId)) throw new Error("invalid-request");
+    return { id, op, sessionId, modelId, ...(record["thinkingLevel"] === undefined ? {} : { thinkingLevel: thinkingLevel(record["thinkingLevel"]) }) };
+  }
   if (op === "cancel") return { id, op, sessionId };
   if (op === "prompt") {
     const text = record["text"];
@@ -169,6 +176,9 @@ async function main(): Promise<void> {
   const kernel = new PiSdkTextKernel(parsed.task.taskId, parsed.task.taskDir, {
     model,
     modelRuntime: runtime,
+    // [#139] another model of the SAME registered profile, by id: one endpoint,
+    // one credential, one declared model list, several per-session bindings.
+    modelById: (modelId) => runtime.getModel(`pidock-${parsed.config.profileId}`, modelId),
     bindingIdentity,
     ...(parsed.thinkingLevel === undefined ? {} : { thinkingLevel: parsed.thinkingLevel }),
     ...(tools ? { callTool: (sessionId, request) => tools.callTool(sessionId, request) } : {}),
@@ -185,6 +195,14 @@ async function main(): Promise<void> {
         if (closing && message.op !== "dispose") throw new Error("sdk-context-closing");
         if (message.op === "open") {
           send({ id, kind: "reply", ok: true, payload: { ...(await kernel.open(message.sessionId)) } });
+          return;
+        }
+        if (message.op === "bind") {
+          const bound = await kernel.bindSession(message.sessionId, {
+            modelId: message.modelId,
+            ...(message.thinkingLevel === undefined ? {} : { thinkingLevel: message.thinkingLevel }),
+          });
+          send({ id, kind: "reply", ok: true, payload: { ...bound } });
           return;
         }
         if (message.op === "prompt") {

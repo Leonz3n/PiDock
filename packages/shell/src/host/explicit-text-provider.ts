@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createAssistantMessageEventStream, type Api, type Model } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { SESSION_THINKING_LEVELS, type SessionThinkingLevel } from "./session-index.js";
 
 /**
  * One declared model row. Windows, max output and reasoning are **declared by
@@ -186,6 +187,27 @@ export function explicitBindingIdentity(input: ExplicitTextProvider): string {
       ...(row.cost ? { cost: row.cost } : {}),
     }))),
   ])).digest("hex");
+}
+
+/**
+ * The reasoning levels one model row actually declares ([Pencil T04] #139).
+ *
+ * This mirrors the SDK's own `getSupportedThinkingLevels` (`pi-ai`
+ * `models.js`): `off` always qualifies, `minimal`..`high` unless the declared
+ * map marks them `null`, and `xhigh`/`max` only when the map names them. The
+ * one deliberate difference is a model that does not declare reasoning: the SDK
+ * would answer `["off"]`, but `off` is not a choice the user can make on a model
+ * with no reasoning, so this returns NO levels and the UI must say 「不支持」
+ * instead of offering a fabricated `off` (一张画板、一份能力声明).
+ */
+export function availableReasoningLevels(row: Pick<ExplicitProviderModel, "reasoning" | "thinkingLevelMap">): SessionThinkingLevel[] {
+  if (!row.reasoning) return [];
+  return SESSION_THINKING_LEVELS.filter((level) => {
+    const mapped = row.thinkingLevelMap?.[level];
+    if (mapped === null) return false;
+    if (level === "xhigh" || level === "max") return mapped !== undefined;
+    return true;
+  });
 }
 
 /** Credential-shaped variable names the SDK could resolve implicitly. */
