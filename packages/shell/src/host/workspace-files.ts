@@ -33,7 +33,7 @@
 import type { TaskPathProtection } from "./protected-application-path.js";
 import { execFileSync } from "node:child_process";
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { remoteDigest } from "../main/remote-identity.js";
 import { describeReadFailure } from "../main/service-code-observation.js";
 import {
@@ -79,6 +79,13 @@ export interface WorkspaceFileReaders {
    * blank row.
    */
   identity(path: string): { kind: "dir" | "other" | "missing"; realPath?: string; device?: string; inode?: string };
+  /**
+   * Current existence/kind of one path ([Pencil T19] #145): the send-time
+   * re-check asks the Host whether a referenced file is still at its recorded
+   * source path. Missing is an answer, never an exception; an unreadable path
+   * throws so the caller can name the failure instead of guessing.
+   */
+  statFile(path: string): { kind: "file" | "dir" | "other" | "missing"; size?: number; mtimeMs?: number };
 }
 
 /** Read cap: a file bigger than this is refused rather than loaded. */
@@ -235,6 +242,20 @@ export const realWorkspaceFileReaders: WorkspaceFileReaders = {
       realPath = undefined;
     }
     return { kind: "dir", ...(realPath !== undefined ? { realPath } : {}), device: String(stat.dev), inode: String(stat.ino) };
+  },
+  statFile(path) {
+    try {
+      const info = statSync(path);
+      const common = { size: info.size, mtimeMs: info.mtimeMs };
+      if (info.isFile()) return { kind: "file", ...common };
+      if (info.isDirectory()) return { kind: "dir" };
+      return { kind: "other", ...common };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+      // A path that exists but cannot be inspected is NOT reported as missing:
+      // the caller must be able to tell "moved away" from "could not read".
+      throw error;
+    }
   },
 };
 
@@ -479,6 +500,29 @@ export class TaskWorkspaceFiles {
     return { ok: true, tree: { attribution: target.attribution, path: target.relative, entries: inside, truncated: bounded.truncated } };
   }
 
+  /**
+   * Existence/kind of one path inside one root ([Pencil T19] #145). The send
+   * re-check reads this, so a referenced file that was moved or deleted on disk
+   * is reported as `missing` instead of being accepted because the chip and
+   * the root still look valid.
+   */
+  stat(input: { rootId: unknown; relative?: unknown }): {
+    ok: true;
+    stat: { path: string; kind: "file" | "dir" | "other" | "missing"; exists: boolean; size?: number; mtimeMs?: number };
+  } | { ok: false; error: string } {
+    const target = this.resolve(input, false);
+    if (!target.ok) return { ok: false, error: target.error };
+    const escape = this.rootEscapeError(target.root, target.absolute);
+    if (escape !== undefined) return { ok: false, error: escape };
+    let observed: { kind: "file" | "dir" | "other" | "missing"; size?: number; mtimeMs?: number };
+    try {
+      observed = this.readers.statFile(target.absolute);
+    } catch (error) {
+      return { ok: false, error: `read-failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    return { ok: true, stat: { path: target.relative, exists: observed.kind !== "missing", ...observed } };
+  }
+
   /** Bounded, masked preview of one text file inside one root. */
   preview(input: { rootId: unknown; relative?: unknown }): { ok: true; preview: WorkspacePreview } | { ok: false; error: string } {
     const target = this.resolve(input, false);
@@ -562,6 +606,19 @@ export class TaskWorkspaceFiles {
     const resolved = this.readers.realPath(absolute);
     const targetReal = comparisonKey(resolved, windowsPaths);
     if (targetReal === rootReal || targetReal.startsWith(`${rootReal}/`)) return undefined;
+    // A path that does not exist cannot be realpath'ed (the reader returns the
+    // input), so a merely-moved/deleted file would look "outside" a root whose
+    // own real path differs only through a system symlink (e.g. /var on macOS).
+    // Resolve the existing parent ONLY for a missing target: an existing link
+    // that resolves outside was already refused above, and a missing final
+    // component under the root is exactly what the send-time stat must report.
+    let missing = false;
+    try { missing = this.readers.statFile(absolute).kind === "missing"; } catch { missing = false; }
+    const parent = dirname(absolute);
+    if (missing && parent !== absolute) {
+      const parentReal = comparisonKey(this.readers.realPath(parent), windowsPaths);
+      if (parentReal === rootReal || parentReal.startsWith(`${rootReal}/`)) return undefined;
+    }
     return `path-out-of-scope: ${root.label} 内的链接指向根之外（${resolved}），已拒绝读取`;
   }
 

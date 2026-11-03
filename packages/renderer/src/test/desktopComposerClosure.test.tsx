@@ -32,7 +32,7 @@ const REFERENCE = {
   version: null,
 };
 
-function setup(options: { draftReference?: boolean; rootIds?: string[] } = {}) {
+function setup(options: { draftReference?: boolean; rootIds?: string[]; stat?: (relative: string) => Record<string, unknown> } = {}) {
   const calls: Array<Record<string, unknown>> = [];
   const rootIds = options.rootIds ?? ["repo-a"];
   const snapshot = (messages: unknown[] = []) => ({ source: "sdk-jsonl", sessionId: "main", messages, pending: false, interrupted: false });
@@ -42,6 +42,10 @@ function setup(options: { draftReference?: boolean; rootIds?: string[] } = {}) {
       return envelope(taskId, op, { sessionId: "main", draft: options.draftReference ? { text: "看一下这个接口", references: [REFERENCE] } : null });
     }
     if (op === "task/saveDraft") return envelope(taskId, op, { sessionId: "main" });
+    if (op === "task/fileStat") {
+      const relative = String(_payload["relative"] ?? "");
+      return envelope(taskId, op, { stat: { path: relative, ...(options.stat?.(relative) ?? { kind: "file", exists: true, size: 12 }) } });
+    }
     if (op === "task/fileRoots") {
       return envelope(taskId, op, {
         taskDir: "/tmp/task-a",
@@ -167,6 +171,33 @@ describe("[Pencil T10] #145 发送前的引用重检", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(fixture.calls.some((request) => request.action === "start")).toBe(true));
     expect(screen.queryByTestId("composer-reference-refusal")).not.toBeInTheDocument();
+  });
+
+  it("refuses a reference whose file moved on disk even though its root is still reported", async () => {
+    // [Pencil T19] #145 B2: the chip still names repo-a and repo-a is still a
+    // root, but `task/fileStat` says the file is gone from that path.
+    const fixture = setup({
+      draftReference: true,
+      rootIds: ["repo-a"],
+      stat: () => ({ kind: "missing", exists: false }),
+    });
+    mount();
+    const input = await screen.findByRole("textbox", { name: "消息" });
+    await waitFor(() => expect(input).toHaveValue("看一下这个接口"));
+    fireEvent.change(input, { target: { value: "看一下这个接口，文件刚才还在" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    const refusal = await screen.findByTestId("composer-reference-refusal");
+    expect(refusal).toHaveTextContent("repo-a/src/api.ts");
+    expect(refusal).toHaveTextContent("已不在来源路径");
+    expect(refusal).toHaveTextContent("未发送任何内容");
+    // The Host really stat'ed the chip's own root/path; nothing was sent.
+    expect(fixture.taskOp).toHaveBeenCalledWith(TASK_ID, "task/fileStat", { rootId: "repo-a", relative: "src/api.ts" });
+    expect(fixture.calls.some((request) => request.action === "start")).toBe(false);
+    // The named problem stays on the chip and the draft is untouched.
+    expect(screen.getByTestId(`composer-file-reference-${REFERENCE.id}`)).toHaveAttribute("data-reference-state", "invalid");
+    expect(screen.getByTestId(`composer-file-reference-problem-${REFERENCE.id}`)).toHaveTextContent("已不在来源路径");
+    expect(input).toHaveValue("看一下这个接口，文件刚才还在");
   });
 });
 

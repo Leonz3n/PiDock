@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { referenceIssue, referenceIssues, referenceRootFacts, referenceSendRefusal, rootReferenceIssue } from "../data/referenceGuard";
+import { referenceFileFact, referenceFileIssue, referenceIssue, referenceIssues, referenceRootFacts, referenceRootId, referenceSendRefusal, rootReferenceIssue } from "../data/referenceGuard";
 import { splitPromptContext } from "../data/historyReferences";
 import type { Reference } from "../data/types";
 
@@ -28,6 +28,28 @@ describe("[Pencil T10] #145 引用来源重检", () => {
     // A plain-directory chip must not accept a worktree root wearing the same id.
     expect(rootReferenceIssue(file({ sourceKind: "plain-dir", version: null }), roots)).toContain("来源类型");
     expect(rootReferenceIssue(file({ sourceKind: "worktree" }), [{ id: "repo-a", kind: "existing-git" }])).toBeNull();
+  });
+
+  it("resolves a plain-directory chip by its registered directory id and refuses a moved file by name", () => {
+    const roots = [{ id: "docs-link", kind: "shared-dir" as const, directoryId: "dir-1" }, { id: "repo-a", kind: "worktree" as const }];
+    expect(referenceRootId(file({ sourceKind: "plain-dir", sourceId: "dir-1", version: null }), roots)).toBe("docs-link");
+    expect(referenceRootId(file(), roots)).toBe("repo-a");
+    // The root is still there; the FILE is what moved.
+    expect(referenceFileIssue(file(), { path: "src/api.ts", kind: "missing", exists: false })).toContain("已不在来源路径");
+    expect(referenceFileIssue(file(), { path: "src/api.ts", kind: "dir", exists: true })).toContain("类型已改变");
+    expect(referenceFileIssue(file(), { path: "src/api.ts", kind: "file", exists: true })).toBeNull();
+    expect(referenceFileIssue(file({ kind: "directory" }), { path: "src", kind: "file", exists: true })).toContain("目录");
+    // Attachments have no task-relative path and are not stat'ed.
+    expect(referenceFileIssue({ id: "a", kind: "attachment", label: "shot.png", detail: "附件" }, { path: "", kind: "missing", exists: false })).toBeNull();
+  });
+
+  it("turns an unreadable stat payload into a named failure instead of assuming the file exists", () => {
+    expect(referenceFileFact({ stat: { path: "src/api.ts", kind: "file", exists: true } }).fact).toEqual({ path: "src/api.ts", kind: "file", exists: true });
+    expect(referenceFileFact({ stat: { path: "src/api.ts", kind: "missing", exists: false } }).fact).toEqual({ path: "src/api.ts", kind: "missing", exists: false });
+    expect(referenceFileFact(undefined).error).toContain("未上报文件状态");
+    expect(referenceFileFact({ stat: { kind: "unknown", exists: true } }).error).toContain("不可读取");
+    // `exists` is derived from `kind`: a missing kind can never pass as present.
+    expect(referenceFileFact({ stat: { kind: "file", exists: false } }).fact).toMatchObject({ exists: false });
   });
 
   it("turns an unreadable roots payload into a named failure instead of assuming validity", () => {

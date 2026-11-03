@@ -100,6 +100,7 @@ export type HostTaskOp =
   | "task/fileRoots"
   | "task/serviceImportHints"
   | "task/fileTree"
+  | "task/fileStat"
   | "task/filePreview"
   | "task/fileDiff"
   | "task/deliveryInfo"
@@ -301,6 +302,7 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/fileRoots",
   "task/serviceImportHints",
   "task/fileTree",
+  "task/fileStat",
   "task/filePreview",
   "task/fileDiff",
   "task/deliveryInfo",

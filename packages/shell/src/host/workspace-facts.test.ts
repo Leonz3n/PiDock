@@ -44,6 +44,7 @@ function readers(overrides: Partial<WorkspaceFileReaders> = {}): WorkspaceFileRe
     runGit: () => ({ ok: true, stdout: "" }),
     realPath: (path) => path,
     identity: (path) => ({ kind: "dir", realPath: path, device: "10", inode: "20" }),
+    statFile: () => ({ kind: "file", size: 0, mtimeMs: 0 }),
     ...overrides,
   };
 }

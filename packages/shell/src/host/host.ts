@@ -2315,6 +2315,16 @@ async function performTaskOp(
         const result = files.tree({ rootId: record["rootId"], relative: record["relative"] });
         return result.ok ? { ok: true, payload: { tree: result.tree } } : { ok: false, error: result.error };
       }
+      // [Pencil T19] #145 the send-time reference re-check: does the referenced
+      // file still exist at its recorded source path? Read-only, bounded to one
+      // file inside one of this task's roots; a moved/deleted file is `missing`
+      // (refused by name in the renderer), never silently accepted.
+      case "task/fileStat": {
+        const files = workspaceFilesFor(taskId);
+        if ("error" in files) return { ok: false, error: files.error };
+        const result = files.stat({ rootId: record["rootId"], relative: record["relative"] });
+        return result.ok ? { ok: true, payload: { stat: result.stat } } : { ok: false, error: result.error };
+      }
       case "task/filePreview": {
         const files = workspaceFilesFor(taskId);
         if ("error" in files) return { ok: false, error: files.error };

@@ -243,6 +243,7 @@ const MOBILE_OP_SURFACES: Readonly<Record<string, MobileSurface>> = {
   "task/fileRoots": "files",
   "task/serviceImportHints": "files",
   "task/fileTree": "files",
+  "task/fileStat": "files",
   "task/filePreview": "files",
   "task/fileDiff": "files",
   "task/terminalState": "terminal",

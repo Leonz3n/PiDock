@@ -203,6 +203,7 @@ export type ShellTaskOp =
   | "task/fileRoots"
   | "task/serviceImportHints"
   | "task/fileTree"
+  | "task/fileStat"
   | "task/filePreview"
   | "task/fileDiff"
   | "task/deliveryInfo"
@@ -1059,6 +1060,23 @@ export async function fileTreeThroughShell(input: {
   if (input.relative !== undefined) payload["relative"] = input.relative;
   try {
     return await shellTaskOp(input.taskId, "task/fileTree", payload);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * [Pencil T19] #145 the send-time reference re-check: one path's real
+ * existence/kind inside the reference's recorded root (`task/fileStat`).
+ * Read-only and bounded to the path the chip already names.
+ */
+export async function fileStatThroughShell(input: {
+  taskId: string;
+  rootId: string;
+  relative: string;
+}): Promise<ShellTaskOpResult> {
+  try {
+    return await shellTaskOp(input.taskId, "task/fileStat", { rootId: input.rootId, relative: input.relative });
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }

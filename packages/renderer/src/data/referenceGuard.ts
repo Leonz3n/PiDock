@@ -67,7 +67,7 @@ export function referenceIssues(references: readonly Reference[], taskId: string
 }
 
 /** The one Host fact a re-check needs from a `task/fileRoots` read. */
-export type ReferenceRootFact = { id: string; kind: "worktree" | "shared-dir" | "existing-git" };
+export type ReferenceRootFact = { id: string; kind: "worktree" | "shared-dir" | "existing-git"; directoryId?: string };
 
 /**
  * Re-checks a chip against the roots the Host really reported. A root the Host
@@ -78,7 +78,11 @@ export type ReferenceRootFact = { id: string; kind: "worktree" | "shared-dir" | 
 export function rootReferenceIssue(reference: Reference, roots: readonly ReferenceRootFact[]): string | null {
   if (reference.kind === "attachment" || reference.kind === "skill") return null;
   if (reference.sourceId === undefined) return null; // already named by `referenceIssue`
-  const root = roots.find((entry) => entry.id === reference.sourceId);
+  // A plain-directory chip records the registry directory id, while the root
+  // readout names the link itself and keeps `directoryId` beside it; both
+  // spellings identify the same source.
+  const root = roots.find((entry) => entry.id === reference.sourceId) ??
+    (reference.sourceKind === "plain-dir" ? roots.find((entry) => entry.directoryId === reference.sourceId) : undefined);
   if (root === undefined) return "来源已失效（仓库或目录链接已移除），请重新选择来源";
   const expected = reference.sourceKind === "plain-dir" ? "shared-dir" : "worktree";
   if (root.kind !== expected && !(reference.sourceKind === "worktree" && root.kind === "existing-git")) {
@@ -100,9 +104,64 @@ export function referenceRootFacts(payload: unknown): { roots: ReferenceRootFact
     const kind = record["kind"];
     if (typeof id !== "string" || id.length === 0) continue;
     if (kind !== "worktree" && kind !== "shared-dir" && kind !== "existing-git") continue;
-    roots.push({ id, kind });
+    const directoryId = record["directoryId"];
+    roots.push({ id, kind, ...(typeof directoryId === "string" && directoryId.length > 0 ? { directoryId } : {}) });
   }
   return { roots, error: null };
+}
+
+/** The Host id a re-check must stat for this chip (`null` when already named). */
+export function referenceRootId(reference: Reference, roots: readonly ReferenceRootFact[]): string | null {
+  if (reference.sourceId === undefined) return null;
+  const root = roots.find((entry) => entry.id === reference.sourceId) ??
+    (reference.sourceKind === "plain-dir" ? roots.find((entry) => entry.directoryId === reference.sourceId) : undefined);
+  return root?.id ?? null;
+}
+
+/** One `task/fileStat` fact: the real path exists, and as what. */
+export type ReferenceFileFact = { path: string; kind: "file" | "dir" | "other" | "missing"; exists: boolean };
+
+/** `task/fileStat` payload → the fact above, or a named failure. */
+export function referenceFileFact(payload: unknown): { fact: ReferenceFileFact | null; error: string | null } {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return { fact: null, error: "来源重检失败：Host 未上报文件状态；请重试或重新选择引用" };
+  }
+  const stat = (payload as { stat?: unknown }).stat;
+  if (typeof stat !== "object" || stat === null || Array.isArray(stat)) {
+    return { fact: null, error: "来源重检失败：Host 未上报文件状态；请重试或重新选择引用" };
+  }
+  const record = stat as Record<string, unknown>;
+  const kind = record["kind"];
+  if (kind !== "file" && kind !== "dir" && kind !== "other" && kind !== "missing") {
+    return { fact: null, error: "来源重检失败：Host 上报的文件状态不可读取；请重试或重新选择引用" };
+  }
+  return {
+    fact: {
+      path: typeof record["path"] === "string" ? record["path"] : "",
+      kind,
+      exists: record["exists"] === true && kind !== "missing",
+    },
+    error: null,
+  };
+}
+
+/**
+ * Re-checks the referenced path itself, not only its root. A file that was
+ * moved or deleted on disk is refused BY NAME and the user re-picks the source;
+ * the guard never falls back to a same-named file or to the main checkout.
+ */
+export function referenceFileIssue(reference: Reference, fact: ReferenceFileFact): string | null {
+  if (reference.kind === "attachment" || reference.kind === "skill") return null;
+  if (!fact.exists || fact.kind === "missing") {
+    return "引用的文件已不在来源路径（可能已被移动或删除），请重新选择来源";
+  }
+  if (reference.kind === "directory" && fact.kind !== "dir") {
+    return "引用的目录已不在来源路径（类型已改变），请重新选择来源";
+  }
+  if (reference.kind !== "directory" && fact.kind !== "file") {
+    return "引用的文件已不在来源路径（类型已改变），请重新选择来源";
+  }
+  return null;
 }
 
 /** The single line a refused send shows; empty list → `null`. */
