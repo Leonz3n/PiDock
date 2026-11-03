@@ -53,6 +53,13 @@ import {
 } from "../main/execution-ledger.js";
 import type { PiApprovalScope, PiPermission } from "../main/pi-session.js";
 
+/**
+ * [#139] The safest session id a task may hold. Every task now owns several
+ * sessions (`main` migrated plus `s-<8 hex>`); the ledger keys a turn by
+ * `(taskId, sessionId, turnId)`, so the id only has to be a safe token.
+ */
+const SDK_SESSION_ID = /^[a-zA-Z0-9_-]{1,80}$/;
+
 /** The persistence slice this recorder needs (satisfied by `TaskStore`). */
 export interface ExecutionLedgerStore {
   readExecutions(taskDir: string): ExecutionLedgerRecord;
@@ -131,10 +138,13 @@ export class TaskExecutionLedger {
   /** SDK JSONL remains authoritative; this is only the execution projection. */
   beginSdkTurn(sessionId: string, turnId: string): void {
     this.assertSdkDispatchReady();
-    if (sessionId !== "main" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(turnId)) throw Error("invalid-sdk-turn-identity");
+    // [#139] a model turn belongs to ONE session of the task: any safe session id
+    // is accepted, so a second session's turn is recorded under its own identity
+    // instead of being refused for not being `main`.
+    if (!SDK_SESSION_ID.test(sessionId) || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(turnId)) throw Error("invalid-sdk-turn-identity");
     if (this.ledgerState.executions.some((record) => record.callId === turnId)) throw Error("sdk-turn-already-recorded");
     const at = this.now();
-    const record = planStep(openExecution({ executionId: `exec-${this.sequence + 1}`, taskId: this.taskId, sessionId, callId: turnId, kind: "turn", label: "SDK main 回合", at }), { stepId: turnId, label: "SDK 模型请求", at });
+    const record = planStep(openExecution({ executionId: `exec-${this.sequence + 1}`, taskId: this.taskId, sessionId, callId: turnId, kind: "turn", label: `SDK 回合 · ${sessionId}`, at }), { stepId: turnId, label: "SDK 模型请求", at });
     const next = { ...this.ledgerState, executions: [...this.ledgerState.executions, record] };
     try { this.store.writeExecutions(this.taskDir, next); }
     catch {
@@ -151,7 +161,7 @@ export class TaskExecutionLedger {
     this.assertSdkDispatchReady();
     try {
       const current = this.ledgerState.executions.find((record) => record.taskId === this.taskId && record.sessionId === sessionId && record.callId === turnId);
-      if (!current || sessionId !== "main") throw Error("invalid-sdk-turn-identity");
+      if (!current) throw Error("invalid-sdk-turn-identity");
       const at = this.now();
       let record = settleStep(current, { stepId: turnId, state: state === "done" ? "done" : state === "cancelled" ? "skipped" : "failed", at });
       record = recordAttempt(record, { attemptId: turnId, endState: state === "done" ? "completed" : state === "cancelled" ? "cancelled" : "failed", at });

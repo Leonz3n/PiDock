@@ -116,6 +116,16 @@ export class SdkTurnTransport {
 
   seal(): void { this.closing = true; }
 
+  /**
+   * [#139] Whether THIS session has a turn in flight (accepted and not yet
+   * terminal). The task-wide single-turn rule is separate (`task-locked`); this
+   * answers the narrower question the session switch gate asks.
+   */
+  busy(sessionId: string): boolean {
+    if (this.starting) return true;
+    return [...this.active.values()].some(({ record }) => record.sessionId === sessionId);
+  }
+
   async start(sessionId: string, requestId: string, text: string, deliver: (event: SdkTextEvent) => void, settled?: (turn: TurnRecord) => void,
     context?: PromptContext): Promise<TurnRecord> {
     if (this.closing) throw new Error("sdk-host-closing");

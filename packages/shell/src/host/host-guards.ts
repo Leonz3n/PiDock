@@ -1316,6 +1316,68 @@ export function validateHostTaskOp(
     }
     return { ok: true };
   }
+  // [Pencil T04] #139 task-wide session identity. Envelope shape only: which
+  // sessions exist, which one is active, whether the target model is declared by
+  // the installed Provider and whether the stored context fits it are decided
+  // Host-side (`host.ts` `applySessionBinding`, `session-index.ts`).
+  if (op === "task/sessionList") {
+    if (payload !== undefined && !isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionList takes no fields" };
+    return { ok: true };
+  }
+  if (op === "task/sessionCreate") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionCreate requires a payload object" };
+    const name = payload["name"];
+    if (name !== undefined && (typeof name !== "string" || name.trim().length === 0 || name.length > 40)) {
+      return { ok: false, error: "invalid-payload: task/sessionCreate.name must be 1-40 characters" };
+    }
+    const permission = payload["permission"];
+    if (permission !== undefined && permission !== "read" && permission !== "default" && permission !== "auto") {
+      return { ok: false, error: "invalid-payload: task/sessionCreate.permission must be read/default/auto" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/sessionRename") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionRename requires a payload object" };
+    if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionRename.sessionId must be a non-empty string" };
+    }
+    if (typeof payload["name"] !== "string" || payload["name"].trim().length === 0 || payload["name"].length > 40) {
+      return { ok: false, error: "invalid-payload: task/sessionRename.name must be 1-40 characters" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/sessionArchive" || op === "task/sessionRestore" || op === "task/sessionDelete" ||
+      op === "task/sessionActivate" || op === "task/sessionReadout") {
+    if (!isRecord(payload)) return { ok: false, error: `invalid-payload: ${op} requires a payload object` };
+    if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
+      return { ok: false, error: `invalid-payload: ${op}.sessionId must be a non-empty string` };
+    }
+    return { ok: true };
+  }
+  if (op === "task/sessionModel") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionModel requires a payload object" };
+    if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionModel.sessionId must be a non-empty string" };
+    }
+    if (typeof payload["modelId"] !== "string" || payload["modelId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionModel.modelId must be a non-empty string" };
+    }
+    const level = payload["thinkingLevel"];
+    if (level !== undefined && level !== null && typeof level !== "string") {
+      return { ok: false, error: "invalid-payload: task/sessionModel.thinkingLevel must be a string" };
+    }
+    return { ok: true };
+  }
+  if (op === "task/sessionReasoning") {
+    if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/sessionReasoning requires a payload object" };
+    if (typeof payload["sessionId"] !== "string" || payload["sessionId"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionReasoning.sessionId must be a non-empty string" };
+    }
+    if (typeof payload["level"] !== "string" || payload["level"].trim().length === 0) {
+      return { ok: false, error: "invalid-payload: task/sessionReasoning.level must be a non-empty string" };
+    }
+    return { ok: true };
+  }
   if (op === "task/setSessionModel") {
     if (!isRecord(payload)) return { ok: false, error: "invalid-payload: task/setSessionModel requires a payload object" };
     for (const key of ["sessionId", "providerId", "model"] as const) {

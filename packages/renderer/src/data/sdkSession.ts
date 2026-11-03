@@ -4,7 +4,13 @@
  * 会话视图与 Token 用量页读取的是同一份真实证据：任务私有的 SDK JSONL 投影。
  * 因此解析只在这里写一份——两处对「什么算合法历史」的判断不可能漂移。
  */
+/**
+ * [#139] `main` is the id the historical single session migrates to; it is the
+ * conversation a task shows when its session list cannot be read. Any other
+ * session's id is a safe token the Host owns — nothing here assumes `main`.
+ */
 export const SDK_SESSION_ID = "main";
+const SAFE_SESSION_ID = /^[a-zA-Z0-9_-]{1,80}$/;
 
 export type SdkUsage = { input: number; output: number; cacheRead: number; cacheWrite: number };
 export type SdkMessage = { role: "user" | "assistant"; text: string; usage: SdkUsage | null };
@@ -12,8 +18,8 @@ export type SdkSnapshot = { source: "sdk-jsonl"; sessionId: string; messages: Sd
 
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 
-export function parseSdkSnapshot(value: unknown): SdkSnapshot {
-  if (!object(value) || value.source !== "sdk-jsonl" || value.sessionId !== SDK_SESSION_ID || !Array.isArray(value.messages) ||
+export function parseSdkSnapshot(value: unknown, sessionId: string = SDK_SESSION_ID): SdkSnapshot {
+  if (!object(value) || value.source !== "sdk-jsonl" || value.sessionId !== sessionId || !SAFE_SESSION_ID.test(sessionId) || !Array.isArray(value.messages) ||
       value.messages.length > 80 || typeof value.pending !== "boolean" || typeof value.interrupted !== "boolean") {
     throw new Error("SDK 历史返回异常");
   }
@@ -24,7 +30,7 @@ export function parseSdkSnapshot(value: unknown): SdkSnapshot {
     }
     return item as unknown as SdkMessage;
   });
-  return { source: "sdk-jsonl", sessionId: SDK_SESSION_ID, messages, pending: value.pending, interrupted: value.interrupted };
+  return { source: "sdk-jsonl", sessionId, messages, pending: value.pending, interrupted: value.interrupted };
 }
 
 /** Totals over a snapshot; a message without usage record contributes nothing. */
@@ -43,17 +49,17 @@ export function sumSdkUsage(messages: readonly SdkMessage[]): SdkUsage & { turns
 }
 
 /** `sdkTurn subscribe/unsubscribe` through the production bridge. */
-export async function sdkSnapshot(bridge: { sdkTurn?: (request: never) => Promise<{ ok: boolean; payload?: unknown; error?: string }> } | undefined, taskId: string): Promise<SdkSnapshot> {
+export async function sdkSnapshot(bridge: { sdkTurn?: (request: never) => Promise<{ ok: boolean; payload?: unknown; error?: string }> } | undefined, taskId: string, sessionId: string = SDK_SESSION_ID): Promise<SdkSnapshot> {
   if (typeof bridge?.sdkTurn !== "function") throw new Error("桌面壳 SDK 接口不可用");
-  const result = await bridge.sdkTurn({ action: "subscribe", taskId, sessionId: SDK_SESSION_ID } as never);
+  const result = await bridge.sdkTurn({ action: "subscribe", taskId, sessionId } as never);
   if (!result || result.ok !== true) throw new Error(result?.error || "SDK 会话读取失败");
   const payload = result.payload as { snapshot?: unknown } | undefined;
   try {
-    return parseSdkSnapshot(payload?.snapshot);
+    return parseSdkSnapshot(payload?.snapshot, sessionId);
   } catch (error) {
     // A successful subscribe has installed a listener even if its payload is
     // malformed. Release it before surfacing the parse failure.
-    await bridge.sdkTurn({ action: "unsubscribe", taskId, sessionId: SDK_SESSION_ID } as never).catch(() => undefined);
+    await bridge.sdkTurn({ action: "unsubscribe", taskId, sessionId } as never).catch(() => undefined);
     throw error;
   }
 }

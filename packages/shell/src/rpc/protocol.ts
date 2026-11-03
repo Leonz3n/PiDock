@@ -66,6 +66,17 @@ export type HostTaskOp =
   | "task/listApprovals"
   | "task/getApproval"
   | "task/sessionStates"
+  // [Pencil T04] #139: task-wide session identity and lifecycle.
+  | "task/sessionList"
+  | "task/sessionCreate"
+  | "task/sessionRename"
+  | "task/sessionArchive"
+  | "task/sessionRestore"
+  | "task/sessionDelete"
+  | "task/sessionActivate"
+  | "task/sessionReadout"
+  | "task/sessionModel"
+  | "task/sessionReasoning"
   | "task/registerService"
   | "task/planServiceStart"
   | "task/controlService"
@@ -263,6 +274,17 @@ const HOST_TASK_OPS: readonly string[] = [
   "task/setSessionThinking",
   "task/compactSession",
   "task/sessionStates",
+  // [Pencil T04] #139: task-wide session identity and lifecycle.
+  "task/sessionList",
+  "task/sessionCreate",
+  "task/sessionRename",
+  "task/sessionArchive",
+  "task/sessionRestore",
+  "task/sessionDelete",
+  "task/sessionActivate",
+  "task/sessionReadout",
+  "task/sessionModel",
+  "task/sessionReasoning",
   "task/usageRecords",
   "task/clearUsage",
   "task/fileRoots",

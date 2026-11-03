@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
 import { fileRootsThroughShell, type PidockBridge } from "../data/shellBridge";
+import { readTaskSessions } from "../data/taskSessions";
 import {
   hostText,
   observedText,
@@ -73,6 +74,23 @@ export function DesktopTaskFacts({ taskId, taskName, bridge }: {
   const [error, setError] = useState<string | null>(null);
   const [roots, setRoots] = useState<WorkspaceRootView[]>([]);
   const [mode, setMode] = useState<WorkspaceModeView | null>(null);
+  /**
+   * [#139] How many sessions this task actually has, read from the Host's own
+   * index. `null` while outstanding, and a failed read is named rather than
+   * printed as "one session" (the sentence this line used to carry unconditionally).
+   */
+  const [sessionCount, setSessionCount] = useState<number | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    setSessionCount(null); setSessionError(null);
+    void readTaskSessions(taskId).then((result) => {
+      if (!live) return;
+      if (result.ok) { setSessionCount(result.list.sessions.filter((session) => !session.archived).length); return; }
+      setSessionError(result.error);
+    });
+    return () => { live = false; };
+  }, [taskId]);
 
   useEffect(() => {
     let live = true;
@@ -134,6 +152,6 @@ export function DesktopTaskFacts({ taskId, taskName, bridge }: {
         </li>;
       })}
     </ul>}
-    <p className="mt-2 text-[10px] text-muted">任务 {hostText(taskName, "Host 未上报任务名称")} · 当前仅 main 一个会话（多会话见 #139）</p>
+    <p data-testid="task-facts-sessions" className="mt-2 text-[10px] text-muted">任务 {hostText(taskName, "Host 未上报任务名称")} · 会话 {sessionError !== null ? `列表读取失败：${sessionError}` : sessionCount === null ? "未读取" : `${sessionCount} 个（可在对话页新建、切换，各自独立上下文）`}</p>
   </section>;
 }

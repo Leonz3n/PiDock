@@ -54,7 +54,9 @@ import { serviceOwnerBootstrap, serviceOwnerRebind, type ServiceOwnerBootstrap, 
 import { TaskWorkspaceHost, diskTaskStore } from "./task-host.js";
 import { SdkTurnTransport } from "./sdk-turn-transport.js";
 import type { PromptContextEntry } from "./sdk-prompt-context.js";
-import { validateExplicitTextProvider } from "./explicit-text-provider.js";
+import { availableReasoningLevels, validateExplicitTextProvider } from "./explicit-text-provider.js";
+import { SESSION_PERMISSIONS, SESSION_THINKING_LEVELS, type SessionIndex, type SessionThinkingLevel } from "./session-index.js";
+import { switchSessionModel } from "./session-switch.js";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import type { ServiceRunObservation } from "../main/execution-ledger.js";
@@ -1002,6 +1004,94 @@ async function dispatchTaskOp(
   catch (error) { return { ok: false, error: error instanceof Error ? error.message : "task-operation-failed" }; }
 }
 
+/**
+ * [#139] One session's readout for the conversation header and the S08 list:
+ * the session's own identity + binding, the model it is bound to (declared row
+ * from the installed Provider), the levels that model actually declares, and the
+ * numbers the REAL SDK session reported.
+ *
+ * Every number is `null` when the session did not report it: occupancy and
+ * usage come from this session's own JSONL (`digest`), never from the legacy
+ * `task/sessionContext` defaults and never from a task-wide total.
+ */
+function sessionReadoutOf(host: TaskWorkspaceHost, sdkTurns: SdkTurnTransport | null, sessionId: string): Record<string, unknown> {
+  const index = host.sessionIndex();
+  const session = index.sessions.find((entry) => entry.id === sessionId);
+  if (!session) throw new Error("session-unknown");
+  const digest = host.sdkTextKernel().digest(sessionId);
+  const installed = host.sdkProviderConfig();
+  const boundModelId = session.binding?.modelId ?? installed?.config.modelId ?? null;
+  const row = boundModelId === null ? undefined : installed?.config.models.find((model) => model.id === boundModelId);
+  const busy = sdkTurns?.busy(sessionId) ?? false;
+  return {
+    session,
+    active: index.activeSessionId === sessionId,
+    model: row === undefined ? null : {
+      id: row.id, name: row.name, contextWindow: row.contextWindow, maxTokens: row.maxTokens, reasoning: row.reasoning,
+    },
+    reasoningLevels: row === undefined ? [] : availableReasoningLevels(row),
+    /** `used` is the last request's prompt size; `null` = unknown, never zero. */
+    context: {
+      used: digest.contextUsed,
+      window: row?.contextWindow ?? null,
+      source: digest.contextUsed === null ? "unknown" : "sdk-usage",
+    },
+    /** This session's own cumulative usage (each JSONL entry counted once). */
+    usage: digest.usage,
+    turns: digest.turns,
+    /** The model the transcript itself last ran on (its own record, not the binding). */
+    transcriptModel: digest.model,
+    pending: busy,
+    interrupted: digest.interrupted && !busy,
+  };
+}
+
+/**
+ * [#139] The Host's adapter for the one place a session's model/reasoning
+ * binding changes (`session-switch.ts` owns the order of refusals; this only
+ * wires the Host's own reads and writes into it):
+ *
+ * 1. the session must exist and not be archived (`sessionForTurn`);
+ * 2. the target model must be one of the installed Provider's declared rows;
+ * 3. busy / context-window / unknown-occupancy / undeclared level are refused;
+ * 4. the session's own index binding is written, then the isolated kernel binds
+ *    the live session (disposing its cached AgentSession so the NEXT turn uses
+ *    the new model while the JSONL history stays intact). A kernel refusal rolls
+ *    the index back, so the two records never disagree.
+ */
+async function applySessionBinding(
+  host: TaskWorkspaceHost, sdkTurns: SdkTurnTransport | null, sessionId: string,
+  modelId: string, level: SessionThinkingLevel | undefined,
+): Promise<Record<string, unknown>> {
+  const previous = host.sessionIndex();
+  const installed = host.sdkProviderConfig();
+  await switchSessionModel({
+    provider: () => installed === null ? null : {
+      profileId: installed.config.profileId,
+      generation: installed.generation,
+      models: installed.config.models,
+    },
+    session: (id) => host.sessionForTurn(id),
+    busy: (id) => sdkTurns?.busy(id) ?? false,
+    digest: (id) => host.sdkTextKernel().digest(id),
+    persist: (binding) => { host.bindTaskSession(sessionId, binding); },
+    bind: (id, binding) => host.sdkTextKernel().bind(id, binding),
+    rollback: () => { host.store.writeSessionIndex(host.taskDir, previous); },
+  }, { sessionId, modelId, ...(level === undefined ? {} : { thinkingLevel: level }) });
+  return sessionReadoutOf(host, sdkTurns, sessionId);
+}
+
+/** [#139] Reasoning only: same session, same model, level must be declared by it. */
+async function bindSessionReasoning(
+  host: TaskWorkspaceHost, sdkTurns: SdkTurnTransport | null, sessionId: string, level: SessionThinkingLevel,
+): Promise<Record<string, unknown>> {
+  const session = host.sessionForTurn(sessionId);
+  const installed = host.sdkProviderConfig();
+  if (!installed) throw new Error("provider-not-configured");
+  const modelId = session.binding?.modelId ?? installed.config.modelId;
+  return applySessionBinding(host, sdkTurns, sessionId, modelId, level);
+}
+
 async function performTaskOp(
   taskId: string, op: string, payload: unknown, origin?: TaskOpOrigin,
 ): Promise<{ ok: true; payload: Record<string, unknown> } | { ok: false; error: string }> {
@@ -1048,6 +1138,10 @@ async function performTaskOp(
       }
       if (op === "task/sdkStart" || op === "task/sendMessage") {
         if (typeof record["requestId"] !== "string" || typeof record["text"] !== "string") throw new Error("invalid-sdk-request");
+        // [#139] A turn belongs to an existing, non-archived session of THIS
+        // task. Nothing is created here, so a turn can never land in a session
+        // the user did not choose (or in one they archived).
+        host.sessionForTurn(sessionId);
         const turn = await sdkTurns.start(sessionId, record["requestId"], record["text"], (sdkEvent) => {
           hostPort.postMessage({ kind: "sdk-turn-event", event: sdkEvent });
         }, (terminal) => hostPort.postMessage({ kind: "sdk-turn-status", turn: terminal }),
@@ -1839,6 +1933,119 @@ async function performTaskOp(
           persist: () => host.store.writeSession(host.taskDir, channel.snapshot()),
         });
         return result.ok ? { ok: true, payload: result.payload } : { ok: false, error: result.error };
+      }
+      // ---- [Pencil T04] #139: task-wide session identity ----
+      //
+      // One task owns one working directory and several real sessions. The Host
+      // is the only authority over which session exists, what it is called,
+      // which one is active and which model each one is bound to; these ops are
+      // exact-key, task-scoped (main binds the task from the sender) and never
+      // invent a session. A read never materializes a session or a transcript.
+      case "task/sessionList": {
+        const index = host.sessionIndex();
+        const installed = host.sdkProviderConfig();
+        return { ok: true, payload: {
+          activeSessionId: index.activeSessionId,
+          sessions: index.sessions,
+          provider: installed === null ? null : {
+            profileId: installed.config.profileId,
+            modelId: installed.config.modelId,
+            generation: installed.generation,
+            models: installed.config.models.map((row) => ({
+              id: row.id, name: row.name, contextWindow: row.contextWindow, maxTokens: row.maxTokens,
+              reasoning: row.reasoning, reasoningLevels: availableReasoningLevels(row),
+            })),
+          },
+        } };
+      }
+      case "task/sessionCreate": {
+        const name = record["name"];
+        if (name !== undefined && (typeof name !== "string" || name.trim().length === 0)) {
+          return { ok: false, error: "invalid-payload: task/sessionCreate.name must be a non-empty string" };
+        }
+        const permission = record["permission"];
+        if (permission !== undefined && (typeof permission !== "string" || !(SESSION_PERMISSIONS as readonly string[]).includes(permission))) {
+          return { ok: false, error: "invalid-payload: task/sessionCreate.permission must be read/default/auto" };
+        }
+        try {
+          const created = host.createTaskSession({
+            ...(typeof name === "string" ? { name } : {}),
+            ...(typeof permission === "string" ? { permission: permission as (typeof SESSION_PERMISSIONS)[number] } : {}),
+          });
+          return { ok: true, payload: { session: created.session, activeSessionId: created.index.activeSessionId, sessions: created.index.sessions } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/sessionRename": case "task/sessionArchive": case "task/sessionRestore":
+      case "task/sessionDelete": case "task/sessionActivate": {
+        const sessionId = record["sessionId"];
+        if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) {
+          return { ok: false, error: `invalid-payload: ${op} requires sessionId` };
+        }
+        try {
+          let index: SessionIndex;
+          if (op === "task/sessionRename") {
+            const name = record["name"];
+            if (typeof name !== "string") return { ok: false, error: "invalid-payload: task/sessionRename requires name" };
+            index = host.renameTaskSession(sessionId, name);
+          } else if (op === "task/sessionArchive") index = host.archiveTaskSession(sessionId);
+          else if (op === "task/sessionRestore") index = host.restoreTaskSession(sessionId);
+          else if (op === "task/sessionActivate") index = host.activateTaskSession(sessionId);
+          else {
+            // A session with a model turn in flight is not deleted under it.
+            if (sdkTurns?.busy(sessionId)) throw new Error("sdk-session-busy");
+            index = host.deleteTaskSession(sessionId);
+          }
+          return { ok: true, payload: { activeSessionId: index.activeSessionId, sessions: index.sessions } };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      case "task/sessionReadout": {
+        const sessionId = record["sessionId"];
+        if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) {
+          return { ok: false, error: "invalid-payload: task/sessionReadout requires sessionId" };
+        }
+        try { return { ok: true, payload: sessionReadoutOf(host, sdkTurns, sessionId) }; }
+        catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+      }
+      // [#139] Model switching inside a session: keep the same transcript and
+      // bind the session to another declared model of the installed profile.
+      // Refused by name when the task is busy, when the target model is not
+      // declared, or when the stored context does not fit the new window —
+      // never by compacting, truncating or substituting a model.
+      case "task/sessionModel": {
+        const sessionId = record["sessionId"];
+        const modelId = record["modelId"];
+        const level = record["thinkingLevel"];
+        if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) {
+          return { ok: false, error: "invalid-payload: task/sessionModel requires sessionId" };
+        }
+        if (typeof modelId !== "string" || modelId.length === 0) {
+          return { ok: false, error: "invalid-payload: task/sessionModel requires modelId" };
+        }
+        if (level !== undefined && level !== null && (typeof level !== "string" || !(SESSION_THINKING_LEVELS as readonly string[]).includes(level))) {
+          return { ok: false, error: "invalid-payload: task/sessionModel.thinkingLevel must be a declared level" };
+        }
+        try {
+          const readout = await applySessionBinding(host, sdkTurns, sessionId, modelId,
+            level === null || level === undefined ? undefined : level as SessionThinkingLevel);
+          return { ok: true, payload: readout };
+        } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+      }
+      case "task/sessionReasoning": {
+        const sessionId = record["sessionId"];
+        const level = record["level"];
+        if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) {
+          return { ok: false, error: "invalid-payload: task/sessionReasoning requires sessionId" };
+        }
+        if (typeof level !== "string" || !(SESSION_THINKING_LEVELS as readonly string[]).includes(level)) {
+          return { ok: false, error: "invalid-payload: task/sessionReasoning.level must be a declared level" };
+        }
+        try {
+          return { ok: true, payload: await bindSessionReasoning(host, sdkTurns, sessionId, level as SessionThinkingLevel) };
+        } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
       }
       // [PiDock 11] (#9) provider/model/context ops. The catalog is redacted
       // app-level data (ids/names/protocols/model declarations, never an auth

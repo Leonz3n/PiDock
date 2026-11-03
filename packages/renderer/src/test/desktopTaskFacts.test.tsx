@@ -43,8 +43,9 @@ describe("task workspace facts (S08)", () => {
     expect(screen.getByText(new RegExp(`HEAD ${HEAD}（实测）`))).toBeInTheDocument();
     expect(screen.getByText(/本地真实路径: \/work\/common-configs/)).toBeInTheDocument();
     expect(screen.getAllByText(/已核验/)).toHaveLength(2);
-    // Only the real session is named; no invented session list.
-    expect(screen.getByText(/当前仅 main 一个会话/)).toBeInTheDocument();
+    // [#139] The session count is the Host's own read; a fixture that cannot
+    // answer names that failure instead of asserting "one session".
+    expect(screen.getByTestId("task-facts-sessions")).toHaveTextContent("会话 列表读取失败：会话列表返回异常");
     fireEvent.click(screen.getByRole("button", { name: /进入活跃对话/ }));
   });
 

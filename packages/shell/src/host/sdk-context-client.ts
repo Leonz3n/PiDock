@@ -42,9 +42,16 @@ export interface SdkToolHost {
 }
 
 export interface SdkTextKernelPort {
-  open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[] }>;
+  /** [#139] The opened session also reports the model and clamped level it runs with. */
+  open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[]; modelId?: string; thinkingLevel?: string }>;
   prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void, issuedTurnId?: string): Promise<SdkTextResult>;
   cancel(sessionId: string): Promise<void>;
+  /**
+   * [#139] Bind one session to another model of the installed profile, keeping
+   * its transcript. Absent means this kernel cannot change a binding (the
+   * read-only kernel), and the caller refuses by name instead of pretending.
+   */
+  bind?(sessionId: string, binding: { modelId: string; thinkingLevel?: ModelThinkingLevel }): Promise<{ modelId: string; thinkingLevel: string }>;
   dispose(): Promise<void>;
 }
 
@@ -259,12 +266,21 @@ export class SdkContextClient implements SdkTextKernelPort {
     });
   }
 
-  async open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[] }> {
+  async open(sessionId: string): Promise<{ sdkId: string; file: string; tools: string[]; modelId?: string; thinkingLevel?: string }> {
     const payload = await this.call({ op: "open", sessionId });
     const tools = payload["tools"];
     if (typeof payload["sdkId"] !== "string" || typeof payload["file"] !== "string" || !Array.isArray(tools) ||
         tools.some((tool) => typeof tool !== "string")) throw new Error("sdk-context-reply-invalid");
-    return { sdkId: payload["sdkId"], file: payload["file"], tools: tools as string[] };
+    return { sdkId: payload["sdkId"], file: payload["file"], tools: tools as string[],
+      ...(typeof payload["modelId"] === "string" ? { modelId: payload["modelId"] } : {}),
+      ...(typeof payload["thinkingLevel"] === "string" ? { thinkingLevel: payload["thinkingLevel"] } : {}) };
+  }
+
+  async bind(sessionId: string, binding: { modelId: string; thinkingLevel?: ModelThinkingLevel }): Promise<{ modelId: string; thinkingLevel: string }> {
+    const payload = await this.call({ op: "bind", sessionId, modelId: binding.modelId,
+      ...(binding.thinkingLevel === undefined ? {} : { thinkingLevel: binding.thinkingLevel }) });
+    if (typeof payload["modelId"] !== "string" || typeof payload["thinkingLevel"] !== "string") throw new Error("sdk-context-reply-invalid");
+    return { modelId: payload["modelId"], thinkingLevel: payload["thinkingLevel"] };
   }
 
   async prompt(sessionId: string, text: string, deliver?: (event: SdkTextEvent) => void, issuedTurnId?: string): Promise<SdkTextResult> {
