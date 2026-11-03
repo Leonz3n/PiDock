@@ -56,7 +56,8 @@ export const useDraftStore = create<DraftState>((set, get) => ({
     set({ drafts: { ...get().drafts, [sessionKeyOf(taskId, sessionId)]: emptyDraft } });
   },
   forget: (taskId, sessionId) => {
-    const { [sessionKeyOf(taskId, sessionId)]: _removed, ...rest } = get().drafts;
+    const rest = { ...get().drafts };
+    delete rest[sessionKeyOf(taskId, sessionId)];
     set({ drafts: rest });
   },
 }));
