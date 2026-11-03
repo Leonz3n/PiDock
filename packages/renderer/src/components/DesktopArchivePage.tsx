@@ -237,6 +237,14 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
   const [restoring, setRestoring] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const [cleanup, setCleanup] = useState<CleanupPanel | null>(null);
+  /**
+   * [T12] #147 the destructive confirmation is an in-app dialog, not
+   * `window.confirm`: a native modal on macOS Electron blocks the renderer's own
+   * event loop (the click that opened it never returns, `Runtime.evaluate` in the
+   * capture harness times out, and the renderer cannot re-render the refusal that
+   * follows). The dialog states the Host preview verbatim and can be cancelled.
+   */
+  const [confirming, setConfirming] = useState<{ taskId: string; text: string } | null>(null);
   useEffect(() => {
     let live = true;
     setResult(null);
@@ -286,10 +294,16 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
       setCleanup((latest) => latest?.taskId === taskId ? { ...latest, previewing: false, error: error instanceof Error ? error.message : "清理预览返回异常" } : latest);
     }
   };
+  /** The panel button only opens the confirmation; nothing runs from a click alone. */
+  const askCleanup = (task: ArchivedTask) => {
+    const current = cleanup;
+    if (!current || current.taskId !== task.taskId || !current.preview || current.running) return;
+    setConfirming({ taskId: task.taskId, text: confirmationText(task.name, current.preview) });
+  };
   const runCleanup = async (task: ArchivedTask) => {
     const current = cleanup;
     if (!current || current.taskId !== task.taskId || !current.preview || current.running) return;
-    if (!window.confirm(confirmationText(task.name, current.preview))) return;
+    setConfirming(null);
     setCleanup({ ...current, running: true, error: undefined, result: undefined });
     const response = await runCleanupThroughShell({ taskId: task.taskId, selection: current.selection, label: "清理任务", repoScopes: current.repoScopes });
     if (!response.ok) {
@@ -300,7 +314,18 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
     setRevision((value) => value + 1);
     onRestored();
   };
+  const confirmingTask = confirming === null ? null : result?.rows.find((task) => task.taskId === confirming.taskId) ?? null;
   return <div data-testid="desktop-archive-page" className="px-[34px] py-[30px] below-narrow:px-5">
+    {confirming !== null && <div role="presentation" data-testid="archive-cleanup-confirm-backdrop" className="fixed inset-0 z-40 grid place-items-center bg-ink/40 p-4">
+      <div role="dialog" aria-modal="true" aria-label="确认清理任务" data-testid="archive-cleanup-confirm" className="w-full max-w-[560px] rounded-[10px] border border-line bg-paper p-5 shadow-xl">
+        <h2 className="text-[15px] font-semibold text-ink">确认清理</h2>
+        <p className="mt-2 whitespace-pre-wrap break-words text-xs text-muted">{confirming.text}</p>
+        <div className="mt-4 flex justify-end gap-2 border-t border-line pt-3">
+          <Button type="button" size="sm" variant="outline" onClick={() => setConfirming(null)}>取消</Button>
+          <Button type="button" size="sm" variant="destructive" disabled={confirmingTask === null || cleanup?.running === true} onClick={() => { if (confirmingTask !== null) void runCleanup(confirmingTask); }}>执行清理</Button>
+        </div>
+      </div>
+    </div>}
     <div className="flex items-start justify-between gap-3">
       <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Archived Tasks</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">已归档</h1></div>
       <Button type="button" size="sm" variant="outline" onClick={() => setRevision((value) => value + 1)}>刷新</Button>
@@ -364,7 +389,7 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
             <div className="mt-2 flex flex-wrap gap-3 text-xs">
               {([ ["exportSessions", "导出会话"], ["exportDrafts", "导出草稿"], ["exportUsage", "导出用量"] ] as const).map(([key, label]) => <label key={key} className="flex items-center gap-1.5"><input type="checkbox" checked={cleanup.selection[key]} disabled={cleanup.previewing || cleanup.running} onChange={(event) => changeSelection(key, event.target.checked)} />{label}</label>)}
             </div>
-            <div className="mt-3 flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" disabled={cleanup.previewing || cleanup.running} onClick={() => void previewCleanup(task.taskId)}>{cleanup.previewing ? "正在生成清单…" : "生成清单"}</Button>{cleanup.preview && <Button type="button" size="sm" disabled={cleanup.running} onClick={() => void runCleanup(task)}>{cleanup.running ? "正在清理…" : "确认清理"}</Button>}</div>
+            <div className="mt-3 flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" disabled={cleanup.previewing || cleanup.running} onClick={() => void previewCleanup(task.taskId)}>{cleanup.previewing ? "正在生成清单…" : "生成清单"}</Button>{cleanup.preview && <Button type="button" size="sm" disabled={cleanup.previewing || cleanup.running} onClick={() => askCleanup(task)}>{cleanup.running ? "正在清理…" : "确认清理"}</Button>}</div>
             {cleanup.error && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{cleanup.error}</p>}
             {cleanup.preview && <div className="mt-3 space-y-2 text-xs">
               <p>Host 记录清理标记：{cleanup.preview.recordsWillBeRemoved === undefined ? "Host 未上报" : cleanup.preview.recordsWillBeRemoved ? "将删除所选范围中的记录" : "未标记删除记录"}</p>
