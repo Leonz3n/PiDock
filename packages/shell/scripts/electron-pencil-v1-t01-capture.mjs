@@ -27,6 +27,16 @@
 //   (c) 未归属任务 with a claimable task
 //   (d) edit dialog opened from the real saved workspace (repair affordance visible)
 //   (e) delete-blocker dialog naming the two blocking tasks
+//   (f) a REAL create submission typed into the S10 dialog (empty-name refusal first,
+//       then the full draft and the post-save S07 overview of the new workspace)
+//   (g) a REAL edit submission that renames that workspace, with the registry id read
+//       from `ProjectRegistry` before/after to show the rename kept the identity
+//   (h) the pre-restart reference capture that the restart phase is compared against
+//
+// (f)/(g) are the only phases that write through the UI. (f) first clicks the primary
+// button with an empty name: that attempt must be refused inline and must not touch
+// the registry (the project id list is compared before/after), so no junk workspace is
+// left behind. Only then is the name typed and the real submission made.
 //
 // Restart proof: after the primary phase the script spawns a SECOND Electron OS
 // process (`--phase restart`) that boots the same production wiring over the SAME
@@ -44,6 +54,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
@@ -73,6 +84,73 @@ const chromiumProfile = phase === "restart" ? join(root, "profile-restart") : pr
 app.setPath("userData", chromiumProfile);
 const wait = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 const pngPixelSize = (png) => ({ width: png.readUInt32BE(16), height: png.readUInt32BE(20) });
+// A dependency-free PNG reader: IHDR + concatenated IDAT + the five scanline filters.
+// Only what `Page.captureScreenshot` writes here (8-bit RGB/RGBA, non-interlaced) is
+// supported, so an unexpected format fails loudly instead of comparing garbage.
+const pngPixels = (png) => {
+  let offset = 8; let width = 0; let height = 0; let channels = 0;
+  const idat = [];
+  while (offset + 8 <= png.length) {
+    const length = png.readUInt32BE(offset);
+    const type = png.toString("ascii", offset + 4, offset + 8);
+    const data = png.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0); height = data.readUInt32BE(4);
+      const depth = data[8]; const colorType = data[9];
+      if (depth !== 8 || (colorType !== 2 && colorType !== 6) || data[12] !== 0) throw Error(`unsupported PNG: depth ${depth} colorType ${colorType} interlace ${data[12]}`);
+      channels = colorType === 6 ? 4 : 3;
+    } else if (type === "IDAT") idat.push(data);
+    else if (type === "IEND") break;
+    offset += length + 12;
+  }
+  if (!width || !height || !channels) throw Error("PNG without IHDR");
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = width * channels;
+  const out = Buffer.alloc(height * stride);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)];
+    const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+    const at = y * stride;
+    for (let i = 0; i < stride; i++) {
+      const a = i >= channels ? out[at + i - channels] : 0;
+      const b = y > 0 ? out[at - stride + i] : 0;
+      const c = y > 0 && i >= channels ? out[at - stride + i - channels] : 0;
+      let value = line[i];
+      if (filter === 1) value += a;
+      else if (filter === 2) value += b;
+      else if (filter === 3) value += (a + b) >> 1;
+      else if (filter === 4) {
+        const p = a + b - c; const pa = Math.abs(p - a); const pb = Math.abs(p - b); const pc = Math.abs(p - c);
+        value += pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      } else if (filter !== 0) throw Error(`unsupported PNG filter ${filter} on row ${y}`);
+      out[at + i] = value & 0xff;
+    }
+  }
+  return { width, height, channels, data: out };
+};
+/** Per-pixel comparison of two screenshots of the same view and size. */
+const screenshotDiff = (left, right) => {
+  const a = pngPixels(left); const b = pngPixels(right);
+  if (a.width !== b.width || a.height !== b.height || a.channels !== b.channels) {
+    throw Error(`screenshot size mismatch ${a.width}x${a.height} vs ${b.width}x${b.height}`);
+  }
+  const stride = a.width * a.channels;
+  let differingPixels = 0; let maxChannelDelta = 0; const differingRows = [];
+  for (let y = 0; y < a.height; y++) {
+    const start = y * stride; const end = start + stride;
+    if (a.data.compare(b.data, start, end, start, end) === 0) continue;
+    differingRows.push(y);
+    for (let x = 0; x < a.width; x++) {
+      let delta = 0;
+      for (let channel = 0; channel < a.channels; channel++) {
+        delta = Math.max(delta, Math.abs(a.data[start + x * a.channels + channel] - b.data[start + x * a.channels + channel]));
+      }
+      if (delta > 0) { differingPixels += 1; maxChannelDelta = Math.max(maxChannelDelta, delta); }
+    }
+  }
+  return { width: a.width, height: a.height, totalPixels: a.width * a.height, differingPixels, maxChannelDelta,
+    differingRows: differingRows.slice(0, 8), differingRowCount: differingRows.length };
+};
 const children = [];
 let views, registry, index, projects, catalog;
 
@@ -99,6 +177,12 @@ const now = "2026-11-03T10:00:00.000Z";
 const PROJECT_NAME = "Adder 结算工作台";
 const PROJECT_DESCRIPTION = "对账与运单服务的日常开发工作台";
 const MISSING_REPO_NAME = "legacy-bff";
+// The workspace (f) creates through the DOM and (g) renames through the DOM.
+const SAVE_NAME = "验收工作空间";
+const SAVE_RENAMED = "验收工作空间·改名";
+const SAVE_DESCRIPTION = "保存流程验收：真实新建与改名";
+const SAVE_TEMPLATE = "evidence/{task-name}";
+const SAVE_ENV = { key: "SAVE_CHECK", value: "1" };
 const DEMO_LEAK = /Atlas Web|演示任务|演示统计|演示数据|项目映射未建立|真实任务创建尚未接入|示例工作空间/;
 
 const shotFile = (width, height, state) => `${width}x${height}-${state}.png`;
@@ -134,6 +218,21 @@ async function run() {
       remoteBranch: "main", baseCommit: "test", repos: [], now,
     })));
     return taskDir;
+  };
+  // The persisted identity of ONE workspace, read straight out of the real registry file.
+  // Shared field order so two phases can compare it with `JSON.stringify`.
+  const identityOf = (targetId) => {
+    const record = projects.get(targetId);
+    if (!record) throw Error(`workspace ${targetId} is missing from the registry`);
+    return {
+      projectId: record.id,
+      projectName: record.name,
+      description: record.description,
+      repositories: record.repositories.map((row) => ({ id: row.id, name: row.name, path: row.path })),
+      directories: record.directories.map((row) => ({ id: row.id, name: row.name, path: row.path })),
+      environment: record.environment,
+      branchTemplate: record.branchTemplate,
+    };
   };
   const readIdentity = () => {
     const record = projects.get(projectId);
@@ -212,6 +311,9 @@ async function run() {
       if (!projectId) throw Error("restart phase: PIDOCK_T01_PROJECT_ID missing");
       const expected = JSON.parse(process.env["PIDOCK_T01_EXPECT_IDENTITY"] ?? "null");
       if (!expected) throw Error("restart phase: no expected identity supplied");
+      // The workspace the primary phase created AND renamed through the DOM in (f)/(g).
+      const expectedSaved = JSON.parse(process.env["PIDOCK_T01_EXPECT_SAVED"] ?? "null");
+      if (!expectedSaved) throw Error("restart phase: no expected saved-workspace identity supplied");
       stage = "restart identity";
       // Fresh main-owned stores over the SAME files, in a NEW OS process.
       const identity = readIdentity();
@@ -225,7 +327,13 @@ async function run() {
         JSON.stringify(identity.associations) === JSON.stringify(expected.associations), JSON.stringify(identity.associations));
       check("environment and branch template survive the process restart",
         JSON.stringify(identity.environment) === JSON.stringify(expected.environment) && identity.branchTemplate === expected.branchTemplate);
-      writeFileSync(join(output, "restart-identity.json"), `${JSON.stringify({ before: expected, after: identity }, null, 2)}\n`);
+      // (f)/(g): a workspace written by the UI must be persisted, not just held in renderer state.
+      const savedAfter = identityOf(expectedSaved.projectId);
+      check("the workspace created through the UI survives the process restart with the same id",
+        savedAfter.projectId === expectedSaved.projectId, savedAfter.projectId);
+      check("the renamed name/sources/environment/template survive the process restart",
+        JSON.stringify(savedAfter) === JSON.stringify(expectedSaved), JSON.stringify(savedAfter));
+      writeFileSync(join(output, "restart-identity.json"), `${JSON.stringify({ before: expected, after: identity, savedBefore: expectedSaved, savedAfter }, null, 2)}\n`);
     }
 
     stage = "window";
@@ -269,6 +377,56 @@ async function run() {
     };
     const click = (name) => evalJs(`(() => { const b = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === ${JSON.stringify(name)} || el.getAttribute('aria-label') === ${JSON.stringify(name)}); if (!b) throw Error('missing button '+${JSON.stringify(name)}+' :: '+document.body.innerText.replace(/\\n+/g,' | ').slice(0,600)); b.click(); return true; })()`);
     const inputValue = (label) => evalJs(`(() => { const el = document.querySelector('input[aria-label=' + JSON.stringify(${JSON.stringify(label)}) + ']'); return el ? el.value : null; })()`);
+    // Typing: React keeps its own value tracker, so assigning `el.value` alone would be
+    // ignored by the controlled input. The prototype setter + a bubbling `input` event is
+    // what a real keystroke produces; the returned `el.value` is compared by the caller so
+    // a silently dropped keystroke fails the capture instead of writing something else.
+    const type = async (label, value) => {
+      const typed = await evalJs(`(() => {
+        const el = document.querySelector('input[aria-label=' + JSON.stringify(${JSON.stringify(label)}) + ']');
+        if (!el) throw Error('missing input ' + ${JSON.stringify(label)});
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        setter.call(el, ${JSON.stringify(value)});
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return el.value;
+      })()`);
+      if (typed !== value) throw Error(`typing into "${label}" did not stick: ${JSON.stringify(typed)}`);
+      return typed;
+    };
+    // A dialog button label carries a trailing `⌘↵` hint, so an exact-text click misses.
+    // Whitespace is stripped on both sides; the search can be scoped to the open dialog so
+    // a same-labelled button on the page behind cannot be hit by accident.
+    const clickLabelled = (needle, inDialog = false) => evalJs(`(() => {
+      const root = ${inDialog ? "document.querySelector('[role=dialog]')" : "document"} ?? document;
+      const want = ${JSON.stringify(needle.replace(/\s+/g, ""))};
+      const button = [...root.querySelectorAll('button')].find((el) => el.textContent.replace(/\\s+/g, '').includes(want));
+      if (!button) throw Error('missing button containing ' + ${JSON.stringify(needle)} + ' :: ' + document.body.innerText.replace(/\\n+/g, ' | ').slice(0, 600));
+      button.click();
+      return true;
+    })()`);
+    const dialogOpen = () => evalJs("!!document.querySelector('[role=dialog]')");
+    const dialogText = () => evalJs("document.querySelector('[role=dialog]')?.innerText ?? ''");
+    const dialogAlerts = () => evalJs("[...document.querySelectorAll('[role=dialog] [role=alert]')].map((el) => el.textContent.trim())");
+    // A refused submit must be visible before the capture asserts on it, so poll for the
+    // inline error rather than assuming it renders within one frame.
+    const untilDialogAlert = async () => {
+      let last = [];
+      for (let i = 0; i < 100; i++) { last = await dialogAlerts(); if (last.length) return last; await wait(100); }
+      throw Error(`no inline dialog alert [${phase}]: ${JSON.stringify((await dialogText()).replace(/\n+/g, " | ").slice(0, 600))}`);
+    };
+    const dialogTitles = () => evalJs("[...document.querySelectorAll('[role=dialog] h2')].map((el) => el.textContent.trim())");
+    const overviewTitle = () => evalJs("document.querySelector('[data-testid=overview-title]')?.textContent.trim() ?? null");
+    // The workspace rows plus the 未归属任务 row, in rendered order. 新建工作空间 (the "+" in the
+    // group heading) and 已归档 also live in this group but are not workspace rows.
+    const navLabels = () => evalJs("[...document.querySelectorAll('[data-nav-group=workspaces] button[aria-label]')].map((el) => el.getAttribute('aria-label')).filter((label) => label !== '新建工作空间' && label !== '已归档')");
+    const currentNav = () => evalJs("document.querySelector('[data-nav-group=workspaces] button[aria-current=page]')?.getAttribute('aria-label') ?? null");
+    const sourceCards = () => evalJs("[...document.querySelectorAll('[data-source-id]')].map((el) => el.textContent.replace(/\\s+/g, ' ').trim())");
+    const sizeTo = async (width, height) => { views.window.setContentSize(width, height); await wait(120); };
+    // Focus is restored to the dialog opener on close, and a lingering `:focus` border would
+    // differ between the pre- and post-restart runs of the SAME view. Blur before the two
+    // captures that are compared byte-for-byte, on both sides.
+    const settleFocus = () => evalJs("(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); return document.activeElement === document.body; })()");
+    const registryIds = () => projects.list().projects.map((row) => row.id);
 
     // Fail closed: the loaded entry must be the packaged React renderer over file://.
     const url = await evalJs("location.href");
@@ -347,8 +505,27 @@ async function run() {
       check("post-restart UI still lists both assigned tasks", body.includes("结算对账分页边界") && body.includes("运单查询服务联调"));
       check("post-restart UI still names the unassigned task count", body.includes("另有 1 个任务尚未归属任何工作空间"));
       check("post-restart UI still shows the saved environment", body.includes("NODE_ENV = development"));
+      // The workspace (f)/(g) wrote through the DOM must be readable in the new process too,
+      // and navigating to it must render the values the dialog really submitted.
+      const restartNav = await navLabels();
+      check("post-restart sidebar lists the workspace created through the UI", restartNav.includes(SAVE_RENAMED), JSON.stringify(restartNav));
+      await settleFocus();
       await capture("workspace-overview-after-restart", 1440, 900);
       await capture("workspace-overview-after-restart", 720, 560);
+      await click(SAVE_RENAMED);
+      const savedRestartBody = await until((candidate) => candidate.includes(SAVE_RENAMED) && candidate.includes(`SAVE_CHECK = ${SAVE_ENV.value}`) &&
+        candidate.includes("save-check-repo（Git 仓库）") && candidate.includes("save-check-dir（普通目录）") && candidate.includes("路径可用"), "post-restart saved overview");
+      if (DEMO_LEAK.test(savedRestartBody)) throw Error(`demo/fixture string leaked into the post-restart saved overview: ${savedRestartBody.match(DEMO_LEAK)?.[0]}`);
+      const savedRestartFlat = savedRestartBody.replace(/\s+/g, " ").trim();
+      check("post-restart overview of the UI-created workspace renders its real source names, path and description",
+        savedRestartFlat.includes("save-check-repo（Git 仓库）") && savedRestartFlat.includes("save-check-dir（普通目录）") &&
+        savedRestartFlat.includes(SAVE_DESCRIPTION), savedRestartFlat.slice(0, 400));
+      check("post-restart overview of the UI-created workspace renders the saved environment and template",
+        savedRestartBody.includes(`SAVE_CHECK = ${SAVE_ENV.value}`) && savedRestartBody.includes(SAVE_TEMPLATE));
+      check("post-restart overview draws both UI-created sources as readable", savedRestartBody.includes("路径可用"), savedRestartBody.slice(0, 400));
+      await settleFocus();
+      await capture("workspace-overview-after-restart-saved", 1440, 900);
+      await capture("workspace-overview-after-restart-saved", 720, 560);
       let revision = "unknown";
       try { revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", cwd: repoRoot }).trim(); } catch { /* recorded as unknown */ }
       const log = {
@@ -447,6 +624,177 @@ async function run() {
     await click("取消");
     await until((body) => !body.includes("仍关联此工作空间"), "delete dialog closed");
 
+    // ================================================ (f) real CREATE submission
+    // Everything below is typed into the real S10 dialog and submitted through the primary
+    // button, so main's real `projectOps` create path runs and the registry really changes.
+    // The empty-name refusal comes FIRST: it must be refused inline and must not write.
+    const saveRepo = join(root, "sources", "save-check-repo");
+    const saveDir = join(root, "sources", "save-check-dir");
+    for (const dir of [saveRepo, saveDir]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(saveRepo, "README.md"), "# save-check-repo\n\n保存流程验收仓库。\n");
+    await click("新建工作空间");
+    await until((body) => body.includes("创建工作区并保存配置") && body.includes("工作空间名称 *"), "create dialog for the real submission");
+    check("the create dialog opened empty for a real submission", (await inputValue("工作空间名称 *")) === "", String(await inputValue("工作空间名称 *")));
+    const projectsBeforeSave = registryIds();
+    await clickLabelled("添加 Git 仓库", true);
+    await type("仓库名称 1", "save-check-repo");
+    await type("仓库路径 1", saveRepo);
+    await clickLabelled("添加普通目录", true);
+    await type("目录名称 1", "save-check-dir");
+    await type("目录路径 1", saveDir);
+    await clickLabelled("添加变量", true);
+    await type(`环境变量名 1`, SAVE_ENV.key);
+    await type(`环境变量值 1`, SAVE_ENV.value);
+    await type("Git 远程分支模板 *", SAVE_TEMPLATE);
+    await type("描述与业务用途", SAVE_DESCRIPTION);
+    stage = "create blocked by empty name";
+    await clickLabelled("创建工作区并保存配置", true);
+    const nameRefusal = await untilDialogAlert();
+    check("an empty name blocks the save with the inline named message", nameRefusal.includes("请填写工作空间名称"), JSON.stringify(nameRefusal));
+    check("the blocked save leaves the dialog open with the draft intact",
+      (await dialogOpen()) === true && (await dialogTitles())[0] === "新建工作空间" && (await inputValue("工作空间名称 *")) === "" &&
+      (await inputValue("仓库名称 1")) === "save-check-repo" && (await inputValue("目录名称 1")) === "save-check-dir" &&
+      (await inputValue("环境变量名 1")) === SAVE_ENV.key && (await inputValue("Git 远程分支模板 *")) === SAVE_TEMPLATE,
+      JSON.stringify({ open: await dialogOpen(), title: (await dialogTitles())[0], name: await inputValue("工作空间名称 *"),
+        repo: await inputValue("仓库名称 1"), dir: await inputValue("目录名称 1"), env: await inputValue("环境变量名 1"),
+        template: await inputValue("Git 远程分支模板 *") }));
+    check("the blocked save wrote nothing to the real registry", JSON.stringify(registryIds()) === JSON.stringify(projectsBeforeSave),
+      JSON.stringify({ before: projectsBeforeSave, after: registryIds() }));
+    await type("工作空间名称 *", SAVE_NAME);
+    stage = "create filled dialog";
+    // Input VALUES are not part of `innerText`, so the draft is read field by field.
+    const filledDraft = { name: await inputValue("工作空间名称 *"), description: await inputValue("描述与业务用途"),
+      repository: [await inputValue("仓库名称 1"), await inputValue("仓库路径 1")],
+      directory: [await inputValue("目录名称 1"), await inputValue("目录路径 1")],
+      environment: [await inputValue("环境变量名 1"), await inputValue("环境变量值 1")],
+      branchTemplate: await inputValue("Git 远程分支模板 *") };
+    check("the filled draft really carries the typed name/description/sources/env/template",
+      filledDraft.name === SAVE_NAME && filledDraft.description === SAVE_DESCRIPTION &&
+      JSON.stringify(filledDraft.repository) === JSON.stringify(["save-check-repo", saveRepo]) &&
+      JSON.stringify(filledDraft.directory) === JSON.stringify(["save-check-dir", saveDir]) &&
+      JSON.stringify(filledDraft.environment) === JSON.stringify([SAVE_ENV.key, SAVE_ENV.value]) &&
+      filledDraft.branchTemplate === SAVE_TEMPLATE, JSON.stringify(filledDraft));
+    const filledDialogText = await dialogText();
+    check("the filled dialog has one Git row and one directory row, so no 尚未登记来源 hint",
+      !filledDialogText.includes("尚未登记来源") && !filledDialogText.includes("尚未添加变量"),
+      filledDialogText.replace(/\n+/g, " | ").slice(0, 400));
+    check("the inline name error is gone once the name is typed", !(await dialogAlerts()).includes("请填写工作空间名称"), JSON.stringify(await dialogAlerts()));
+    await capture("workspace-create-filled", 1440, 900);
+    await capture("workspace-create-filled", 720, 560);
+    await sizeTo(1440, 900);
+    stage = "create submit";
+    await clickLabelled("创建工作区并保存配置", true);
+    // `innerText` breaks lines around the count badges, so layout-agnostic text checks run on
+    // a whitespace-normalised copy. Waiting for the empty-task-ledger copy also waits out the
+    // lifecycle read that follows the reload, so the counts below are real, not 未核验.
+    const flat = (value) => value.replace(/\s+/g, " ").trim();
+    const savedBody = await until((body) => !body.includes("创建工作区并保存配置") && body.includes(SAVE_NAME) &&
+      body.includes("save-check-repo（Git 仓库）") && body.includes(`SAVE_CHECK = ${SAVE_ENV.value}`) &&
+      body.includes("这个工作空间还没有进行中任务。") && body.includes("路径可用"), "overview of the newly created workspace");
+    const savedFlat = flat(savedBody);
+    if (DEMO_LEAK.test(savedBody)) throw Error(`demo/fixture string leaked into the post-save overview: ${savedBody.match(DEMO_LEAK)?.[0]}`);
+    const createdRecord = projects.list().projects.find((row) => row.name === SAVE_NAME);
+    if (!createdRecord) throw Error(`the UI create did not persist a workspace named ${SAVE_NAME}`);
+    const savedId = createdRecord.id;
+    check("the real create wrote exactly one new workspace", registryIds().length === projectsBeforeSave.length + 1 &&
+      registryIds().filter((row) => !projectsBeforeSave.includes(row)).length === 1, JSON.stringify({ before: projectsBeforeSave, after: registryIds() }));
+    check("the saved workspace keeps the typed name/description", createdRecord.name === SAVE_NAME && createdRecord.description === SAVE_DESCRIPTION,
+      JSON.stringify({ name: createdRecord.name, description: createdRecord.description }));
+    check("the saved workspace keeps the Git source and the plain directory with their real paths",
+      createdRecord.repositories.length === 1 && createdRecord.repositories[0].name === "save-check-repo" && createdRecord.repositories[0].path === saveRepo &&
+      createdRecord.directories.length === 1 && createdRecord.directories[0].name === "save-check-dir" && createdRecord.directories[0].path === saveDir,
+      JSON.stringify({ repositories: createdRecord.repositories, directories: createdRecord.directories }));
+    check("the saved workspace keeps the environment variable and the branch template",
+      JSON.stringify(createdRecord.environment) === JSON.stringify([SAVE_ENV]) && createdRecord.branchTemplate === SAVE_TEMPLATE,
+      JSON.stringify({ environment: createdRecord.environment, branchTemplate: createdRecord.branchTemplate }));
+    check("the saved sources verify against the real filesystem",
+      (await verifyProjectSources(createdRecord)).sources.every((row) => row.status === "ok"),
+      JSON.stringify((await verifyProjectSources(createdRecord)).sources));
+    check("the dialog closed after the real save", (await dialogOpen()) === false);
+    check("the sidebar lists the workspace the save created", (await navLabels()).includes(SAVE_NAME), JSON.stringify(await navLabels()));
+    check("the new workspace is the selected nav entry", (await currentNav()) === SAVE_NAME, String(await currentNav()));
+    check("the overview is now the new workspace", (await overviewTitle()) === SAVE_NAME, String(await overviewTitle()));
+    check("the post-save overview names both real sources",
+      savedFlat.includes("save-check-repo（Git 仓库）") && savedFlat.includes("save-check-dir（普通目录）") && savedFlat.includes(saveRepo), savedFlat.slice(0, 400));
+    check("the post-save overview shows the saved environment and branch template",
+      savedFlat.includes(`SAVE_CHECK = ${SAVE_ENV.value}`) && savedFlat.includes(SAVE_TEMPLATE));
+    check("the post-save overview shows the saved description and source counts",
+      savedFlat.includes(SAVE_DESCRIPTION) && savedFlat.includes("1 来源代码库 · 1 普通目录"), savedFlat.slice(0, 400));
+    check("the post-save overview says it has no tasks yet instead of inventing any", savedFlat.includes("这个工作空间还没有进行中任务。"));
+    check("the post-save overview counts zero in-progress tasks for the new workspace", savedFlat.includes("0 进行中的任务"), savedFlat.slice(0, 400));
+    check("the post-save overview draws both new sources as readable", savedFlat.split("路径可用").length - 1 === 2, savedFlat.slice(0, 400));
+    check("the breadcrumb follows the save", (await evalJs("document.querySelector('[data-testid=desktop-breadcrumb]').innerText")).replace(/\s+/g, " ").includes(SAVE_NAME),
+      (await evalJs("document.querySelector('[data-testid=desktop-breadcrumb]').innerText")).replace(/\s+/g, " "));
+    await capture("workspace-overview-after-create", 1440, 900);
+    await capture("workspace-overview-after-create", 720, 560);
+
+    // ================================================== (g) real EDIT submission
+    stage = "edit rename";
+    await click("编辑工作空间");
+    await until((body) => body.includes("保存更改") && body.includes("工作空间名称 *"), "edit dialog for the rename");
+    check("the edit dialog is prefilled from what the create just saved",
+      (await inputValue("工作空间名称 *")) === SAVE_NAME && (await inputValue("描述与业务用途")) === SAVE_DESCRIPTION &&
+      (await inputValue("仓库名称 1")) === "save-check-repo" && (await inputValue("Git 远程分支模板 *")) === SAVE_TEMPLATE,
+      String(await inputValue("工作空间名称 *")));
+    await type("工作空间名称 *", SAVE_RENAMED);
+    await clickLabelled("保存更改", true);
+    const renamedBody = await until((body) => !body.includes("保存更改") && body.includes(SAVE_RENAMED) &&
+      body.includes("重命名不改变工作空间身份"), "overview after the rename");
+    if (DEMO_LEAK.test(renamedBody)) throw Error(`demo/fixture string leaked into the renamed overview: ${renamedBody.match(DEMO_LEAK)?.[0]}`);
+    const afterRename = projects.list().projects;
+    const renamedRecord = afterRename.find((row) => row.id === savedId);
+    if (!renamedRecord) throw Error(`the renamed workspace ${savedId} vanished from the registry`);
+    // Read from the real registry AFTER the UI update: this is the identity the restart
+    // phase and the rename assertions compare against.
+    const savedIdentity = identityOf(savedId);
+    const createdIdentity = { repositories: createdRecord.repositories.map((row) => ({ id: row.id, name: row.name, path: row.path })),
+      directories: createdRecord.directories.map((row) => ({ id: row.id, name: row.name, path: row.path })),
+      environment: createdRecord.environment, branchTemplate: createdRecord.branchTemplate, description: createdRecord.description };
+    check("the rename kept the same registry project id", renamedRecord.id === savedId, `${savedId} -> ${renamedRecord.id}`);
+    check("the rename replaced the old name in the registry", renamedRecord.name === SAVE_RENAMED &&
+      afterRename.every((row) => row.name !== SAVE_NAME), JSON.stringify(afterRename.map((row) => row.name)));
+    check("the rename created no duplicate workspace", afterRename.length === projectsBeforeSave.length + 1 &&
+      afterRename.filter((row) => row.name === SAVE_RENAMED).length === 1, JSON.stringify(afterRename.map((row) => row.name)));
+    check("the rename left the source ids, environment and branch template untouched",
+      JSON.stringify(savedIdentity.repositories) === JSON.stringify(createdIdentity.repositories) &&
+      JSON.stringify(savedIdentity.directories) === JSON.stringify(createdIdentity.directories) &&
+      JSON.stringify(savedIdentity.environment) === JSON.stringify(createdIdentity.environment) &&
+      savedIdentity.branchTemplate === createdIdentity.branchTemplate && savedIdentity.description === createdIdentity.description,
+      JSON.stringify(savedIdentity));
+    check("the sidebar label followed the rename", (await navLabels()).includes(SAVE_RENAMED) && !(await navLabels()).includes(SAVE_NAME), JSON.stringify(await navLabels()));
+    check("the renamed workspace is still the selected nav entry", (await currentNav()) === SAVE_RENAMED, String(await currentNav()));
+    check("the overview title followed the rename", (await overviewTitle()) === SAVE_RENAMED, String(await overviewTitle()));
+    check("the overview title is not the old name any more", !new RegExp(`${SAVE_NAME}(?!·改名)`).test(renamedBody), renamedBody.slice(0, 300));
+    await capture("workspace-overview-after-rename", 1440, 900);
+    await capture("workspace-overview-after-rename", 720, 560);
+
+    // The renamed workspace has to be a real nav destination: leave the page, come back.
+    stage = "rename navigation";
+    await click("未归属任务");
+    await until((body) => body.includes("这些任务还没有被用户确认归属"), "navigate away from the renamed workspace");
+    check("the renamed workspace survives leaving its page", (await navLabels()).includes(SAVE_RENAMED), JSON.stringify(await navLabels()));
+    await click(SAVE_RENAMED);
+    await until((body) => body.includes(SAVE_RENAMED) && body.includes("工作空间复用来源"), "navigate back to the renamed workspace");
+    check("navigating back re-selects the renamed workspace", (await overviewTitle()) === SAVE_RENAMED && (await currentNav()) === SAVE_RENAMED,
+      JSON.stringify({ title: await overviewTitle(), nav: await currentNav() }));
+    check("the renamed workspace still renders its real sources after navigating back",
+      (await sourceCards()).length === 2 && (await sourceCards()).every((card) => card.includes("路径可用")), JSON.stringify(await sourceCards()));
+
+    // ------------------------------------- (h) pre-restart reference for the same view
+    // Focus is settled on both sides of the restart because the byte comparison below
+    // would otherwise catch a restored `:focus` border, not a rendering difference.
+    stage = "pre-restart reference";
+    await click(PROJECT_NAME);
+    const beforeRestartBody = await until((body) => body.includes(PROJECT_NAME) && body.includes("来源缺失") &&
+      body.includes("结算对账分页边界") && body.includes("另有 1 个任务尚未归属任何工作空间"), "pre-restart reference overview");
+    check("the pre-restart reference is the seeded workspace, not the renamed one", (await overviewTitle()) === PROJECT_NAME, String(await overviewTitle()));
+    check("the pre-restart sidebar already holds all three workspaces",
+      JSON.stringify(await navLabels()) === JSON.stringify([PROJECT_NAME, "Docs 归档", SAVE_RENAMED, "未归属任务"]), JSON.stringify(await navLabels()));
+    check("the pre-restart reference still shows the missing-source badge", beforeRestartBody.includes("来源缺失"));
+    await settleFocus();
+    await capture("workspace-overview-before-restart", 1440, 900);
+    await capture("workspace-overview-before-restart", 720, 560);
+
     let revision = "unknown"; let trackedFilesDirty = "unknown";
     try { revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8", cwd: repoRoot }).trim(); } catch { /* recorded as unknown */ }
     try {
@@ -461,7 +809,8 @@ async function run() {
     const expected = readIdentity();
     const restartOut = await new Promise((resolvePromise, reject) => {
       const child = spawn(process.execPath, [scriptPath, "--phase", "restart", "--out", output], {
-        env: { ...process.env, PIDOCK_T01_PROJECT_ID: projectId, PIDOCK_T01_EXPECT_IDENTITY: JSON.stringify(expected) },
+        env: { ...process.env, PIDOCK_T01_PROJECT_ID: projectId, PIDOCK_T01_EXPECT_IDENTITY: JSON.stringify(expected),
+          PIDOCK_T01_EXPECT_SAVED: JSON.stringify(savedIdentity) },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = ""; let stderr = "";
@@ -483,7 +832,29 @@ async function run() {
     check("post-restart UI still draws the missing-source badge", restartBody.includes("来源缺失"));
     check("post-restart UI still lists both assigned tasks", restartBody.includes("结算对账分页边界") && restartBody.includes("运单查询服务联调"));
     check("post-restart UI still names the unassigned task count", restartBody.includes("另有 1 个任务尚未归属任何工作空间"));
-    check("the restart process ran the post-restart capture set", JSON.stringify(restartLog.shots.map((shot) => shot.state)) === JSON.stringify(["workspace-overview-after-restart", "workspace-overview-after-restart"]), JSON.stringify(restartLog.shots.map((shot) => shot.file)));
+    check("the restart process ran the post-restart capture set", JSON.stringify(restartLog.shots.map((shot) => shot.state)) === JSON.stringify(["workspace-overview-after-restart", "workspace-overview-after-restart", "workspace-overview-after-restart-saved", "workspace-overview-after-restart-saved"]), JSON.stringify(restartLog.shots.map((shot) => shot.file)));
+    // Cross-process rendering identity: the SAME view, captured by the same code with focus
+    // settled, from two different OS processes over the same on-disk data. The comparison is
+    // per pixel, because Chromium's LCD text antialiasing can move a channel by one even when
+    // the layout and the strings are identical; the measured delta is recorded, not hidden.
+    const restartPixelDiffs = [];
+    for (const [width, height] of [[1440, 900], [720, 560]]) {
+      const beforeName = shotFile(width, height, "workspace-overview-before-restart");
+      const afterName = shotFile(width, height, "workspace-overview-after-restart");
+      const beforeShot = shots.find((shot) => shot.file === beforeName);
+      const afterShot = restartLog.shots.find((shot) => shot.file === afterName);
+      const diff = screenshotDiff(readFileSync(join(output, beforeName)), readFileSync(join(output, afterName)));
+      restartPixelDiffs.push({ size: `${width}x${height}`, byteIdentical: beforeShot?.sha256 === afterShot?.sha256,
+        beforeSha256: beforeShot?.sha256, afterSha256: afterShot?.sha256, ...diff });
+      check(`post-restart ${width}x${height} screenshot matches the pre-restart one except for sub-pixel text antialiasing`,
+        diff.differingPixels / diff.totalPixels <= 0.00001 && diff.maxChannelDelta <= 2, JSON.stringify(diff));
+    }
+    // The workspace the UI wrote is re-read in the new process and compared field by field.
+    const restartIdentityFile = JSON.parse(readFileSync(join(output, "restart-identity.json"), "utf8"));
+    check("the restart process re-read the UI-created workspace under the same id",
+      restartIdentityFile.savedAfter?.projectId === savedId, JSON.stringify(restartIdentityFile.savedAfter?.projectId));
+    check("the restart process re-read the UI-created workspace with identical name/sources/env/template",
+      JSON.stringify(restartIdentityFile.savedAfter) === JSON.stringify(savedIdentity), JSON.stringify(restartIdentityFile.savedAfter));
 
     const log = {
       ticket: "#136 S07 workspace overview / S10 create-edit dialog / 未归属任务 / delete blockers — real Electron evidence (T01)",
@@ -505,15 +876,35 @@ async function run() {
         pidAfter: restartLog.pid,
         identityBefore: expected,
         identityAfter: after,
+        savedBefore: savedIdentity,
+        savedAfter: restartIdentityFile.savedAfter,
+        screenshotComparison: restartPixelDiffs,
         shots: restartLog.shots,
         assertions: restartLog.assertions,
+      },
+      // (f)/(g): the ONLY writes this capture performs through the product UI. Everything
+      // above is read-only; these two are real submissions of the real S10 dialog.
+      saveFlows: {
+        driven: "typed into the real S10 dialog and submitted through its primary button (main's real projectOps create/update wrote projects.json)",
+        registryIdsBefore: projectsBeforeSave,
+        registryIdsAfter: registryIds(),
+        blockedEmptyName: {
+          typedName: "",
+          inlineAlert: nameRefusal,
+          dialogStayedOpen: true,
+          draftRetained: { repository: "save-check-repo", directory: "save-check-dir", environmentKey: SAVE_ENV.key, branchTemplate: SAVE_TEMPLATE },
+          registryUnchanged: true,
+        },
+        created: { projectId: savedId, ...createdIdentity, projectName: SAVE_NAME, sourcesVerified: "ok (both directories exist on disk)" },
+        renamed: { projectIdBefore: savedId, projectIdAfter: renamedRecord.id, nameBefore: SAVE_NAME, nameAfter: SAVE_RENAMED, identity: savedIdentity,
+          sourcesEnvironmentTemplateUnchanged: true },
       },
       assertions,
       shots,
     };
     writeFileSync(join(output, "capture-log.json"), `${JSON.stringify(log, null, 2)}\n`);
     for (const shot of shots) console.log("T01_CAPTURE=" + JSON.stringify({ state: shot.state, file: shot.file, sha256: shot.sha256 }));
-    console.log("T01_CAPTURE_LOG=" + JSON.stringify({ revision, trackedFilesDirty, shots: shots.map((shot) => shot.file), restartShots: restartLog.shots.map((shot) => shot.file) }));
+    console.log("T01_CAPTURE_LOG=" + JSON.stringify({ revision, trackedFilesDirty, shots: shots.map((shot) => shot.file), restartShots: restartLog.shots.map((shot) => shot.file), savedId }));
   } catch (error) {
     console.error(`T01_CAPTURE_FAILED [${phase}]`, stage, error);
     process.exitCode = 1;
