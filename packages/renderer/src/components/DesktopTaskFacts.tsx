@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
+import { DesktopTaskVariables } from "./DesktopVariables";
 import { SHARED_DIR_MANAGED_PROTECTION } from "../data/sharedDirProtection";
 import { fileRootsThroughShell, type PidockBridge } from "../data/shellBridge";
 import { readTaskSessions } from "../data/taskSessions";
@@ -154,6 +155,7 @@ export function DesktopTaskFacts({ taskId, taskName, bridge }: {
       })}
     </ul>}
     {roots.some((root) => root.kind === "shared-dir") && <p data-testid="shared-dir-managed-protection" className="mt-2 break-words text-[10px] leading-4 text-muted">{SHARED_DIR_MANAGED_PROTECTION}</p>}
+    {typeof bridge.projectOp === "function" && <DesktopTaskVariables taskId={taskId} bridge={bridge} />}
     <p data-testid="task-facts-sessions" className="mt-2 text-[10px] text-muted">任务 {hostText(taskName, "Host 未上报任务名称")} · 会话 {sessionError !== null ? `列表读取失败：${sessionError}` : sessionCount === null ? "未读取" : `${sessionCount} 个（可在对话页新建、切换，各自独立上下文）`}</p>
   </section>;
 }

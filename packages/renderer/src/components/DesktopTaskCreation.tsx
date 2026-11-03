@@ -301,8 +301,11 @@ export function DesktopTaskCreation({ project, bridge, onCreated }: {
                 <p className="text-[11px] font-medium text-muted">运行环境变量（继承自工作区）</p>
                 {project?.environment === null ? <p className="mt-1 text-[10px] text-muted">Host 未上报工作区环境变量</p>
                   : (project?.environment ?? []).length === 0 ? <p className="mt-1 text-[10px] text-muted">工作区未存储环境变量</p>
-                  : <><ul className="mt-1 space-y-0.5 font-mono text-[10px] text-ink">{(project?.environment ?? []).slice(0, 3).map((row) => <li key={row.key} className="truncate">• {row.key}={row.value}</li>)}</ul>
-                    <p className="mt-1 text-[10px] text-muted">已读取 {(project?.environment ?? []).length} 个工作区变量（仅展示；任务级注入见 #144）</p></>}
+                  : <><ul className="mt-1 max-h-16 space-y-0.5 overflow-y-auto font-mono text-[10px] text-ink">{(project?.environment ?? []).slice(0, 3).map((row) => <li key={row.key} className="flex min-w-0 items-center gap-1 truncate">
+                    <span className="shrink-0 rounded-[3px] border border-line px-1 text-[8px] font-semibold text-accent">工作区</span>
+                    <span className="truncate">• {row.key}={row.value}</span>
+                  </li>)}</ul>
+                    <p className="mt-1 text-[10px] text-muted">已读取 {(project?.environment ?? []).length} 个工作区变量，创建后默认继承；可在任务事实中按单个键局部覆盖（删除覆盖恢复继承）。</p></>}
               </div>
               <div className="min-w-0">
                 <p className="text-[11px] font-medium text-muted">推送到远程仓库时自动创建分支</p>
