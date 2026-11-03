@@ -47,6 +47,8 @@ export const SHELL_BRIDGE_SURFACE = [
   "preferencesOp",
   "projectOp",
   "providerOp",
+  // [Pencil T18] 工单 153 scheduler phase + last unconfirmed quit (read-only).
+  "schedulerState",
   "sdkTurn",
   "serviceCatalogOp",
   "taskOp",

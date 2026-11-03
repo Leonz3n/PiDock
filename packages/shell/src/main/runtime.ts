@@ -55,6 +55,7 @@ import { performEditorSettingsOperation } from "./external-editor-settings.js";
 // [Pencil T14] #149: PiDock's own appearance document plus Pi's native
 // keybindings/settings as a bounded projection (see `native-preferences.ts`).
 import { performPreferencesOperation } from "./preferences-route.js";
+import type { SchedulerStateView } from "./schedule-supervision.js";
 import { resolveAgentDir } from "./native-models-config.js";
 import { homedir } from "node:os";
 import { performProjectOperation, projectFailureMessage } from "./project-ipc.js";
@@ -1916,6 +1917,11 @@ export function registerIpc(
   append?: ProjectTaskAppend,
   /** [Pencil T09] #144 main-owned task override store for the variable ops. */
   variables?: TaskVariableStore,
+  /**
+   * [Pencil T18] #153 scheduler phase + the last unconfirmed quit. Read-only for
+   * the renderer, and the only way a refused quit becomes visible after restart.
+   */
+  scheduler?: { state(): SchedulerStateView },
 ): void {
   if (tasks && catalog && taskRoots && projects) tasks.configureServices((workspaceId) => new InstalledServiceHostAuthority(
     app.getPath("userData"), catalog, serviceCatalogAuthority(taskRoots, projects), workspaceId, process.env));
@@ -2244,6 +2250,15 @@ export function registerIpc(
     }
   });
 
+  ipcMain.handle("shell/schedulerState", async (event) => {
+    try {
+      registry.requireShellSender(event);
+      if (!scheduler) return { ok: false as const, error: "scheduler-state-unwired: 主进程未接调度状态" };
+      return { ok: true as const, payload: scheduler.state() };
+    } catch (error) {
+      return trustFailureEnvelope(error);
+    }
+  });
   ipcMain.handle("shell/hostPing", async (event, payload?: unknown) => {
     try {
       const sender = registry.requireShellSender(event);
