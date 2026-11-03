@@ -30,7 +30,13 @@ export interface PidockBridge {
   hostPing?: (workspaceId?: string) => Promise<unknown>;
   listTasks?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   importTaskRoot?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
-  projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /**
+   * Workspace registry operations. The renderer names a workspace, a task and its
+   * own field values only: main mints every id, validates the input, stats the
+   * source paths itself (`verifySources`) and owns the registry files
+   * (`status`/`recover`).
+   */
+  projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer" | "status" | "recover" | "verifySources" | "blockers"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string; confirmed?: boolean }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   serviceCatalogOp?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string; confirmed?: boolean }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { DesktopConversation } from "./DesktopConversation";
@@ -7,6 +7,9 @@ import { abandonCreation, commitCreation, currentCreation, CREATION_RETENTION_NO
 import { DESKTOP_LABELS, DesktopRootErrors, DesktopShell, type DesktopLocalPageKey, type DesktopView } from "./DesktopShell";
 import { DesktopProvidersPage } from "./DesktopProvidersPage";
 import { DesktopProjectOverview } from "./DesktopProjectOverview";
+import { DesktopUnassignedTasks } from "./DesktopUnassignedTasks";
+import { DesktopWorkspaceDialog } from "./DesktopWorkspaceDialog";
+import { DesktopWorkspaceDeleteDialog } from "./DesktopWorkspaceDeleteDialog";
 import { DesktopUsagePage } from "./DesktopUsagePage";
 import { DesktopSchedulesPage } from "./DesktopSchedulesPage";
 import { DesktopArchivePage, parseLifecycle } from "./DesktopArchivePage";
@@ -15,7 +18,10 @@ import { DesktopEnvironmentPage } from "./DesktopEnvironmentPage";
 import { DesktopCapabilitiesPage } from "./DesktopCapabilitiesPage";
 import { DesktopSettingsPage } from "./DesktopSettingsPage";
 import { lifecycleStateThroughShell } from "../data/shellBridge";
-import { loadDesktopProjects, parseDesktopProject, projectName, projectOperation, sourceName, sourcePath, type DesktopProject, type DesktopProjects, type ProjectInput, type ProjectSource, type TaskAssociation } from "../data/desktopProjects";
+import { loadDesktopProjects, parseDesktopProject, projectDeleteBlockers, projectDraft, projectName, projectOperation,
+  projectRegistryHealth, recoverProjectRegistry, sourceName, sourcePath, verifyProjectSources, type DesktopProject,
+  type DesktopProjects, type ProjectInput, type ProjectRegistryHealth, type ProjectSource, type SourceVerification,
+  type TaskAssociation } from "../data/desktopProjects";
 import { hostText } from "../data/workspaceFiles";
 
 export { desktopMode };
@@ -27,41 +33,22 @@ function reconciledDraft(input: ProjectInput, committed: DesktopProject, project
   const matches = (provided: ProjectInput["repositories"], saved: ProjectSource[]) =>
     provided.length === saved.length && provided.every((row, index) => row.name === saved[index]?.name && row.path === saved[index]?.path &&
       (row.id === undefined || row.id === saved[index]?.id));
-  if (committed.id !== projectId || committed.description !== input.description ||
+  // A Host that omits the settings (`null`) cannot reconcile them; that is
+  // reported by the page, not treated as a silent mismatch of identical fields.
+  const settingsMatch = (committed.environment === null || JSON.stringify(committed.environment) === JSON.stringify(input.environment)) &&
+    (committed.branchTemplate === null || committed.branchTemplate === input.branchTemplate);
+  if (committed.id !== projectId || committed.name !== input.name || committed.description !== input.description || !settingsMatch ||
       !matches(input.repositories, committed.repositories) || !matches(input.directories, committed.directories)) {
-    throw new Error("项目更新返回的来源身份不一致，请核对本机数据");
+    throw new Error("工作空间更新返回的身份不一致，请核对本机数据");
   }
-  return { ...input, repositories: committed.repositories, directories: committed.directories };
+  return { ...input, repositories: committed.repositories, directories: committed.directories,
+    environment: committed.environment ?? input.environment, branchTemplate: committed.branchTemplate ?? input.branchTemplate };
 }
+const FILE_STATE_LABEL: Record<"ok" | "missing" | "invalid", string> = { ok: "可用", missing: "缺失", invalid: "损坏" };
 const button = "inline-flex min-h-8 items-center justify-center gap-1.5 border border-line bg-paper px-2.5 py-1 text-xs hover:bg-bg disabled:cursor-not-allowed disabled:opacity-50";
 const field = "w-full min-w-0 border border-line bg-paper px-2 py-1.5 text-sm text-ink";
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "本机数据操作失败，请重试";
 const emptyBridge = {};
-
-function SourceFields({ label, rows, onChange }: { label: string; rows: ProjectInput["repositories"]; onChange: (next: ProjectInput["repositories"]) => void }) {
-  return <fieldset className="space-y-2"><legend className="mb-2 text-xs font-semibold">{label}</legend>
-    {rows.map((row, index) => <div key={row.id ?? index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_32px] gap-1">
-      <input aria-label={`${label}名称 ${index + 1}`} className={field} placeholder="名称" value={row.name} required maxLength={256} onChange={(event) => onChange(rows.map((item, at) => at === index ? { ...item, name: event.target.value } : item))} />
-      <input aria-label={`${label}路径 ${index + 1}`} className={field} placeholder="本机绝对路径" value={row.path} required onChange={(event) => onChange(rows.map((item, at) => at === index ? { ...item, path: event.target.value } : item))} />
-      <button className={button} type="button" aria-label={`移除${label} ${index + 1}`} title={`移除${label}`} onClick={() => onChange(rows.filter((_, at) => at !== index))}><Icon name="close" /></button>
-    </div>)}
-    <button className={button} type="button" onClick={() => onChange([...rows, { name: "", path: "" }])}><Icon name="plus" />添加{label}</button>
-  </fieldset>;
-}
-
-function ProjectForm({ current, input, onChange, busy, saveDisabled, onCancel, onSubmit }: { current?: DesktopProject; input: ProjectInput; onChange: (next: ProjectInput) => void; busy: boolean; saveDisabled?: boolean; onCancel: () => void; onSubmit: (input: ProjectInput) => Promise<void> }) {
-  const submit = (event: FormEvent) => { event.preventDefault(); void onSubmit(input); };
-  return <form onSubmit={submit} className="space-y-4 border-t border-line py-4">
-    <h3 className="text-sm font-semibold">{current ? "编辑项目" : "创建项目"}</h3>
-    <fieldset disabled={busy} className="space-y-4">
-      <label className="block text-xs">项目名称<input className={`${field} mt-1`} value={input.name} required maxLength={256} onChange={(event) => onChange({ ...input, name: event.target.value })} /></label>
-      <label className="block text-xs">描述<textarea className={`${field} mt-1`} value={input.description} maxLength={256} rows={2} onChange={(event) => onChange({ ...input, description: event.target.value })} /></label>
-      <SourceFields label="仓库" rows={input.repositories} onChange={(repositories) => onChange({ ...input, repositories })} />
-      <SourceFields label="目录" rows={input.directories} onChange={(directories) => onChange({ ...input, directories })} />
-    </fieldset>
-    <div className="flex gap-2"><button className={button} type="submit" disabled={busy || saveDisabled}>保存</button><button className={button} type="button" onClick={onCancel} disabled={busy}>取消</button></div>
-  </form>;
-}
 
 function Sources({ title, rows }: { title: string; rows: ProjectSource[] }) {
   return <section className="mt-5"><h3 className="text-xs font-semibold text-muted">{title} · {rows.length}</h3>
@@ -76,6 +63,17 @@ export function DesktopInventory() {
   const formRef = useRef(form);
   formRef.current = form;
   const [draft, setDraft] = useState<ProjectInput | null>(null);
+  /** The workspace the edit dialog opened for; `null` in create mode. */
+  const [editProjectId, setEditProjectId] = useState<string | null>(null);
+  /** The source a 修复路径 click asked the edit dialog to focus. */
+  const [repairSourceId, setRepairSourceId] = useState<string | null>(null);
+  /** Per-source verification for the selected workspace, keyed by main's source id. */
+  const [sourceReport, setSourceReport] = useState<{ projectId: string; statuses: Record<string, SourceVerification> } | null>(null);
+  const [sourceReportError, setSourceReportError] = useState<{ projectId: string; message: string } | null>(null);
+  /** The delete flow: `tasks === null` while main's blocker list is being read. */
+  const [deleting, setDeleting] = useState<{ projectId: string; tasks: { taskId: string; name: string; state: TaskAssociation["state"] }[] | null; error: string | null } | null>(null);
+  const [registryHealth, setRegistryHealth] = useState<ProjectRegistryHealth | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
   const pendingCreateRef = useRef<PendingCreate | null>(null);
   const [editNeedsReview, setEditNeedsReview] = useState(false);
@@ -171,7 +169,15 @@ export function DesktopInventory() {
     }
     catch (error) {
       if (inPlace) setRootRetryError(errorMessage(error));
-      else setView({ kind: "error", error: errorMessage(error) });
+      else {
+        setView({ kind: "error", error: errorMessage(error) });
+        // A failed read must still say whether the backup can fix it (#136 bullet 4).
+        setRegistryHealth(null);
+        setHealthError(null);
+        if (typeof (window.pidock ?? {}).projectOp === "function") {
+          void projectRegistryHealth(window.pidock ?? {}).then(setRegistryHealth).catch((health) => setHealthError(errorMessage(health)));
+        }
+      }
       return false;
     }
   }, []);
@@ -210,6 +216,21 @@ export function DesktopInventory() {
     });
     return () => { live = false; };
   }, [view]);
+  // #136 bullet 4: main stats every source of the selected workspace on read, so a
+  // moved repository is a per-source fact with a repair path, not a broken card.
+  useEffect(() => {
+    setSourceReport(null);
+    setSourceReportError(null);
+    if (view.kind !== "ready" || selection.kind !== "project") return;
+    const projectId = selection.id;
+    if (typeof (window.pidock ?? {}).projectOp !== "function") return;
+    let live = true;
+    void verifyProjectSources(window.pidock ?? {}, projectId).then((report) => {
+      if (!live) return;
+      setSourceReport({ projectId, statuses: Object.fromEntries(report.sources.map((row) => [row.id, row])) });
+    }).catch((error) => { if (live) setSourceReportError({ projectId, message: errorMessage(error) }); });
+    return () => { live = false; };
+  }, [view, selection]);
   const run = async (action: () => Promise<unknown>) => {
     if (rootRetryRef.current) return;
     setBusy(true); setActionError(null);
@@ -255,20 +276,27 @@ export function DesktopInventory() {
   const shown = project ? data?.associations.filter((row) => row.projectId === project.id) : data?.associations.filter((row) => row.projectId === null);
   const taskMap = new Map(data?.inventory.tasks.map((task) => [task.taskId, task]));
   const submit = async (input: ProjectInput) => {
-    if (form === "edit" && project) {
-      const details = { description: input.description, repositories: input.repositories, directories: input.directories };
-      // Each operation is independently committed. An error forces a fresh read.
+    // Trimmed once, here: main refuses surrounding whitespace as invalid input.
+    const payload: ProjectInput = { ...input, name: input.name.trim(), branchTemplate: input.branchTemplate.trim(),
+      repositories: input.repositories.map((row) => ({ ...row, name: row.name.trim(), path: row.path.trim() })),
+      directories: input.directories.map((row) => ({ ...row, name: row.name.trim(), path: row.path.trim() })) };
+    const target = form === "edit" ? data?.projects.find((item) => item.id === editProjectId) : undefined;
+    if (form === "edit" && !target) {
+      // An edit whose workspace is no longer in the authoritative list must fail by
+      // name. Falling through to the create branch would silently duplicate it.
+      setActionError("要编辑的工作空间已不在本机清单中，请关闭对话框后重新选择");
+      return;
+    }
+    if (form === "edit" && target) {
+      // One `update` carries name + description + sources + settings: a single
+      // registry write, so a rename can no longer half-commit (#136 bullet 2).
       await run(async () => {
-        const updated = await projectOperation(window.pidock ?? {}, { op: "update", projectId: project.id, input: details });
-        try { setDraft(reconciledDraft(input, parseDesktopProject(updated), project.id)); }
+        const updated = await projectOperation(window.pidock ?? {}, { op: "update", projectId: target.id, input: payload });
+        try { setDraft(reconciledDraft(payload, parseDesktopProject(updated), target.id)); }
         catch (error) { setEditNeedsReview(true); throw error; }
-        if (input.name !== project.name) {
-          try { await projectOperation(window.pidock ?? {}, { op: "rename", projectId: project.id, name: input.name }); }
-          catch (error) { throw new Error(`项目资料已保存，但重命名失败：${errorMessage(error)}；请核对已写入的资料后重试`); }
-        }
       });
     } else await run(async () => {
-      const created = await projectOperation(window.pidock ?? {}, { op: "create", input });
+      const created = await projectOperation(window.pidock ?? {}, { op: "create", input: payload });
       try {
         const { id } = parseDesktopProject(created);
         pendingCreateRef.current = { id };
@@ -276,9 +304,72 @@ export function DesktopInventory() {
       } catch {
         pendingCreateRef.current = { id: null };
         setPendingCreate({ id: null });
-        throw new Error("项目创建返回异常，无法确认身份；请检查本机数据，勿重复创建");
+        throw new Error("工作空间创建返回异常，无法确认身份；请检查本机数据，勿重复创建");
       }
     });
+  };
+  const openCreateWorkspace = () => {
+    setForm("create");
+    setEditProjectId(null);
+    setRepairSourceId(null);
+    setDraft(projectDraft());
+    setActionError(null);
+    setEditNeedsReview(false);
+  };
+  const openEditWorkspace = (projectId: string) => {
+    const target = data?.projects.find((item) => item.id === projectId);
+    if (!target) return;
+    setForm("edit");
+    setEditProjectId(projectId);
+    setRepairSourceId(null);
+    setDraft(projectDraft(target));
+    setActionError(null);
+    setEditNeedsReview(false);
+  };
+  const closeWorkspaceDialog = () => { setForm(null); setDraft(null); setEditProjectId(null); setRepairSourceId(null); setEditNeedsReview(false); };
+  const readBlockers = async (projectId: string, clear: boolean) => {
+    if (clear) setDeleting({ projectId, tasks: null, error: null });
+    try {
+      const blockers = await projectDeleteBlockers(window.pidock ?? {}, projectId);
+      const names = new Map((data?.inventory.tasks ?? []).map((task) => [task.taskId, task.name]));
+      setDeleting({ projectId, tasks: blockers.tasks.map((row) => ({ ...row, name: names.get(row.taskId) ?? row.taskId })), error: null });
+    } catch (error) {
+      // Unknown blockers stay unknown: an empty list would claim "nothing blocks
+      // deletion" without main having said so.
+      setDeleting({ projectId, tasks: null, error: errorMessage(error) });
+    }
+  };
+  const openDelete = async (projectId: string) => { await readBlockers(projectId, true); };
+  const confirmDelete = async (projectId: string) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await projectOperation(window.pidock ?? {}, { op: "delete", projectId });
+      setDeleting(null);
+      await load();
+    } catch (error) {
+      setDeleting((current) => current ? { ...current, error: errorMessage(error) } : current);
+      if (!(await load())) setActionError(errorMessage(error));
+    } finally { setBusy(false); }
+  };
+  const blockerAction = async (projectId: string, request: Parameters<NonNullable<NonNullable<typeof window.pidock>["projectOp"]>>[0]) => {
+    await operate(request);
+    await readBlockers(projectId, false);
+  };
+  const recoverRegistry = async () => {
+    if (busy) return;
+    if (!window.confirm("从 projects.json.bak 恢复项目注册表？恢复前会校验备份，当前不可用的文件保留为 projects.json.invalid。")) return;
+    setBusy(true);
+    setHealthError(null);
+    try {
+      await recoverProjectRegistry(window.pidock ?? {});
+      setRegistryHealth(null);
+      await load();
+    } catch (error) {
+      setHealthError(errorMessage(error));
+      setView((current) => current.kind === "error" ? current : { kind: "error", error: "项目注册表恢复失败" });
+    } finally { setBusy(false); }
   };
   // The shell wraps every view so the sidebar, breadcrumb and task-root status stay
   // visible while working, exactly like prototype A.
@@ -291,7 +382,13 @@ export function DesktopInventory() {
   // once at this producer instead of at each surface (`data/desktopProjects.ts`
   // `projectName`). The breadcrumb, the bottom strip, the workspace card's avatar
   // and the 环境与服务 project choice all read this list.
-  const shellProjects = useMemo(() => (ready?.projects ?? []).map((project) => ({ id: project.id, name: projectName(project), description: project.description })), [ready]);
+  const shellProjects = useMemo(() => (ready?.projects ?? []).map((project) => ({
+    id: project.id, name: projectName(project), description: project.description,
+    // A count is only shown when the lifecycle read completed: `null` says 未核验.
+    taskCount: lifecycleIndex?.data === ready && lifecycleIndex !== null
+      ? shellTasks.filter((task) => task.projectId === project.id).length
+      : null,
+  })), [ready, shellTasks, lifecycleIndex]);
   const lifecycleReady = lifecycleIndex?.data === ready && lifecycleIndex !== null;
   const activeTasks = lifecycleReady ? shellTasks.filter((task) => lifecycleIndex?.activeIds.has(task.taskId)) : [];
   const selectedProject = selection.kind === "project" ? shellProjects.find((project) => project.id === selection.id) : undefined;
@@ -376,14 +473,19 @@ export function DesktopInventory() {
     : localPage
     ? { ...(selectedProject ? { project: selectedProject.name } : {}), page: DESKTOP_LABELS[localPage] }
     : selectedProject
-      ? { project: selectedProject.name, page: manage ? "项目管理" : "项目总览" }
+      ? { project: selectedProject.name, page: manage ? "项目管理" : "工作空间总览" }
       : selection.kind === "unassigned"
-        ? { project: data?.projectsInitialized === false ? "项目映射未建立" : "未归属任务", page: manage ? "项目管理" : "项目总览" }
+        ? { project: data?.projectsInitialized === false ? "项目映射未建立" : "未归属任务", page: manage ? "项目管理" : undefined }
         : {};
+  const editingProject = form === "edit" ? data?.projects.find((item) => item.id === editProjectId) ?? null : null;
+  const deleteProject = deleting ? data?.projects.find((item) => item.id === deleting.projectId) ?? null : null;
   const shell = (children: ReactNode) => <DesktopShell
     view={shellView}
     onNavigate={navigate}
     projects={shellProjects}
+    projectsInitialized={data?.projectsInitialized ?? true}
+    unassignedCount={lifecycleReady ? data?.associations.filter((row) => row.projectId === null).length ?? 0 : null}
+    onNewWorkspace={openCreateWorkspace}
     tasks={activeTasks}
     allTaskCount={shellTasks.length}
     lifecyclePending={!lifecycleReady}
@@ -391,7 +493,32 @@ export function DesktopInventory() {
     roots={ready?.inventory.roots ?? []}
     rootRetry={{ busy, pending: rootRetryPending, error: rootRetryError, run: () => void retryRoots() }}
     breadcrumb={breadcrumb}
-  >{children}</DesktopShell>;
+  >
+    {children}
+    {form && draft ? <DesktopWorkspaceDialog
+      mode={form}
+      draft={draft}
+      onChange={setDraft}
+      onCancel={closeWorkspaceDialog}
+      onSubmit={() => void submit(draft)}
+      busy={busy}
+      error={actionError}
+      saveDisabled={editNeedsReview || pendingCreate !== null}
+      sourceStatus={form === "edit" && editingProject && sourceReport?.projectId === editingProject.id ? sourceReport.statuses : undefined}
+      focusSourceId={repairSourceId}
+    /> : null}
+    {deleting ? <DesktopWorkspaceDeleteDialog
+      projectName={deleteProject ? projectName(deleteProject) : deleting.projectId}
+      tasks={deleting.tasks}
+      projects={shellProjects.filter((item) => item.id !== deleting.projectId)}
+      busy={busy}
+      error={deleting.error}
+      onCancel={() => setDeleting(null)}
+      onDelete={() => void confirmDelete(deleting.projectId)}
+      onTransfer={(taskId, toProjectId) => void blockerAction(deleting.projectId, { op: "transfer", taskId, fromProjectId: deleting.projectId, toProjectId })}
+      onUnlink={(taskId) => void blockerAction(deleting.projectId, { op: "unlink", taskId, expectedProjectId: deleting.projectId })}
+    /> : null}
+  </DesktopShell>;
   if (environmentOpen) return shell(<DesktopEnvironmentPage projects={shellProjects} projectId={environmentProject?.id ?? null} taskCount={environmentProject ? shellTasks.filter((task) => task.projectId === environmentProject.id).length : 0} tasks={environmentProject ? activeTasks.filter((task) => task.projectId === environmentProject.id) : []} tasksPending={!lifecycleReady} onSelectProject={(id) => { pinned.current = true; setSelection({ kind: "project", id }); }} />);
   if (attentionOpen) return shell(<DesktopAttentionPage tasks={activeTasks} projects={shellProjects} lifecyclePending={!lifecycleReady} lifecycleErrors={lifecycleIndex?.errors ?? []} onOpenTask={(taskId) => navigate({ view: "task", taskId })} />);
   if (archiveOpen) return shell(<DesktopArchivePage tasks={shellTasks} onRestored={() => { void load(); }} />);
@@ -411,35 +538,69 @@ export function DesktopInventory() {
   if (localPage === "capabilities") return shell(<DesktopCapabilitiesPage />);
   if (localPage === "settings") return shell(<DesktopSettingsPage />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
-    <div className="w-full max-w-[560px]">
+    <div className="w-full max-w-[620px]">
       {/* A submitted write whose authoritative reread failed must stay visible: dropping
           it here would let the user retry a create that already committed. */}
       {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
       {creationNotice && <p role="status" className="mb-3 text-sm text-muted">{creationNotice.message}</p>}
       {view.kind === "loading"
         ? <p role="status" className="text-sm text-muted">正在读取本机项目与任务</p>
-        : <div role="alert" className="border border-line bg-paper p-4 text-sm"><p>{view.error}</p><button className={`${button} mt-3`} type="button" onClick={() => void load()}>重试</button></div>}
+        : <div className="border border-line bg-paper p-4 text-sm">
+          <p role="alert">{view.error}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className={button} type="button" onClick={() => void load()}>重试</button>
+            {/* #136 bullet 4: corruption is a named state with a recovery path, not a dead end. */}
+            {registryHealth?.recoverable ? <button className={button} type="button" disabled={busy} onClick={() => void recoverRegistry()}>从备份恢复</button> : null}
+          </div>
+          {registryHealth ? <p className="mt-2 text-[11px] text-muted" data-testid="registry-health">
+            项目注册表：主文件 {FILE_STATE_LABEL[registryHealth.primary]} · 备份 {FILE_STATE_LABEL[registryHealth.backup]}
+            {registryHealth.recoverable ? "；可显式从备份恢复" : "；没有可用的恢复来源"}
+          </p> : null}
+          {healthError ? <p className="mt-2 text-[11px] text-[#805c28]" aria-live="polite">注册表状态读取失败：{healthError}</p> : null}
+        </div>}
     </div>
   </main>;
   const overviewProject = selection.kind === "project" ? data.projects.find((item) => item.id === selection.id) ?? null : null;
-  if (!manage) return shell(<>
+  const workspaceOverview = (target: DesktopProject) => shell(<>
     {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
     <DesktopProjectOverview
-    project={overviewProject}
+      project={target}
+      tasks={activeTasks}
+      lifecyclePending={!lifecycleReady || (lifecycleIndex?.errors.length ?? 0) > 0}
+      associations={data.associations}
+      roots={data.inventory.roots}
+      projectsInitialized={data.projectsInitialized}
+      onOpenTask={(taskId) => void openTask(taskId)}
+      onManage={() => setManage(true)}
+      onManageDirectories={() => openEditWorkspace(target.id)}
+      onEdit={() => openEditWorkspace(target.id)}
+      onRepairSource={(sourceId) => { openEditWorkspace(target.id); setRepairSourceId(sourceId); }}
+      onDelete={() => void openDelete(target.id)}
+      sourceStatus={sourceReport?.projectId === target.id ? sourceReport.statuses : null}
+      sourceStatusError={sourceReportError?.projectId === target.id ? sourceReportError.message : null}
+      creationIncompleteTaskId={pendingCreation?.taskId ?? null}
+      onCreateTask={() => { setManage(true); setActionError(null); }}
+      unassignedCounts={{
+        claimable: data.associations.filter((row) => row.projectId === null && row.state === "unassigned").length,
+        unavailable: data.associations.filter((row) => row.projectId === null && row.state !== "unassigned").length,
+      }}
+    />
+  </>);
+  if (!manage) return overviewProject ? workspaceOverview(overviewProject) : shell(<DesktopUnassignedTasks
     tasks={activeTasks}
-    lifecyclePending={!lifecycleReady || (lifecycleIndex?.errors.length ?? 0) > 0}
     associations={data.associations}
-    roots={data.inventory.roots}
+    projects={shellProjects}
+    lifecyclePending={!lifecycleReady}
     projectsInitialized={data.projectsInitialized}
-    onOpenTask={(taskId) => void openTask(taskId)}
-    onManage={() => setManage(true)}
-    onManageDirectories={() => setManage(true)}
+    busy={busy}
     creationIncompleteTaskId={pendingCreation?.taskId ?? null}
-    onCreateTask={() => { setManage(true); setForm("create"); setDraft({ name: "", description: "", repositories: [], directories: [] }); setActionError(null); }}
-  /></>);
+    onOpenTask={(taskId) => void openTask(taskId)}
+    onClaim={(taskId, projectId) => void operate({ op: "claim", taskId, projectId })}
+    onManage={() => { pinned.current = true; setManage(true); }}
+  />);
   return shell(<div className="mx-auto w-full max-w-[1100px] px-4 py-5" data-testid="desktop-inventory">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">项目与任务</h1>
-        <div className="flex gap-2"><button className={button} type="button" disabled={busy || pendingCreate !== null} onClick={() => { setForm("create"); setDraft({ name: "", description: "", repositories: [], directories: [] }); setActionError(null); }}><Icon name="plus" />项目</button>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">工作空间与任务</h1>
+        <div className="flex gap-2"><button className={button} type="button" disabled={busy || pendingCreate !== null} onClick={openCreateWorkspace}><Icon name="plus" />新建工作空间</button>
           <button className={button} type="button" disabled={busy} onClick={() => void importRoot()}><Icon name="folder" />找回任务根</button></div></div>
       <DesktopTaskCreation project={project} bridge={window.pidock ?? emptyBridge} onCreated={async (projectId) => {
         if (!(await load())) throw new Error("任务已创建，但本机清单无法核验；请重试读取");
@@ -448,20 +609,18 @@ export function DesktopInventory() {
       {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
       {pendingCreate && <button className={`${button} mb-3`} type="button" onClick={() => void load()}>重新核验</button>}
       <div className="mb-3 flex flex-wrap gap-2">
-        <button className={button} type="button" onClick={() => setManage(false)}>返回项目总览</button>
+        <button className={button} type="button" onClick={() => setManage(false)}>返回工作空间总览</button>
       </div>
       <div className="grid gap-5 md:grid-cols-[220px_minmax(0,1fr)]">
         <nav aria-label="项目导航" className="min-w-0 border-b border-line pb-3 md:border-b-0 md:border-r md:pr-4">
-          <h2 className="mb-2 text-xs font-semibold text-muted">项目 · {data.projects.length}</h2>
+          <h2 className="mb-2 text-xs font-semibold text-muted">工作空间 · {data.projects.length}</h2>
           <div className="flex gap-1 overflow-x-auto md:block md:space-y-1">{data.projects.map((item) => <button type="button" key={item.id} onClick={() => { pinned.current = true; setSelection({ kind: "project", id: item.id }); setForm(null); setDraft(null); setActionError(null); }} className={`block min-w-0 shrink-0 px-2 py-2 text-left text-sm md:w-full md:truncate ${project?.id === item.id ? "bg-paper font-semibold" : "hover:bg-paper"}`}>{projectName(item)}</button>)}</div>
-          {!data.projects.length && <p className="text-xs text-muted">{data.projectsInitialized ? "暂无项目" : "项目映射未建立"}</p>}
+          {!data.projects.length && <p className="text-xs text-muted">{data.projectsInitialized ? "暂无工作空间" : "项目映射未建立"}</p>}
           <button type="button" className={`mt-3 block px-2 py-2 text-left text-sm ${!project ? "bg-paper font-semibold" : "hover:bg-paper"}`} onClick={() => { pinned.current = true; setSelection({ kind: "unassigned" }); setForm(null); setDraft(null); setActionError(null); }}>{data.projectsInitialized ? "未归属任务" : "项目映射未建立"} · {data.associations.filter((row) => row.projectId === null).length}</button>
         </nav>
         <div className="min-w-0">
-          {form === "create" && draft && <ProjectForm input={draft} onChange={setDraft} busy={busy} saveDisabled={pendingCreate !== null} onCancel={() => { setForm(null); setDraft(null); }} onSubmit={submit} />}
           {project ? <><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h2 className="text-base font-semibold">{projectName(project)}</h2><p className="mt-1 text-xs text-muted">{hostText(project.description, "Host 未上报项目说明")}</p></div>
-            <div className="flex gap-2"><button className={button} type="button" disabled={busy} onClick={() => { setForm("edit"); setEditNeedsReview(false); setDraft({ name: project.name, description: project.description, repositories: project.repositories, directories: project.directories }); }}><Icon name="settings" />编辑</button><button className={button} type="button" disabled={busy} onClick={() => { if (window.confirm(`删除项目「${projectName(project)}」？关联任务必须先解绑或转移。`)) void operate({ op: "delete", projectId: project.id }); }}><Icon name="archive" />删除</button></div></div>
-            {form === "edit" && draft && <ProjectForm key={project.id} current={project} input={draft} onChange={setDraft} busy={busy} saveDisabled={editNeedsReview} onCancel={() => { setForm(null); setDraft(null); setEditNeedsReview(false); }} onSubmit={submit} />}
+            <div className="flex gap-2"><button className={button} type="button" disabled={busy} onClick={() => openEditWorkspace(project.id)}><Icon name="settings" />编辑</button><button className={button} type="button" disabled={busy} onClick={() => void openDelete(project.id)}><Icon name="archive" />删除</button></div></div>
             <Sources title="仓库" rows={project.repositories} /><Sources title="普通目录" rows={project.directories} /></> : <h2 className="text-base font-semibold">{data.projectsInitialized ? "未归属任务" : "项目映射未建立"}</h2>}
           <section className="mt-6"><h3 className="border-b border-line pb-2 text-xs font-semibold text-muted">任务 · {shown?.length ?? 0}</h3>
             {!shown?.length && <p className="py-5 text-sm text-muted">{project ? "此项目暂无任务" : "已检查的任务根暂无未归属任务"}</p>}

@@ -132,9 +132,10 @@ describe("new-task workspace preview", () => {
     });
     try {
       renderApp("/projects/atlas");
-      // [UI 对齐 S8e] The production path opens on the real 项目总览 page; the demo
-      // task form (its 任务名称 field) must not appear on any of its views.
-      expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
+      // [UI 对齐 S8e] The production path opens on a real Desktop surface (here S07's
+      // 未归属任务 view, since the registry has no workspace yet); the demo task form
+      // (its 任务名称 field) must not appear on any of its views.
+      expect(await screen.findByTestId("desktop-unassigned")).toBeInTheDocument();
       expect(screen.queryByLabelText("任务名称")).not.toBeInTheDocument();
       expect(screen.queryByRole("heading", { name: "Atlas Web" })).not.toBeInTheDocument();
       expect(taskOp).not.toHaveBeenCalled();

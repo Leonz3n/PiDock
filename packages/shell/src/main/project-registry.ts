@@ -5,12 +5,16 @@ import type { TaskRootIndex, VerifiedTaskIdentity } from "./task-root-index.js";
 import { isSafeTaskChildName, isTaskDirId } from "./task-provision.js";
 
 export interface ProjectSource { id: string; name: string; path: string }
+/** A workspace-level environment variable: name/value only, no renderer-chosen identity. */
+export interface ProjectEnvironmentVariable { key: string; value: string }
 export interface LocalProject {
   id: string;
   name: string;
   description: string;
   repositories: ProjectSource[];
   directories: ProjectSource[];
+  environment: ProjectEnvironmentVariable[];
+  branchTemplate: string;
 }
 export interface ProjectMembership {
   taskId: string;
@@ -38,11 +42,17 @@ export interface TaskAssociationReceipt {
 }
 export interface ProjectDeletionReceipt { id: string; at: string; action: "delete"; projectId: string }
 export type AssociationReceipt = TaskAssociationReceipt | ProjectDeletionReceipt;
-interface Document { version: 1 | 2; projects: LocalProject[]; memberships: ProjectMembership[]; receipts?: AssociationReceipt[]; auditDigest?: string }
+interface Document { version: 1 | 2 | 3; projects: LocalProject[]; memberships: ProjectMembership[]; receipts?: AssociationReceipt[]; auditDigest?: string }
 export type SourceInput = { id?: string; name: string; path: string };
-export type ProjectCreateInput = { name: string; description: string; repositories: SourceInput[]; directories: SourceInput[] };
-export type ProjectUpdateInput = { description: string; repositories: SourceInput[]; directories: SourceInput[] };
+export type EnvironmentInput = { key: string; value: string };
+export type ProjectCreateInput = { name: string; description: string; repositories: SourceInput[]; directories: SourceInput[];
+  environment?: EnvironmentInput[]; branchTemplate?: string };
+/** `name` makes the rename part of the same authoritative write instead of a second operation. */
+export type ProjectUpdateInput = { name?: string; description: string; repositories: SourceInput[]; directories: SourceInput[];
+  environment?: EnvironmentInput[]; branchTemplate?: string };
 
+export const DEFAULT_BRANCH_TEMPLATE = "feature/{task-name}";
+const SCHEMA_VERSION = 3;
 const FILE = "projects.json";
 const MAX_BYTES = 1024 * 1024;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -94,14 +104,54 @@ function sources(value: unknown, allowGenerated: boolean): ProjectSource[] {
   if (new Set(rows.map((row) => row.id)).size !== rows.length || new Set(rows.map((row) => row.path)).size !== rows.length) throw new Error("duplicate source");
   return rows;
 }
-function project(value: unknown): LocalProject {
+function environmentVariable(value: unknown): ProjectEnvironmentVariable {
+  if (!record(value)) throw new Error("invalid environment variable");
+  keys(value, ["key", "value"]);
+  const variableKey = value["key"];
+  const variableValue = value["value"];
+  // Shell-style name: a variable that cannot be exported is not one main stores.
+  if (typeof variableKey !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(variableKey)) {
+    throw new Error("invalid environment variable name");
+  }
+  if (typeof variableValue !== "string" || variableValue.length > 4096 || variableValue.includes("\0") || /[\r\n]/.test(variableValue)) {
+    throw new Error("invalid environment variable value");
+  }
+  return { key: variableKey, value: variableValue };
+}
+function environment(value: unknown): ProjectEnvironmentVariable[] {
+  if (!Array.isArray(value) || value.length > 100) throw new Error("invalid environment variables");
+  const rows = value.map(environmentVariable);
+  if (new Set(rows.map((row) => row.key)).size !== rows.length) throw new Error("duplicate environment variable");
+  return rows;
+}
+/**
+ * A Git branch template, validated as a ref shape only: main stores and shows it.
+ * Turning it into a task branch or a push target belongs to the task/provision
+ * flow, so this is deliberately not a "will be pushed" statement.
+ */
+export function branchTemplate(value: unknown): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 128 || value !== value.trim()) {
+    throw new Error("invalid branch template");
+  }
+  if (/[\s~^:?*[\\]/.test(value) || value.includes("\u0000") || value.includes("..") || value.includes("@{") ||
+      value.startsWith("/") || value.endsWith("/") || value.endsWith(".") || value.includes("//") || value === "@") {
+    throw new Error("invalid branch template");
+  }
+  return value;
+}
+function project(value: unknown, version: 1 | 2 | 3): LocalProject {
   if (!record(value)) throw new Error("invalid project");
-  keys(value, ["id", "name", "description", "repositories", "directories"]);
+  const required = ["id", "name", "description", "repositories", "directories"];
+  const optional = ["environment", "branchTemplate"];
+  // Only the current schema requires the settings; older documents migrate with defaults on write.
+  keys(value, version === SCHEMA_VERSION ? [...required, ...optional] : required, optional);
   const repositories = sources(value["repositories"], false);
   const directories = sources(value["directories"], false);
   if (new Set([...repositories, ...directories].map((row) => row.id)).size !== repositories.length + directories.length) throw new Error("duplicate source ID");
   return { id: id(value["id"]), name: text(value["name"], "project name"),
-    description: text(value["description"], "description", true), repositories, directories };
+    description: text(value["description"], "description", true), repositories, directories,
+    environment: value["environment"] === undefined ? [] : environment(value["environment"]),
+    branchTemplate: value["branchTemplate"] === undefined ? DEFAULT_BRANCH_TEMPLATE : branchTemplate(value["branchTemplate"]) };
 }
 function taskRoot(value: unknown): string {
   if (typeof value !== "string" || value.length > 4096 || value.includes("\0") || !isAbsolute(value) || normalize(value) !== value) {
@@ -162,22 +212,23 @@ function auditDigest(projects: LocalProject[], memberships: ProjectMembership[],
 }
 function document(value: unknown): Document {
   if (!record(value)) throw new Error("invalid project registry");
-  if (value["version"] !== 1 && value["version"] !== 2) throw new Error("unsupported project registry version");
-  keys(value, ["version", "projects", "memberships", ...(value["version"] === 2 ? ["receipts", "auditDigest"] : [])]);
+  const version = value["version"];
+  if (version !== 1 && version !== 2 && version !== 3) throw new Error("unsupported project registry version");
+  keys(value, ["version", "projects", "memberships", ...(version === 1 ? [] : ["receipts", "auditDigest"])]);
   if (!Array.isArray(value["projects"]) || !Array.isArray(value["memberships"])) throw new Error("invalid project registry rows");
-  const projects = value["projects"].map(project);
+  const projects = value["projects"].map((row) => project(row, version));
   if (new Set(projects.map((row) => row.id)).size !== projects.length ||
       new Set(projects.map((row) => row.name.toLocaleLowerCase())).size !== projects.length) throw new Error("duplicate project ID or name");
   const memberships = value["memberships"].map(membership);
   if (new Set(memberships.map((row) => row.taskId)).size !== memberships.length ||
       memberships.some((row) => !projects.some((entry) => entry.id === row.projectId))) throw new Error("invalid membership identity");
-  if (value["version"] === 1) return { version: 1, projects, memberships };
+  if (version === 1) return { version: 1, projects, memberships };
   if (!Array.isArray(value["receipts"]) || value["receipts"].length > 1000) throw new Error("invalid association receipts");
   const receipts = value["receipts"].map(receipt);
   if (new Set(receipts.map((row) => row.id)).size !== receipts.length) throw new Error("duplicate association receipt");
   const digest = auditDigest(projects, memberships, receipts);
   if (value["auditDigest"] !== digest) throw new Error("project registry audit integrity mismatch");
-  return { version: 2, projects, memberships, receipts, auditDigest: digest };
+  return { version, projects, memberships, receipts, auditDigest: digest };
 }
 
 function sameIdentity(stored: ProjectMembership, actual: VerifiedTaskIdentity): boolean {
@@ -188,7 +239,7 @@ function sameIdentity(stored: ProjectMembership, actual: VerifiedTaskIdentity): 
 function appendReceipt(doc: Document, entry: AssociationReceipt): void {
   const receipts = doc.receipts ?? [];
   if (receipts.length >= 1000) throw new Error("association receipt capacity exceeded");
-  doc.version = 2;
+  doc.version = SCHEMA_VERSION;
   doc.receipts = [...receipts, entry];
 }
 function recordAction(doc: Document, action: TaskAssociationReceipt["action"], identity: Omit<ProjectMembership, "projectId">,
@@ -201,6 +252,8 @@ function recordAction(doc: Document, action: TaskAssociationReceipt["action"], i
   appendReceipt(doc, entry);
   return entry;
 }
+
+export type RegistryFileState = "ok" | "missing" | "invalid";
 
 export function projectRegistryPath(userData: string): string { return join(userData, FILE); }
 function safeFile(file: string): boolean {
@@ -241,6 +294,74 @@ export class ProjectRegistry {
   list(): { initialized: boolean; projects: LocalProject[] } {
     const { initialized, value } = this.load();
     return { initialized, projects: value.projects };
+  }
+  /**
+   * Read-only health of the two registry files: never throws, so the UI can name a
+   * missing/invalid registry and offer recovery instead of only printing an error.
+   * `recoverable` is exactly "the primary is unusable and the backup validates".
+   */
+  status(): { initialized: boolean; primary: RegistryFileState; backup: RegistryFileState; recoverable: boolean } {
+    const file = projectRegistryPath(this.userData);
+    const primary = this.fileState(file);
+    const backup = this.fileState(`${file}.bak`);
+    return { initialized: primary === "ok", primary, backup, recoverable: primary !== "ok" && backup === "ok" };
+  }
+  private fileState(file: string): RegistryFileState {
+    try {
+      if (!safeFile(file)) return "missing";
+      const raw = readFileSync(file);
+      if (raw.length > MAX_BYTES) return "invalid";
+      document(JSON.parse(raw.toString("utf8")));
+      return "ok";
+    } catch { return "invalid"; }
+  }
+  /**
+   * Explicit recovery: verify `projects.json.bak`, keep the unusable primary aside
+   * as `projects.json.invalid`, then install the backup bytes as the primary with the
+   * same temp-file + rename protocol every write uses. The backup itself is kept.
+   */
+  recover(): Promise<{ initialized: true; projects: LocalProject[] }> {
+    const operation = this.pending.then(() => {
+      const file = projectRegistryPath(this.userData);
+      const backup = `${file}.bak`;
+      if (!safeFile(backup)) throw new Error("project registry has no valid backup");
+      const raw = readFileSync(backup);
+      if (raw.length > MAX_BYTES) throw new Error("project registry backup too large");
+      const serialized = raw.toString("utf8");
+      const restored = document(JSON.parse(serialized));
+      if (safeFile(file)) {
+        try { writeTemp(`${file}.invalid`, readFileSync(file, "utf8")); } catch { /* diagnosis copy is best-effort */ }
+      }
+      const root = this.userData;
+      try {
+        const stat = lstatSync(root);
+        if (!stat.isDirectory()) throw new Error("invalid project registry directory");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        mkdirSync(root, { recursive: true, mode: 0o700 });
+      }
+      const tmp = `${file}.${randomUUID()}.tmp`;
+      try {
+        writeTemp(tmp, serialized);
+        renameSync(tmp, file);
+        syncDirectory(root);
+      } finally { rmSync(tmp, { force: true }); }
+      return { initialized: true as const, projects: restored.projects };
+    });
+    this.pending = operation.catch(() => undefined);
+    return operation;
+  }
+  /**
+   * The tasks that block deleting this workspace, each with the association state
+   * main itself reports. The page lists them with transfer/unlink actions instead
+   * of showing a bare "has associated tasks" refusal.
+   */
+  blockers(projectId: string, roots: TaskRootIndex): { projectId: string; tasks: { taskId: string; state: ReturnType<ProjectRegistry["association"]>["state"] }[] } {
+    const target = id(projectId);
+    if (!this.load().value.projects.some((row) => row.id === target)) throw new Error("unknown project");
+    const tasks = this.load().value.memberships.filter((row) => row.projectId === target)
+      .map((row) => ({ taskId: row.taskId, state: this.association(row.taskId, roots).state }));
+    return { projectId: target, tasks };
   }
   get(projectId: string): LocalProject | undefined { return this.load().value.projects.find((item) => item.id === id(projectId)); }
   /**
@@ -292,7 +413,10 @@ export class ProjectRegistry {
     const operation = this.pending.then(() => {
       const { initialized, value } = this.load();
       const result = fn(value);
-      if (value.version === 2) value.auditDigest = auditDigest(value.projects, value.memberships, value.receipts ?? []);
+      // Every write lands on the current schema; a v1/v2 document migrates here.
+      value.version = SCHEMA_VERSION;
+      value.receipts = value.receipts ?? [];
+      value.auditDigest = auditDigest(value.projects, value.memberships, value.receipts);
       this.save(value, initialized);
       return result;
     });
@@ -349,9 +473,11 @@ export class ProjectRegistry {
   create(input: ProjectCreateInput): Promise<LocalProject> {
     return this.mutate((value) => {
       if (!record(input)) throw new Error("invalid project input");
-      keys(input, ["name", "description", "repositories", "directories"]);
+      keys(input, ["name", "description", "repositories", "directories"], ["environment", "branchTemplate"]);
       const created = project({ id: randomUUID(), name: input.name, description: input.description,
-        repositories: sources(input.repositories, true), directories: sources(input.directories, true) });
+        repositories: sources(input.repositories, true), directories: sources(input.directories, true),
+        environment: input.environment ?? [],
+        branchTemplate: input.branchTemplate ?? DEFAULT_BRANCH_TEMPLATE }, SCHEMA_VERSION);
       if ([...input.repositories, ...input.directories].some((item) => record(item) && Object.hasOwn(item, "id"))) {
         throw new Error("source ID is generated by main");
       }
@@ -360,14 +486,25 @@ export class ProjectRegistry {
       return created;
     });
   }
+  /**
+   * One authoritative write for the whole workspace: the optional `name` makes a
+   * rename part of the same commit as the description, sources and settings, so a
+   * crash can no longer leave a renamed-free but otherwise updated workspace.
+   * `id` and every existing source ID are preserved.
+   */
   update(projectId: string, input: ProjectUpdateInput): Promise<LocalProject> {
     return this.mutate((value) => {
       const current = value.projects.find((row) => row.id === id(projectId));
       if (!current) throw new Error("unknown project");
       if (!record(input)) throw new Error("invalid project input");
-      keys(input, ["description", "repositories", "directories"]);
-      const next = project({ ...current, description: input.description,
-        repositories: sources(input.repositories, true), directories: sources(input.directories, true) });
+      keys(input, ["description", "repositories", "directories"], ["name", "environment", "branchTemplate"]);
+      const nextName = input.name === undefined ? current.name : text(input.name, "project name");
+      if (input.name !== undefined && value.projects.some((item) => item.id !== current.id &&
+          item.name.toLocaleLowerCase() === nextName.toLocaleLowerCase())) throw new Error("duplicate project name");
+      const next = project({ ...current, name: nextName, description: input.description,
+        repositories: sources(input.repositories, true), directories: sources(input.directories, true),
+        environment: input.environment === undefined ? current.environment : environment(input.environment),
+        branchTemplate: input.branchTemplate === undefined ? current.branchTemplate : branchTemplate(input.branchTemplate) }, SCHEMA_VERSION);
       const oldIds = new Set([...current.repositories, ...current.directories].map((row) => row.id));
       if ([...next.repositories, ...next.directories].some((row) =>
         !oldIds.has(row.id) && [...input.repositories, ...input.directories].some((given) => given.id === row.id))) {

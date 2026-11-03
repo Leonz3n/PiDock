@@ -51,7 +51,7 @@ import type { PortAssignment, PortReservation, ResolvedBinding, RunDiagnostic, R
 import { codeObservationFields } from "./service-code-observation.js";
 import { loadExternalEditorSettings, type ExternalEditorSettingsResult } from "./external-editor.js";
 import { performEditorSettingsOperation } from "./external-editor-settings.js";
-import { performProjectOperation } from "./project-ipc.js";
+import { performProjectOperation, projectFailureMessage } from "./project-ipc.js";
 import type { ProviderWiring } from "./provider-ipc.js";
 import { ProjectTaskCreation } from "./project-task-creation.js";
 import { performCreationOperation } from "./project-task-ipc.js";
@@ -2395,7 +2395,8 @@ export function registerIpc(
       return { ok: true as const, payload: await performProjectOperation(projects, payload, taskRoots) };
     } catch (error) {
       if (error instanceof TrustDomainViolation) return trustFailureEnvelope(error);
-      return { ok: false as const, error: "项目注册表操作失败，请检查本机项目数据后重试" };
+      // Named, so a missing/corrupt registry and its recovery path stay reachable (#136).
+      return { ok: false as const, error: projectFailureMessage(error) };
     }
   });
 

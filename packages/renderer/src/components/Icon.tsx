@@ -43,6 +43,8 @@ export const ICON_PATHS = {
   // (also `remoteAccessPage`'s mode picker). Same path data as `app.js:2`.
   refresh: "M20 7a9 9 0 1 0 1 9 M20 2v6h-6",
   shield: "M12 2l9 4v6c0 6-9 10-9 10S3 18 3 12V6Z M8 12l3 3 5-6",
+  // 「未归属任务」 (#136): the S07 tree's inbox glyph for tasks no workspace owns.
+  inbox: "M22 12h-6l-2 3h-4l-2-3H2 M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z",
   // Prototype `paths.code`: the capability row's Extension glyph
   // (`capabilityRow()` picks book/server/archive/code by kind).
   code: "M8 6l-6 6 6 6 M16 6l6 6-6 6 M14 3l-4 18",

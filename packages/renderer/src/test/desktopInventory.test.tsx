@@ -16,13 +16,17 @@ const intent = {
   repos: [], directories: [],
 };
 const retainedMessage = "本次创建已放弃。已产生的任务目录、工作区、链接与会话均已保留。";
+const PROJECT_ID = "project-1";
+/** One real workspace: the pending creation belongs to it, so S07 has a task ledger. */
+const project = { id: PROJECT_ID, name: "默认工作空间", description: "", repositories: [], directories: [],
+  environment: [], branchTemplate: "feature/{task-name}" };
 
 function makeBridge(createTask?: NonNullable<PidockBridge["createTask"]>): PidockBridge {
   return {
     listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })),
     projectOp: vi.fn(async (request: { op: string }) => request.op === "list"
-      ? { ok: true, payload: { initialized: true, projects: [] } }
-      : { ok: true, payload: { roots, tasks: tasks.map((task) => ({ taskId: task.taskId, projectId: null, state: "unassigned" })) } }),
+      ? { ok: true, payload: { initialized: true, projects: [project] } }
+      : { ok: true, payload: { roots, tasks: tasks.map((task) => ({ taskId: task.taskId, projectId: PROJECT_ID, state: "assigned" })) } }),
     taskOp: vi.fn(async (id: string) => ({ ok: true, payload: { lifecycle: { taskId: id, archived: false, archivedAt: null } } })),
     ...(createTask ? { createTask } : {}),
   } as PidockBridge;
@@ -75,13 +79,12 @@ describe("Desktop inventory pending creation recovery", () => {
     render(<DesktopInventory />);
     await screen.findByTestId("desktop-project-overview");
 
-    // Wait for the labelled card itself, so the card list cannot be mid-load.
-    const label = await screen.findByText(/创建未完成/);
-    const card = label.closest("[data-overview-task]")!;
-    expect(card).toHaveAttribute("data-overview-task", taskId);
-    expect(card).toHaveTextContent("到「项目管理」恢复完成或放弃");
-    const otherCard = (await screen.findByText("普通任务", { selector: "h3" })).closest("[data-overview-task]")!;
-    expect(otherCard).not.toHaveTextContent("创建未完成");
+    // Wait for the labelled ledger row itself, so the table cannot be mid-load.
+    const label = await screen.findByText("创建未完成");
+    const row = label.closest("li")!;
+    expect(within(row).getByText("中断任务")).toBeInTheDocument();
+    const otherRow = (await screen.findByText("普通任务", { selector: "strong" })).closest("li")!;
+    expect(within(otherRow).queryByText("创建未完成")).not.toBeInTheDocument();
   });
   it("leaves every overview card unlabelled when there is no real pending creation", async () => {
     const createTask = vi.fn(async () => ({ ok: true, payload: null }));
@@ -89,7 +92,7 @@ describe("Desktop inventory pending creation recovery", () => {
     render(<DesktopInventory />);
     await screen.findByTestId("desktop-project-overview");
 
-    await screen.findByText("普通任务", { selector: "h3" });
+    await screen.findByText("普通任务", { selector: "strong" });
     expect(screen.queryByText(/创建未完成/)).not.toBeInTheDocument();
   });
   it("does not label a task when its real current-creation intent is already complete", async () => {
