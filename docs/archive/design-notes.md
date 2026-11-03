@@ -1,16 +1,16 @@
 # 桌面 Agent 历史需求与技术调研记录
 
-> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](../design/README.md) 为准，适用范围见 [文档导航](../README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](../architecture/pi-1.4-upgrade-review.md) 重新核实。
 
-> 本文保留早期需求与技术取舍，不作为现行 UI 设计依据。当前唯一设计为 [PiDock.pen](design/PiDock.pen)，详见 [设计说明](design/README.md)；文中的历史原型验证不代表现有应用状态。
+> 本文保留早期需求与技术取舍，不作为现行 UI 设计依据。当前唯一设计为 [PiDock.pen](../design/PiDock.pen)，详见 [设计说明](../design/README.md)；文中的历史原型验证不代表现有应用状态。
 
-> **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
+> **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](../architecture/implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
 
 2026-09-21 的状态、审批、重试、定时确认过期及清理讨论见 [历史行为收口](product-design-closure.md)。当前功能范围以 GitHub #135 为准；旧 UI 基线已退役。
 
 状态：核心工作流及首个同步查询方向已确认，真实业务仓库和具体页面链路已完成只读核对；实现规格见 [历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)，技术原型尚未验证。
 工作名称：PiDock（建议，尚未确认）。
-概念定义见 [CONTEXT.md](../CONTEXT.md)。
+概念定义见 [领域术语](../../GLOSSARY.md)。
 
 ## 用户已明确的目标与边界
 
@@ -64,7 +64,7 @@
 ## 已确认的 Provider 与用量需求
 
 - 桌面端可以配置多个 Provider，在同一对话中切换 Provider。
-- Provider 历史需求包括多协议、多模型、模型发现及手动输入 ID；当前供应商列表与编辑流程见 [Pencil 设计说明](design/README.md)，运行配置按实际 Pi Agent 能力接入。
+- Provider 历史需求包括多协议、多模型、模型发现及手动输入 ID；当前供应商列表与编辑流程见 [Pencil 设计说明](../design/README.md)，运行配置按实际 Pi Agent 能力接入。
 - 对话显示上下文用量等 Agent 状态信息。
 - 对话中的模型选择、推理档位和上下文详情使用入口旁的小浮层；模型按 Provider 分组并支持搜索、键盘选择，推理标明当前与默认档位，上下文直接展示占用比例。
 - 当前上下文超过目标模型上限时禁止切换，模型置灰并显示原因；所有入口和实际切换操作一致校验，保留原模型、历史与草稿。先在当前模型下压缩并获得更新占用后重选，或使用新会话，不因尝试切换而自动压缩或丢弃历史。
@@ -73,7 +73,7 @@
 
 ## 当前 UI 与输入能力入口
 
-布局、配色、模型 / 推理控件及输入区以 [PiDock.pen](design/PiDock.pen) 为准；旧界面偏好与输入区版式记录已移除。`@`、`$`、`/` 的运行接入事实见 [输入能力核对](pi-composer-capabilities.md)。
+布局、配色、模型 / 推理控件及输入区以 [PiDock.pen](../design/PiDock.pen) 为准；旧界面偏好与输入区版式记录已移除。`@`、`$`、`/` 的运行接入事实见 [输入能力核对](pi-composer-capabilities.md)。
 
 ## 真实试点
 
@@ -82,7 +82,7 @@
 - 已完成默认配置、.vscode、环境变量绑定及启动条件的只读核对；未启动业务服务或连接业务数据设施。
 - 核对结果及来源见 [真实试点仓库核对](pilot-repository-inspection.md)。front 包含多个前端和 BFF；apis 为协议/生成仓库，当前消费者使用发布包而非注册 submodule。
 - 实际代码要求配置导入校验变量读取点，并将协议生成/本地依赖绑定、异步消息资源与远程回调分别纳入任务准备和验证范围。这些扩展建议详见核对报告，尚未完成运行验证。
-- 验收准备见 [首版验证计划](mvp-validation-plan.md)。
+- 验收准备见 [首版验证计划](../mvp-validation-plan.md)。
 - 用户接受先做 SaaS 同步查询。源码核对后选择订阅消费流水中的对账单详情作为具体样例：浏览器 → SaaS BFF → 本地 invoice 与 shipment；普通账单列表仍走旧 REST，不能用它替代这条验收。
 
 ## 设计建议（未确认）
@@ -201,11 +201,11 @@ Gateway 负责登录、一次性配对交换、设备凭据、在线主机路由
 
 ## 安装与发布（2026-09-21 已确认）
 
-首版使用 GitHub Actions 构建和发布安装包。GitHub Release 必须同时提供 macOS arm64 的 DMG 与 Windows x64 的 MSI（安装资产格式于 2026-10-13 改按 [ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，取代 NSIS 单一 EXE）；只有两个目标的构建、架构、安装冒烟及签名门禁均通过后才视为完整发布。正式 DMG 需要代码签名与公证，正式 MSI 需要 Authenticode 签名；资产携带版本、平台、架构和 SHA-256 校验信息，发布凭据只进入受保护的工作流环境。具体要求与验证见[规格](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md#安装包与-github-release)和[验收计划](mvp-validation-plan.md#安装包与发布)。
+首版使用 GitHub Actions 构建和发布安装包。GitHub Release 必须同时提供 macOS arm64 的 DMG 与 Windows x64 的 MSI（安装资产格式于 2026-10-13 改按 [ADR 0004](../adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，取代 NSIS 单一 EXE）；只有两个目标的构建、架构、安装冒烟及签名门禁均通过后才视为完整发布。正式 DMG 需要代码签名与公证，正式 MSI 需要 Authenticode 签名；资产携带版本、平台、架构和 SHA-256 校验信息，发布凭据只进入受保护的工作流环境。具体要求与验证见[规格](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md#安装包与-github-release)和[验收计划](../mvp-validation-plan.md#安装包与发布)。
 
 ## 当前待补充的信息
 
-- UI 设计统一使用 [PiDock.pen](design/PiDock.pen)；早期原型审阅及基线已退役，运行验证按现行功能范围另行执行。
+- UI 设计统一使用 [PiDock.pen](../design/PiDock.pen)；早期原型审阅及基线已退役，运行验证按现行功能范围另行执行。
 - 真实运行前选择非生产环境和可访问的已有对账单；登录由用户完成。动态菜单的实际页面 URL 在登录后记录。
 - 本地规格/工单跟踪及 AGENTS.md 入口已确认并设置，见 [设置记录](setup-draft.md)。[19 项实现工单](https://github.com/Leonz3n/PiDock/issues/1)已完成终审并发布为 `ready-for-agent`，尚未开始实现。
 
@@ -229,7 +229,7 @@ Gateway 负责登录、一次性配对交换、设备凭据、在线主机路由
 
 ## 技术栈续议（2026-09-21）
 
-上文 Electron 技术候选与早期运行记录保留为历史。规格曾首选 Electrobun 显式 Bun 模式、01 失败时评估 Electron + Bun Host；**2026-09-21 工单 01 已完成并否决 Electrobun 2.0.1，桌面壳定为 Electron + Bun Host，Electron 侧由工单 21 用同一场景重跑验收。** 不能依据框架名称假设默认运行时，也不能把 Windows Setup ZIP 当作所需单一 EXE。React／Tailwind／TanStack 的职责和工单 20 的复原方式见[技术栈设计](implementation-stack-design.md)，一手资料见[运行时调研](desktop-runtime-research.md)。现有草稿可以保留 vanilla JS，复杂组件草稿按验证需要采用正式栈；尚未开始实现。
+上文 Electron 技术候选与早期运行记录保留为历史。规格曾首选 Electrobun 显式 Bun 模式、01 失败时评估 Electron + Bun Host；**2026-09-21 工单 01 已完成并否决 Electrobun 2.0.1，桌面壳定为 Electron + Bun Host，Electron 侧由工单 21 用同一场景重跑验收。** 不能依据框架名称假设默认运行时，也不能把 Windows Setup ZIP 当作所需单一 EXE。React／Tailwind／TanStack 的职责和工单 20 的复原方式见[技术栈设计](../architecture/implementation-stack-design.md)，一手资料见[运行时调研](desktop-runtime-research.md)。现有草稿可以保留 vanilla JS，复杂组件草稿按验证需要采用正式栈；尚未开始实现。
 
 ## 六项审查修订（2026-09-21）
 

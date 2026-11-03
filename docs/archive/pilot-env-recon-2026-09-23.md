@@ -1,6 +1,6 @@
 # 试点环境实测记录（2026-09-23）
 
-> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](../design/README.md) 为准，适用范围见 [文档导航](../README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](../architecture/pi-1.4-upgrade-review.md) 重新核实。
 
 状态：supervisor 于 2026-09-23 在用户指定的试点环境上执行了**真实登录与页面探查**，
 用于把 [对账单详情同步查询](pilot-synchronous-query.md) 的候选链路落到可复现的路径。
@@ -114,7 +114,7 @@
 核对后记录如下，**不复制任何口令、DSN 或连接串**：**【实测】**
 
 - MySQL 指向数据库 `shipber_prod_restore`，即**生产还原库**，不是干净的测试库。
-- RabbitMQ 指向**共享 vhost**（`.../leon_vhost`）。`docs/pilot-repository-inspection.md`
+- RabbitMQ 指向**共享 vhost**（`.../leon_vhost`）。`docs/archive/pilot-repository-inspection.md`
   已警告：共享队列时本地产生的任务可能被远程 worker 取走、反之亦然。
 - 同一文件里 `shipment_service_v1.addr` 写的是 `dns:///127.0.01:9000`（`127.0.01` 是笔误，
   不可解析），与文档记录的「env 与 config 漂移」一致。

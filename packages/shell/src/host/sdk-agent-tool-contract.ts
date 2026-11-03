@@ -186,7 +186,7 @@ export const SDK_AGENT_TOOL_SPECS: readonly SdkAgentToolSpec[] = [
   // tier rule asks only for `command`/`browser`, so a `write`-kind tool would
   // rewrite a CROSS-TASK shared template under `default` with no confirmation. A
   // shared template is not task content (`fs.write`'s in-task write) - see
-  // `docs/design-notes.md` 共享模板确认 - so this tool asks under `default` too,
+  // `docs/archive/design-notes.md` 共享模板确认 - so this tool asks under `default` too,
   // and the gate's name-scoped rule makes it ask under `auto` as well. The edit
   // content is the same shape the shell's `update` op takes.
   {

@@ -196,7 +196,7 @@ finish() {
 # signing + timestamping, the signed MSI, clean-machine install (including
 # running the built-in terminal inside the installed MSI), a second account,
 # and the >1-version upgrade matrix. Scoped by READING the repo, not asking cold:
-#   docs/electron-packaging.md                                  release path + 未完成/边界
+#   docs/development/electron-packaging.md                                  release path + 未完成/边界
 #   docs/adr/0004-windows-installer-msi-instead-of-nsis-exe.md   MSI rationale
 #   packages/shell/electron-builder.config.cjs                   no signing config today
 #   .github/workflows/*                                          absent -> no CI consumer
@@ -257,7 +257,7 @@ say "【1】跳过签名（默认）"
 note "  前提：什么都不需要。"
 note "  代价：Windows 会显示「未知发布者」，可能触发 SmartScreen 警告。"
 note "  这是本仓库已实测能走通的状态：MSI 可构建、安装、启动、覆盖升级、卸载，"
-note "  Get-AuthenticodeSignature 为 NotSigned（docs/electron-packaging.md 的 Windows x64 MSI 实测）。"
+note "  Get-AuthenticodeSignature 为 NotSigned（docs/development/electron-packaging.md 的 Windows x64 MSI 实测）。"
 say "【2】自购 OV/EV 代码签名证书"
 note "  前提：向 CA 购买并通过 CA 的身份核验（组织/个人核验，通常数天）。"
 note "  代价：自 2023 年 CA/Browser Forum 规则起，OV/EV 私钥须存放在硬件 token 或云 HSM 中，"
@@ -368,7 +368,7 @@ if [[ "$SIGN_METHOD" == "skip" ]]; then
   note "已核实 packages/shell/electron-builder.config.cjs：win 块只有 icon 与 msi/x64 target，"
   note "cscLink / cscKeyPassword / signtoolOptions / azureSignOptions 一个都没有。"
   note "构建时也不要导出 CSC_* / AZURE_*：本机没有证书，导出也不会产生签名"
-  note "（docs/electron-packaging.md 记过：无证书时构建日志照常打印 signing 行，实际未签名）。"
+  note "（docs/development/electron-packaging.md 记过：无证书时构建日志照常打印 signing 行，实际未签名）。"
 else
   if [[ "$SIGN_METHOD" == "azure" ]]; then
     say "Azure 路径确实需要改一处产品配置。向导不替你改，只给精确位置与文本。"

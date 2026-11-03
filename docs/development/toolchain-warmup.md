@@ -1,6 +1,6 @@
 # 工具链预热记录
 
-> **资料状态：既有实现与验证记录。** 命令、行号、计数和未测项对应各节记录的版本，使用前核对当前脚本与代码。当前功能范围见 [#135](https://github.com/Leonz3n/PiDock/issues/135)，UI 见 [Pencil](design/README.md)，资料分类见 [文档导航](README.md)；历史模块章节不作为新版排期或验收通过证明。
+> **资料状态：既有实现与验证记录。** 命令、行号、计数和未测项对应各节记录的版本，使用前核对当前脚本与代码。当前功能范围见 [#135](https://github.com/Leonz3n/PiDock/issues/135)，UI 见 [Pencil](../design/README.md)，资料分类见 [文档导航](../README.md)；历史模块章节不作为新版排期或验收通过证明。
 
 状态：2026-09-22 在 macOS 开发机完成首轮预热，2026-10-14 补录 Windows 侧（win32-x64）复现清单与仓库 `allowBuilds` 现状。预热产物都在本机缓存中，不进入仓库，也不构成技术选型决定。
 
@@ -101,7 +101,7 @@ export GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:10808
 
 - Windows 与 Intel（darwin-x64）Electron 二进制：本机为 arm64，只拉取了 darwin-arm64。Windows 机器需各自执行一次。
 - electron-builder 首次打包所需的外部产物（Windows WiX、macOS dmg 组件、以及配置签名证书后才会用到的 winCodeSign），均从 GitHub 下载，经代理可用，待工单 15 需要时再拉取。
-  - Windows 资产格式已按 [ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)（2026-10-13）由 NSIS 单一 EXE 改为 MSI，所以首次 Windows 构建拉取的是 **WiX**（`4.0.0.5512.2`，`MsiTarget.js:73`），**不是 NSIS**。
+  - Windows 资产格式已按 [ADR 0004](../adr/0004-windows-installer-msi-instead-of-nsis-exe.md)（2026-10-13）由 NSIS 单一 EXE 改为 MSI，所以首次 Windows 构建拉取的是 **WiX**（`4.0.0.5512.2`，`MsiTarget.js:73`），**不是 NSIS**。
   - **winCodeSign 不是无条件的**：MSI 目标在 `MsiTarget.js:84` 调 `signIf`，而未配置证书（也无自定义 `sign` 钩子）时 `codeSign/windowsSignToolManager.js:32,156` 会记 `no signing info identified, signing is skipped` 并直接返回 `false`，**不会**去取 signtool，因此也不会下载 winCodeSign。只有配置了签名证书时它才被拉取。
   - 该 Windows 机器还需满足下面两项**期望，本机未验证**，首次 `package:win` 时逐项确认：① 能访问网络（WiX 与 win32-x64 的 Electron 二进制靠下载；配置签名证书时才是 WiX＋winCodeSign＋win32-x64 Electron）；② 不需要能重编译原生依赖的工具链：`packages/shell/electron-builder.config.cjs` 已设 `npmRebuild: false`（Node-API prebuild + 预检 pin，见「关键发现」第 4 条，ref #15），默认的 rebuild 步骤在 macOS 与 Windows 都不执行。若将来某个原生依赖确实需要 Electron ABI 重编译，它与预检的 pin 设计冲突（同类冲突还有代码签名改写原生字节，见 #15），需先决策再改。
 - Playwright Firefox / WebKit：产品只用 Electron 内嵌 Chromium，暂不需要。
@@ -119,4 +119,4 @@ export GLOBAL_AGENT_HTTP_PROXY=http://127.0.0.1:10808
 
 ## 复现方式
 
-见 [`scripts/warm-toolchain.sh`](../scripts/warm-toolchain.sh)。脚本在临时目录中创建一次性工程并复用上述缓存，不修改本仓库依赖，也不写入任何产物到仓库内。
+见 [`scripts/warm-toolchain.sh`](../../scripts/warm-toolchain.sh)。脚本在临时目录中创建一次性工程并复用上述缓存，不修改本仓库依赖，也不写入任何产物到仓库内。

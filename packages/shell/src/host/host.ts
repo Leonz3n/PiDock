@@ -575,7 +575,7 @@ function serviceDriverFor(taskId: string, services: TaskServiceRuntime): Service
  * Reachability: this is the Host's `task/controlService {group:true}` capability,
  * and it has a shipped caller - main's `runTaskServiceGroup`
  * (`../main/runtime.ts`), reached from the dock's 整组启动 through
- * `shell/serviceCatalogOp {op:"runTaskServiceGroup"}`. See `docs/task-graph.md`
+ * `shell/serviceCatalogOp {op:"runTaskServiceGroup"}`. See `docs/development/task-graph.md`
  * 「整组启动与真实互验」 for the named boundary (no dependency edge on that
  * route, so 已互验 stays unreachable there).
  */

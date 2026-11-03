@@ -99,7 +99,7 @@ describe("PiSessionChannel permission gate", () => {
     autoSession.setPermission("auto");
     expect(autoSession.gate(SERVICE_TEMPLATE_TOOL, target, "v1")).toMatchObject({ verdict: "ask" });
     // The scoped rule never leaks: `write` kind still does not ask under default
-    // (the in-task write tier of `docs/design-notes.md`), and another `command`
+    // (the in-task write tier of `docs/archive/design-notes.md`), and another `command`
     // tool is still allowed under `auto`.
     expect(channel().gate("fs.write", `${TASK_DIR}/notes.md`, "v1")).toEqual({ verdict: "allow" });
     expect(autoSession.gate("service.start", target, "v1")).toMatchObject({ verdict: "allow" });

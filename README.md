@@ -13,7 +13,7 @@ PiDock 是面向软件开发任务的桌面 Agent 工作台。可复用工作空
 - [首版父规格与工单索引 #1](https://github.com/Leonz3n/PiDock/issues/1)：规格、依赖和执行记录。
 - [当前首版范围 #135](https://github.com/Leonz3n/PiDock/issues/135)：功能范围与验收入口。
 - [GLOSSARY.md](GLOSSARY.md)：工作空间、任务和会话的统一领域术语。
-- [技术栈设计](docs/implementation-stack-design.md)：Electron、TypeScript、React 与 Pi AgentSession 的职责边界。
+- [技术栈设计](docs/architecture/implementation-stack-design.md)：Electron、TypeScript、React 与 Pi AgentSession 的职责边界。
 - [首版验证计划](docs/mvp-validation-plan.md)：真实桌面验证场景。
 - [packages/](packages)：现有应用与共享代码。
 - [文档导航](docs/README.md)：当前资料、实现记录与历史研究的适用范围。

@@ -1,8 +1,8 @@
 # Electrobun + Bun 路线复核
 
-> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](../design/README.md) 为准，适用范围见 [文档导航](../README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](../architecture/pi-1.4-upgrade-review.md) 重新核实。
 
-> **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
+> **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](../architecture/implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
 
 2026-09-22。按用户要求只复核工单 01，不推进 20、21 或其他后续工单。本次不冻结新架构，不修改 Host 实现。
 
@@ -54,8 +54,8 @@ Electron 主进程自带 Node，Host 可放在 `utilityProcess` 中继续保持�
 
 ## 证据与复跑
 
-- [机器可读结果](evidence/electrobun-recheck-2026-09-22/results.json)：各对照 target、原有 OSR CDP/持久化结果、10 轮关闭重开状态及分区/弹窗结果。
-- [OSR 实验补丁](evidence/electrobun-recheck-2026-09-22/osr-recheck.patch)：相对原始抛弃式原型的透明窗口单项改动，以及回归脚本。只作复现附件，不是产品实现。
+- [机器可读结果](../evidence/electrobun-recheck-2026-09-22/results.json)：各对照 target、原有 OSR CDP/持久化结果、10 轮关闭重开状态及分区/弹窗结果。
+- [OSR 实验补丁](../evidence/electrobun-recheck-2026-09-22/osr-recheck.patch)：相对原始抛弃式原型的透明窗口单项改动，以及回归脚本。只作复现附件，不是产品实现。
 - 本机完整临时实验位于 `/tmp/pidock-electrobun-recheck`，可清理；复现不依赖保留该目录。
 
 在具备原 README 所列 macOS arm64 / Bun / Hutch 离线缓存的环境中，将 `c54d45e` 的 `prototypes/visible-browser` 复制到独立实验目录（保持原工作区不动）。在该目录执行：

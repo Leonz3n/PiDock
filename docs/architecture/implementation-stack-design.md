@@ -1,6 +1,6 @@
 # 已确认技术栈与进程边界
 
-当前功能规格与验收见 [#135](https://github.com/Leonz3n/PiDock/issues/135)，工单入口见 [#1](https://github.com/Leonz3n/PiDock/issues/1)，界面以 [Pencil](design/README.md) 为准。现有代码、依赖和历史验证不表示已完成新版交付；当前仅整理文档与工单，产品实现仍暂停。
+当前功能规格与验收见 [#135](https://github.com/Leonz3n/PiDock/issues/135)，工单入口见 [#1](https://github.com/Leonz3n/PiDock/issues/1)，界面以 [Pencil](../design/README.md) 为准。现有代码、依赖和历史验证不表示已完成新版交付；当前仅整理文档与工单，产品实现仍暂停。
 
 ## 产品与配置边界
 
@@ -8,7 +8,7 @@
 
 首版还包含真实 Agent 对话、必要文件 / 命令工具、Provider / MCP / Skills 的 UI 管理、定时任务、会话与任务生命周期，以及日间 / 夜间 / 跟随系统外观。旧文档中的 Project 对应当前工作空间管理单元；实现中的 `Project ID`、`projectId`、注册表和磁盘格式保留既有身份语义，文档术语校准不意味着已迁移数据或重命名代码接口。
 
-Pi Agent 模型、MCP、Skills、Extensions、快捷键和通用设置以其原生配置为管理对象，PiDock 保存自己的外观等应用偏好。实现时对照固定 SDK 版本核实原生配置格式、路径、扩展装配和重载能力；画板中的 `models.json`、`mcp.json`、示例传输协议和“已连接”状态不是已验证 API 契约。不建立另一套相互独立的可写配置真相源，也不把保存文件等同于运行时已加载。通用 Packages / Extensions 安装管理继续延后，画板入口按当前范围处理。
+能力管理与应用设置的归属和首版入口见 [设计约定](../design/README.md#当前设计约定)。Pi Agent 原生配置保持单一写入来源，PiDock 保存自己的外观与界面语言等应用偏好；MCP 依赖扩展装配不等于提供 Extensions 用户管理。实现时对照固定 SDK 版本核实配置格式、路径、装配和重载能力；画板示例不是 API 契约，保存文件不等于运行时已加载。
 
 工作空间变量继承不恢复按环境组织的服务模板、依赖图、端口分配或编排。内置浏览器 / 页面标记、业务联调、独立文件 / 差异工作台、复杂用量报表、远程与移动端延后；内置终端按 #95 撤销。Git 分支规范提供命名与推送目标，实际提交 / 推送 / PR 由明确操作触发并显示目标，不因任务完成而隐式推送。
 
@@ -47,7 +47,7 @@ main 管理原生资源和任务 Host；Host 持有任务范围、工具执行�
 
 renderer 使用 `sandbox:true`、`contextIsolation:true`、`nodeIntegration:false`，通过最小 preload / contextBridge 请求能力，不直接访问 Node、SQLite、文件系统或任意 IPC channel。main ↔ Host 可使用 MessagePort / typed RPC；所有跨进程数据进行运行时校验，并校验发送方、任务、会话与资源身份。需处理取消、事件顺序、进程退出后的在途请求和具名错误。TypeScript 与进程分离都不等同于 Agent shell 的操作系统沙箱。
 
-有副作用操作遵循任务写操作权；共享 / 重叠真实目标还遵循 [ADR 0003](adr/0003-shared-directory-write-coordination.md) 的真实路径协调，尤其不能把每进程一张表视为已实现跨 Host 协调。外部编辑器写入按 [ADR 0006](adr/0006-external-editor-writes-exempt-from-coordination.md) 豁免。
+有副作用操作遵循任务写操作权；共享 / 重叠真实目标还遵循 [ADR 0003](../adr/0003-shared-directory-write-coordination.md) 的真实路径协调，尤其不能把每进程一张表视为已实现跨 Host 协调。外部编辑器写入按 [ADR 0006](../adr/0006-external-editor-writes-exempt-from-coordination.md) 豁免。
 
 定时任务只在应用运行期间调度，关窗可后台运行，明确退出 / 休眠不执行、不补跑。同任务已有未结束执行时跳过，每次触发创建独立会话，沿用固定任务工作区。退出先中止 Agent，再回收所属子进程和 SDK；恢复不重放副作用。既有归档按 #117 的已交付口径只停止 Agent 回合，不把历史服务 / 终端进程伪装成已停止；清理与明确退出分别执行资源回收。
 
@@ -65,13 +65,13 @@ renderer 使用 `sandbox:true`、`contextIsolation:true`、`nodeIntegration:fals
 
 Zustand 管理导航、面板、输入草稿和 Host 确认后的数据投影，不调度任务、不持有最终权限或第二套写锁。事件按会话身份与顺序应用，断线后取快照或续接；组件重挂载不自动重试有副作用操作。
 
-Pi 原生正文与 PiDock 索引分别保持单一写入归属，多个 Host 不未经设计争写全局数据。工作空间身份与任务归属沿用 [ADR 0001](adr/0001-local-project-registry.md)，缺失 / 损坏明确报错，不能合成身份或回落演示夹具。草稿经 Host 保存文字与引用来源，恢复需核验来源；旧 localStorage 草稿迁移边界见 #117 / #133，不声称已自动迁移。
+Pi 原生正文与 PiDock 索引分别保持单一写入归属，多个 Host 不未经设计争写全局数据。工作空间身份与任务归属沿用 [ADR 0001](../adr/0001-local-project-registry.md)，缺失 / 损坏明确报错，不能合成身份或回落演示夹具。草稿经 Host 保存文字与引用来源，恢复需核验来源；旧 localStorage 草稿迁移边界见 #117 / #133，不声称已自动迁移。
 
 ## UI 与工程验收
 
-布局、导航、控件位置、日夜主题按 [Pencil 设计说明](design/README.md)，颜色采用 [主题数据](design/appearance.tokens.json)。现有 renderer 可复用组件与领域适配；旧 HTML 原型、旧 tokens、历史截图及已关闭 UI 切片不构成新版实现要求。
+布局、导航、控件位置、日夜主题按 [Pencil 设计说明](../design/README.md)，颜色采用 [主题数据](../design/appearance.tokens.json)。现有 renderer 可复用组件与领域适配；旧 HTML 原型、旧 tokens、历史截图及已关闭 UI 切片不构成新版实现要求。
 
-正式桌面使用真实 Host；模拟数据集中于可替换的演示 / 测试适配层。未接入能力显示实际状态，不用样例或静态成功状态冒充完成。覆盖双尺寸、两种主题与系统跟随、键盘焦点、中文输入法、浮层 / 滚动和草稿保留；验证场景见 [首版验证计划](mvp-validation-plan.md)。
+正式桌面使用真实 Host；模拟数据集中于可替换的演示 / 测试适配层。未接入能力显示实际状态，不用样例或静态成功状态冒充完成。覆盖双尺寸、两种主题与系统跟随、键盘焦点、中文输入法、浮层 / 滚动和草稿保留；验证场景见 [首版验证计划](../mvp-validation-plan.md)。
 
 pnpm 管理唯一 workspace / lockfile，turbo 编排 dev / build / typecheck / test / lint，Vite 构建 renderer。常驻开发任务 persistent 且不缓存，可重复检查声明真实输入 / 输出；退出清理所属开发进程。CI 使用相同固定版本与 frozen-lockfile，安装包脱离 workspace 链接验证依赖完整。业务仓库保留自己的工具链。
 

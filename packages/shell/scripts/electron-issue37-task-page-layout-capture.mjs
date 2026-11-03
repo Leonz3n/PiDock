@@ -42,7 +42,7 @@
 //
 // Opening a task page in production is fail-closed unless the task's own front-end origins are
 // configured. The documented operator configuration is the environment variable
-// `PIDOCK_TASK_BROWSER_ORIGINS` (JSON `taskId -> origins`, see docs/task-graph.md); this harness
+// `PIDOCK_TASK_BROWSER_ORIGINS` (JSON `taskId -> origins`, see docs/development/task-graph.md); this harness
 // sets it to a loopback page it serves itself and reads it back through the production parser
 // `taskBrowserOriginsFromEnv`. That is a supported operator configuration, not a test backdoor:
 // without it the gateway refuses every `page/open` and no page could be captured. See README §1/§3.

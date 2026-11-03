@@ -5,7 +5,7 @@
  * `service-topology.ts`): main, the utilityProcess Host and unit tests run
  * the same rules. It models the three things #14 requires to stay separate
  * (box 1) and the two binding mechanisms the pilot repository inspection
- * found (`docs/pilot-repository-inspection.md` §apis):
+ * found (`docs/archive/pilot-repository-inspection.md` §apis):
  *
  * - the protocol repository (the apis worktree of this task) — it produces
  *   code, it is never itself a consumer;

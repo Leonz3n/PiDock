@@ -1,8 +1,8 @@
 # 桌面运行时选型资料核对
 
-> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](../design/README.md) 为准，适用范围见 [文档导航](../README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](../architecture/pi-1.4-upgrade-review.md) 重新核实。
 
-> **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
+> **2026-09-22 最终选型已确认：** Electron 44+ / Node 24；AgentSession 在 utilityProcess，Chromium 视图与 CDP 管理在 main，React renderer 完全 sandbox。当前权威约束见[技术栈设计](../architecture/implementation-stack-design.md)。本文保留调研/取舍过程，其中旧候选、回退或待确认文字不再作为执行指令；后续工单仍暂停。
 
 核对日期：2026-09-21。范围：Bun、Electrobun 与 Electron + Bun Host，以及首版可见浏览器和安装包门槛。只读官方资料，没有构建应用、连接浏览器、下载发布包或执行平台实验。
 
@@ -66,7 +66,7 @@ Electron 生态的 electron-builder 提供 NSIS 安装器配置，可作为 Wind
 4. 任一核心能力不能以可接受代价实现，按规格回退 Electron + Bun Host，再用相同验收场景检查；保留 Host 与 React 界面的受控接口。
 5. macOS 与 Windows 分别记录结果，没有 Windows 环境时明确留待验证，不能宣布跨平台选型全部通过。
 
-React、Tailwind CSS 与 TanStack 属于产品界面栈，不决定上述原生浏览器控制是否成立。当前 UI 视觉与关键交互统一以 [Pencil 设计](design/README.md) 为准；早期 vanilla JS 草稿已清理。
+React、Tailwind CSS 与 TanStack 属于产品界面栈，不决定上述原生浏览器控制是否成立。当前 UI 视觉与关键交互统一以 [Pencil 设计](../design/README.md) 为准；早期 vanilla JS 草稿已清理。
 
 ## 一手来源
 

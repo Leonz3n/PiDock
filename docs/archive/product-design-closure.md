@@ -1,8 +1,8 @@
 # 历史产品行为收口 · 2026-09-21
 
-> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](../design/README.md) 为准，适用范围见 [文档导航](../README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](../architecture/pi-1.4-upgrade-review.md) 重新核实。
 
-> 本文保留当时的执行、审批、调度与清理等行为讨论，不作为现行 UI 设计或当前首版完整范围。唯一 UI 基准为 [PiDock.pen](design/PiDock.pen)，见 [设计说明](design/README.md)；功能范围以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准。
+> 本文保留当时的执行、审批、调度与清理等行为讨论，不作为现行 UI 设计或当前首版完整范围。唯一 UI 基准为 [PiDock.pen](../design/PiDock.pen)，见 [设计说明](../design/README.md)；功能范围以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准。
 
 旧原型及逐页对齐要求已退役。真实桌面验收仍须核对 UI 与数据来源，不以模拟数据、构建成功或历史截图代替运行证据；1440×900、720×560 和日夜主题按当前 Pencil 设计检查。设计检查通过不代表运行功能已实现。
 
@@ -30,7 +30,7 @@
 ## 关注与导航
 
 - 「需要处理」汇总所有项目的待确认、失败、过期和完成未读，可定位原任务／会话。查看完成结果清除未读，失败与待确认须处理后移除。系统通知的权限与跨平台行为另验，不承诺未运行时唤醒。
-- 当前任务 / 会话导航、列表入口和紧凑窗口版式按 [Pencil 设计](design/README.md)；旧原型的按钮位置与四会话标签规则已移除。
+- 当前任务 / 会话导航、列表入口和紧凑窗口版式按 [Pencil 设计](../design/README.md)；旧原型的按钮位置与四会话标签规则已移除。
 - 最后一个会话归档后仍可带归档标记查看，不自动新建空会话。会话归档不是任务归档，也不是禁止继续对话。
 
 ## 生效配置与清理
@@ -44,7 +44,7 @@
 
 保持已有 01–14 编号，新增 16 能力管理、17 Host 与执行事件、18 定时任务、19 远程访问。15 作为最终验收汇总，依赖新增范围。01–19 已在终审后形成工单，后续补充 20、21；现均迁移至 [GitHub Issues](https://github.com/Leonz3n/PiDock/issues/1)，本地工单及草稿已删除。实现反馈只更新对应 GitHub Issue，未完成工单继续暂停。
 
-首版安装与发布纳入 15：以版本标签触发 GitHub Actions，GitHub Release 同时提供 macOS arm64 DMG 与 Windows x64 MSI（安装资产格式 2026-10-13 改按 [ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，取代 NSIS 单一 EXE）。两个安装包的架构、安装冒烟、签名门禁和版本一致性均通过后才视为完整发布；正式 DMG 完成签名与公证，正式 MSI 完成 Authenticode 签名，资产同时提供 SHA-256 校验信息。 发布前从构建产物暂存区完成干净系统安装、覆盖升级及卸载验收，全部通过后上传同哈希安装包；发布后下载复验分发链路。首版仅提供退出应用后的安装包覆盖升级，不接入内置在线更新、自动／差分更新及版本回滚。
+首版安装与发布纳入 15：以版本标签触发 GitHub Actions，GitHub Release 同时提供 macOS arm64 DMG 与 Windows x64 MSI（安装资产格式 2026-10-13 改按 [ADR 0004](../adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，取代 NSIS 单一 EXE）。两个安装包的架构、安装冒烟、签名门禁和版本一致性均通过后才视为完整发布；正式 DMG 完成签名与公证，正式 MSI 完成 Authenticode 签名，资产同时提供 SHA-256 校验信息。 发布前从构建产物暂存区完成干净系统安装、覆盖升级及卸载验收，全部通过后上传同哈希安装包；发布后下载复验分发链路。首版仅提供退出应用后的安装包覆盖升级，不接入内置在线更新、自动／差分更新及版本回滚。
 
 验收至少覆盖：审批批准／拒绝／过期，过期与新周期同刻，发送结果未知的重试，失败草稿恢复，跨项目提醒归属，归档与恢复不自动执行，已归档任务禁止触发，清理保留失败不解除关联，服务生效配置来源，以及大量会话搜索与恢复。过期提醒可标记已处理，保留原执行记录。
 
@@ -54,7 +54,7 @@
 
 ## 技术栈补充
 
-2026-09-22 最终技术栈为 Electron 44+ / Node 24 / React 19 / TypeScript / Pi AgentSession / utilityProcess / WebContentsView / CDP / Zustand / TanStack Virtual / SQLite / xterm.js / Shiki。AgentSession 在 Node utilityProcess，浏览器/CDP 管理留 main，React renderer 完全 sandbox。20 提供正式渲染层，21 验证已选路线，02 接入真实 Host。详见[技术栈设计](implementation-stack-design.md)。本次仅同步设计，后续工单仍暂停。
+2026-09-22 最终技术栈为 Electron 44+ / Node 24 / React 19 / TypeScript / Pi AgentSession / utilityProcess / WebContentsView / CDP / Zustand / TanStack Virtual / SQLite / xterm.js / Shiki。AgentSession 在 Node utilityProcess，浏览器/CDP 管理留 main，React renderer 完全 sandbox。20 提供正式渲染层，21 验证已选路线，02 接入真实 Host。详见[技术栈设计](../architecture/implementation-stack-design.md)。本次仅同步设计，后续工单仍暂停。
 
 ## 设计审查修订（2026-09-21）
 

@@ -1,6 +1,6 @@
 # Electrobun 运行时复核：官方源码证据
 
-> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](../design/README.md) 为准，适用范围见 [文档导航](../README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](../architecture/pi-1.4-upgrade-review.md) 重新核实。
 
 2026-09-22。范围：只读核对官方源码、文档及上游工单；本文不运行原型、不改变工单状态、不宣布任何方案通过验收。本地运行复验由另行记录的实验提供。
 
@@ -66,4 +66,4 @@ Electron 官方 `utilityProcess.fork` 创建包含 Node.js 和 MessagePort 的�
 - S9：[Electrobun #380](https://github.com/blackboardsh/electrobun/issues/380)、[#466](https://github.com/blackboardsh/electrobun/issues/466)。上游报告属于相关背景，不是本次问题已被官方确认的声明。
 - S10：[pi coding-agent package.json](https://github.com/earendil-works/pi/blob/7f06f9cf1626504cde95683f1c81a72a7bc7a0cb/packages/coding-agent/package.json)。
 - S11：[Electron utilityProcess 官方文档固定快照](https://github.com/electron/electron/blob/08c729bdf3c1e02a6f34113f0a869ad0efa04530/docs/api/utility-process.md)。
-- S12：[历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)、[技术栈设计](implementation-stack-design.md)、[领域术语](../CONTEXT.md)。
+- S12：[历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)、[技术栈设计](../architecture/implementation-stack-design.md)、[领域术语](../../GLOSSARY.md)。

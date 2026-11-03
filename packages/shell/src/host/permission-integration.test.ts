@@ -224,7 +224,7 @@ describe("[PiDock 09] integrated permission acceptance across tool classes", () 
 
 // Seam: [PiDock 07] (#13) box 1. The pilot flow is the first real business path
 // (BFF start command plus a visible-menu navigation in the task browser, shaped
-// from docs/pilot-repository-inspection.md). It must pass the very same
+// from docs/archive/pilot-repository-inspection.md). It must pass the very same
 // default-tier gate the integrated acceptance covers: no confirmation means no
 // run, a rejection means no run, and there is no acceptance-only bypass.
 describe("[PiDock 07] pilot operations keep the default-tier gate", () => {

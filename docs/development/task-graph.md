@@ -1,6 +1,6 @@
 # pnpm workspace / Turborepo 任务图（[PiDock 02] S2 补充）
 
-> **资料状态：既有实现与验证记录。** 命令、行号、计数和未测项对应各节记录的版本，使用前核对当前脚本与代码。当前功能范围见 [#135](https://github.com/Leonz3n/PiDock/issues/135)，UI 见 [Pencil](design/README.md)，资料分类见 [文档导航](README.md)；历史模块章节不作为新版排期或验收通过证明。
+> **资料状态：既有实现与验证记录。** 命令、行号、计数和未测项对应各节记录的版本，使用前核对当前脚本与代码。当前功能范围见 [#135](https://github.com/Leonz3n/PiDock/issues/135)，UI 见 [Pencil](../design/README.md)，资料分类见 [文档导航](../README.md)；历史模块章节不作为新版排期或验收通过证明。
 
 日期：2026-09-22（Asia/Shanghai）
 状态：已按 #5 工具链补充验收实现并实测；Electron GUI smoke、真实 worktree E2E、真实模型联通仍未测（见 #5 残留）。
@@ -431,7 +431,7 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   `usageRecordsThroughShell` / `clearUsageThroughShell` 读取，Host 不可答时
   回落内存行，项目维度由 renderer 在映射时补齐（Host 信封不含项目）。
 - **残留（未测/未接线）**：真实 Provider 连通与真实 usage 字段来源未验证
-  （`docs/pi-provider-usage.md` 的字段已建模，但没有真实响应样本）；真实模型
+  （`docs/archive/pi-provider-usage.md` 的字段已建模，但没有真实响应样本）；真实模型
   调用尚未接线，因此 `responseModel` 只能由调用方上报（通道与明细已支持并有
   单测，生产路径要等真实传输层），RPC 不暴露该字段以免伪造归属；分支摘要
   （`branch-summary`）与会话克隆／重新导入的来源身份（`origin` 去重规则已实现
@@ -464,11 +464,11 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   GraphQL `errors` 判为未证明，未抓到响应体、响应体不是 JSON、端口没有本任务实例、
   目标是远程主机、状态非 2xx 都判为未证明并给出原因；旧 REST 列表路径
   （`/reconciliation-invoice/list`）显式不能替代本地 RPC 链路；缺少
-  `GetReconciliationInvoices` 请求时在汇总里报告。`docs/pilot-synchronous-query.md`
+  `GetReconciliationInvoices` 请求时在汇总里报告。`docs/archive/pilot-synchronous-query.md`
   的失败判据因此有可执行的判定入口，而不是只靠人工阅读。
 - **试点环境实测（诊断，不是验收）**：supervisor 于 2026-09-23 在用户指定环境完成
   真实登录与页面探查，结果记入
-  [试点环境实测记录](pilot-env-recon-2026-09-23.md)：登录路由 `/sassLogin`、API 基址
+  [试点环境实测记录](../archive/pilot-env-recon-2026-09-23.md)：登录路由 `/sassLogin`、API 基址
   `http://api.reconcile.adber.tech:30080` 与页面主机分离（GraphQL 为同一基址下的
   `POST /graphql`）、动态权限菜单与 64px 图标栏
   导航模型、账单管理列表操作 `ReconciliationListSummary`、用户指定对账单 `000000K1013A336`
@@ -480,7 +480,7 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
 
   1. 真实业务闭环整体未验证（盒子 2–9）：**环境和现有对账单已由用户在 2026-09-23 提供**
      （环境 `http://srb.reconcile.adber.tech`，对账单 `000000K1013A336`，详见
-     [试点环境实测记录](pilot-env-recon-2026-09-23.md)）；仍未验证的是本地 BFF／invoice／
+     [试点环境实测记录](../archive/pilot-env-recon-2026-09-23.md)）；仍未验证的是本地 BFF／invoice／
      shipment 实例及其关联 RPC 证据，另外本地启动配置指向生产还原库与共享 vhost，需用户
      先确认非生产隔离方式（实测记录第 7 节）。
   2. `pilot-evidence.ts` 目前只有单测与 `docs` 记录，尚无生产调用方：真实运行需要
@@ -817,7 +817,7 @@ pnpm --filter @pidock/shell dev      # 仅桌面壳（需沙箱外 escalated 运
   扩展与 package 的安装清单）、真实 MCP 连接（bridge Extension 进程、OAuth／凭据
   读取）、真实 package 安装与版本解析、真实扩展加载与失效探测均未接线，因此
   「已在本机验证」「重新检查来源」「重试连接」「安装版本」都是内存投影模拟；
-  `docs/task-graph.md` 记录的同一接线缺口（应用启动固定内存适配器）仍然存在；
+  `docs/development/task-graph.md` 记录的同一接线缺口（应用启动固定内存适配器）仍然存在；
   真实 Electron 走查、跨平台（Windows x64）能力页未运行；同名资源来自两个真实
   磁盘来源的解析未在真实仓库上验收。
 

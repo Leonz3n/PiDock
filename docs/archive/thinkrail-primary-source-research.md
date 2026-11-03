@@ -1,6 +1,6 @@
 # ThinkRail 一手来源调查与 PiDock 取舍
 
-> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](design/README.md) 为准，适用范围见 [文档导航](README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](pi-1.4-upgrade-review.md) 重新核实。
+> **资料状态：历史记录。** 本文的“当前 / 首版 / 下一步”指原记录时点。现行功能与验收以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，界面以 [Pencil](../design/README.md) 为准，适用范围见 [文档导航](../README.md)。服务编排、内置浏览器、业务联调及远程等延后范围不构成首版前置；旧 Pi 接口依据需对照 [固定 Pi 1.4 适配报告](../architecture/pi-1.4-upgrade-review.md) 重新核实。
 
 调查日期：2026-09-21。仅依据官方仓库、官网、发布页及依赖作者发布的包；未安装或实际运行 ThinkRail。本文将源码/规格中的能力、公开交付物和待验证体验分开，不以品牌背书推断稳定性。
 
@@ -8,7 +8,7 @@
 
 **高度相似，通用 pi 工作台值得优先用 ThinkRail 替代自建；当前证据不足以认定它能直接替代 PiDock 的多仓库、多服务本地验证闭环。建议暂停按现有完整清单投入生产实现，先验证现成 ThinkRail 加少量可维护扩展能否满足真实任务，再决定停止独立应用或收缩为运行环境工具。** 这是本次研究建议，未修改已确认规格、工单状态或技术选型。
 
-相似性不仅在界面：两者都以 pi 为引擎，分离 Host 与 React 界面，使用 Bun、Electrobun、worktree 和多会话。ThinkRail 已有源码与发布物，PiDock 仍处于设计/内存模拟原型阶段。PiDock 规格更细，不能由此推导产品更成熟或差异已成立。[ThinkRail 架构](https://github.com/JetBrains/thinkrail/blob/282f5a1ab8adf47af081ae10a2b2a8fd1f2afb6d/architecture.md)、[PiDock 历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)、[技术栈设计](implementation-stack-design.md)、[当前 Pencil 设计说明](design/README.md)
+相似性不仅在界面：两者都以 pi 为引擎，分离 Host 与 React 界面，使用 Bun、Electrobun、worktree 和多会话。ThinkRail 已有源码与发布物，PiDock 仍处于设计/内存模拟原型阶段。PiDock 规格更细，不能由此推导产品更成熟或差异已成立。[ThinkRail 架构](https://github.com/JetBrains/thinkrail/blob/282f5a1ab8adf47af081ae10a2b2a8fd1f2afb6d/architecture.md)、[PiDock 历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)、[技术栈设计](../architecture/implementation-stack-design.md)、[当前 Pencil 设计说明](../design/README.md)
 
 若目的只是给 pi 配上好用的桌面界面、项目/worktree、聊天、文件和终端，继续从头造完整 PiDock 的收益已经很弱。若目的仍是消除每次手写配置、必须合并部署后才能验证的阻力，则问题尚未由 ThinkRail 当前公开产品直接解决。需要保留的是解决这一问题的能力，不必预先保留独立桌面应用这种形式。[PiDock 问题定义](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md#problem-statement)
 
@@ -27,7 +27,7 @@
 | 手机访问、设备权限、定时任务 | ThinkRail 远程/手机和 automations 仍列 V2；设备授权模型亦不同 | 暂不能按已交付替代；PiDock 自己同样未实现，不宜为这些外围需求提前铺开产品 |
 | 跨项目/Provider 的完整 Token 明细统计 | ThinkRail 有会话 token/cost 展示，cost ledger 仍列 V2 | 有差异，但相比真实运行闭环不足以单独支撑完整重建 |
 
-本地依据：[领域术语](../CONTEXT.md)、[历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)、[真实业务用例](pilot-synchronous-query.md)、[协议与服务核对](pilot-repository-inspection.md)。技术栈采用 React/Tailwind 的重合不表示每一组件库相同，也不证明实现方式逐项相同。
+本地依据：[领域术语](../../GLOSSARY.md)、[历史规格快照](https://github.com/Leonz3n/PiDock/blob/3ae10dd9b1133b32068cf563424554861a56407e/.scratch/pidock-mvp/spec.md)、[真实业务用例](pilot-synchronous-query.md)、[协议与服务核对](pilot-repository-inspection.md)。技术栈采用 React/Tailwind 的重合不表示每一组件库相同，也不证明实现方式逐项相同。
 
 ## 推荐的验证与停止条件
 

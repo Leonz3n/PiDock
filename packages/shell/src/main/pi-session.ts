@@ -831,7 +831,7 @@ export class PiSessionChannel {
     }
     // [PiDock 04] #7 box 6 one name-scoped rule: a shared template is CROSS-TASK
     // state, so its edit is never written without a confirmation the user saw -
-    // not even under `auto` (`docs/design-notes.md` 共享模板确认: 自动执行不逐次
+    // not even under `auto` (`docs/archive/design-notes.md` 共享模板确认: 自动执行不逐次
     // 询问，但仍遵循共享模板确认). Scoped to this one tool name on purpose: the
     // generic tier table above/below is unchanged, so `fs.write` still does NOT
     // ask under `default`. Read-only was already denied above, so this rule can

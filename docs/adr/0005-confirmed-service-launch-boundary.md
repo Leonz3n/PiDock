@@ -9,7 +9,7 @@ Status: proposed (2026-10-16; #7)
 本草案写完后，实现前重查发现**它的核心假设不成立**，以本节为准：
 
 - **人走的链已经是 main 权威，且端到端已存在**：dock 启动 → `serviceCatalogOp{op:"runTaskService"}` → `runtime.ts` `runTaskService` → `catalog.launchFor(...)` → 以 `{kind:"service-catalog"}` 先 `task/registerService` 再 `task/controlService`；界面绑定已带真实原生选择器（`runtime.ts` `pickProgram`：`dialog.showOpenDialog({title:"选择本机服务程序"})`，realpath + `isFile` + `X_OK`），写入走 `performServiceBindingOperation` → `commitTaskBinding`，投影是 main 自己写后读回。渲染层在生产里**从不**登记服务（`registerServiceThroughShell` 无生产调用者），`task/registerService` 只由 main 发出。
-- **因此下文「必须改」表中的这些条目应当保留、不得因甲而放宽**：`host-guards.ts` 的来源守卫、`host.ts` 的 `catalogControlPrecondition` 与拒绝分支、`service-runtime.ts` / `service-public.ts` 的来源说明、`docs/task-graph.md` 的措辞、guard smoke 的 `denied` 断言。它们守的是「页面原始描述符不得执行」，是纵深防御，不是挡用户的产品障碍；改动它们只会为**零产品收益**削弱安全边界。该表作为历史记录保留。
+- **因此下文「必须改」表中的这些条目应当保留、不得因甲而放宽**：`host-guards.ts` 的来源守卫、`host.ts` 的 `catalogControlPrecondition` 与拒绝分支、`service-runtime.ts` / `service-public.ts` 的来源说明、`docs/development/task-graph.md` 的措辞、guard smoke 的 `denied` 断言。它们守的是「页面原始描述符不得执行」，是纵深防御，不是挡用户的产品障碍；改动它们只会为**零产品收益**削弱安全边界。该表作为历史记录保留。
 - **`DesktopToolDock.tsx` 的 `uiRegistered` 禁用条目作废**：该状态在生产里不会出现，已回退（Host 那句更准确的拒绝文案保留）。
 - **真正的缺口是 Agent 的登记生命周期**：Agent 的 `service.start/stop` 读 Host 注册表并要求 `launchSource === "catalog"`，而 main 只在人类触发的那一次「先登记再控制」里瞬时登记，所以人没点过启动时 Agent 得到 `tool-refused:unknown-service`。
 - **采用的修法（业主 2026-10-16 选定）**：main 在**任务开启（首次非 provision 路由）时**把该任务已确认的绑定以 `{kind:"service-catalog"}` 来源登记进该 Host；登记材料仍只来自 `taskBindings` + `launchFor`（与人类启动同一份），不带 code observation；某个绑定解析失败时其余照常登记且失败具名；绑定集合的指纹变化（后于 Host 创建才绑定、模板版本变更、Host 重建）都会触发重新登记。Agent 继续走既有 tier/审批门。**页面来源仍然不可执行。**
@@ -76,7 +76,7 @@ Status: proposed (2026-10-16; #7)
 | `packages/shell/src/host/sdk-agent-tool-broker.ts:1170-1184,1212-1214` | Agent start/stop 先受来源限定；非 catalog 返回“仅由界面登记，未接入真实进程执行”。 | Agent 对已确认的 UI 配方也必须能请求同一个已登记服务；仅对未确认/缺失 launch 拒绝。保留同一个 tier gate、一次性 approval、revision recheck 和 caller 只能命名 service id 的约束。 |
 | `packages/renderer/src/components/DesktopToolDock.tsx:1258,1280-1288`；`packages/renderer/src/data/taskServices.ts:105-116,156-190`；`packages/renderer/src/test/desktopTools.test.tsx:522-532` | `uiRegistered` 直接禁用按钮；文案“本机不会执行：此服务由界面登记；本机仅执行可信服务目录登记的服务”；数据注释为“`catalog` only executes; a `ui` registration is display data”；测试断言按钮 disabled、显示这句文案且没有 run call。 | UI 对 main 已确认/任务绑定的 launch 启用相同人类启动入口；未确认时显示具名阻断原因。renderer 的按钮状态不是安全 gate，Host 仍须独立校验。status schema 需要准确投影确认资格，不能把 UI 来源本身当授权。 |
 | `packages/shell/src/host/service-public.ts:141-142`、`service-processes.ts:57-60` | “`catalog` only: a `ui` registration is display data and cannot execute yet”; driver 接线说明只认可 trusted catalog。 | 更新为“经 main 确认的任务配方”；继续说明子进程只消费 Host 的注册 launch，不能由 caller 传 plan。 |
-| `docs/task-graph.md:73-77` | `serviceLaunchSource`“只把 `service-catalog` 登记当作可执行启动”；“`shell-ui` 登记永远只是展示/计划数据”。 | 改成确认边界：页面原始 RPC 仍为展示数据，但 main 确认并绑定的 UI 配方可执行。 |
+| `docs/development/task-graph.md:73-77` | `serviceLaunchSource`“只把 `service-catalog` 登记当作可执行启动”；“`shell-ui` 登记永远只是展示/计划数据”。 | 改成确认边界：页面原始 RPC 仍为展示数据，但 main 确认并绑定的 UI 配方可执行。 |
 | `packages/shell/src/host/service-execution-wiring.test.ts:518-548` | 测试名“keeps the trusted catalog launch when the page re-registers the same id, and never executes a page descriptor”；UI fresh id 预期 `service-execution-unavailable` 且 `pwned.txt` 不存在。 | 将“never executes a page descriptor”收窄为“never executes an **unconfirmed** page descriptor”；保持同 id hostile overwrite 拒绝与 `pwned.txt` 不存在，同时新增经过确认的 UI 配方端到端真实启动断言。 |
 | `packages/shell/src/host/service-agent-tools.test.ts:655-668` | “A display-only (`ui`) registration is not executable material”; `service.start` 要返回 `tool-refused:service-execution-unavailable`，页面 program 不得运行。 | 继续验证未确认恶意 UI descriptor 拒绝、无 marker/副作用；另补 confirmed UI 的 Agent 成功路径与人类使用相同绑定。 |
 
@@ -127,7 +127,7 @@ Status: proposed (2026-10-16; #7)
 3. 让 dock 人类启动和 Agent `service.start` 使用同一条已确认解析结果与同一 Host runtime/driver；不能让 Agent 自行发送另一个 program/argv/cwd/env。保留人类 caller attestation 和 Agent tier gate。
 4. 增加两类正反端到端断言：确认后的 UI 配方确实产生真实 child，Agent 启动同一 id/配置确实走其 tier/approval；未经确认的 raw UI descriptor、覆盖已确认同 id 的 descriptor 均不产生进程，marker 不存在。Smoke 保留当前原始 payload 的 `denied`，另加经确认 launch 正例。
 5. 保留本 ADR“必须保留”表里的 protected profile、caller identity、owner uncertainty、unknown id、任务外 cwd、`shell:false`、secret log scrub 和平台 owner verification 断言。不可用“甲”名义降低安全断言。将“页面描述符绝不执行”反转时，替代断言必须更强且可测试：**未确认 page descriptor 永不执行 + 已确认 launch 只能由 main 从绑定/模板解析 + page/Agent 不可覆盖该 launch**。
-6. 更新 `host-guards.ts`、`host.ts`、`service-runtime.ts`、`sdk-agent-tool-broker.ts`、`service-public.ts`、`service-processes.ts` 注释/拒绝分支、`DesktopToolDock.tsx`、`docs/task-graph.md` 和前列测试。这些是设计后续实施清单，不是本次草稿改动。
+6. 更新 `host-guards.ts`、`host.ts`、`service-runtime.ts`、`sdk-agent-tool-broker.ts`、`service-public.ts`、`service-processes.ts` 注释/拒绝分支、`DesktopToolDock.tsx`、`docs/development/task-graph.md` 和前列测试。这些是设计后续实施清单，不是本次草稿改动。
 
 ## 需要业主拍板的问题
 

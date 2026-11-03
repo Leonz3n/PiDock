@@ -7,7 +7,7 @@
 #   PROXY=http://127.0.0.1:10808 scripts/warm-toolchain.sh
 #
 # 只写本机缓存（~/Library/Caches、~/Library/pnpm/store、~/.npm、~/.electron-gyp）与临时目录，
-# 不改动仓库内容。详见 docs/toolchain-warmup.md。
+# 不改动仓库内容。详见 docs/development/toolchain-warmup.md。
 
 set -euo pipefail
 
@@ -88,4 +88,4 @@ echo "== 校验 =="
 node -e "import('@earendil-works/pi-coding-agent').then(() => console.log('pi SDK import ok'))"
 
 echo
-echo "预热完成。缓存位置见 docs/toolchain-warmup.md；临时工程保留在 $WORKDIR。"
+echo "预热完成。缓存位置见 docs/development/toolchain-warmup.md；临时工程保留在 $WORKDIR。"

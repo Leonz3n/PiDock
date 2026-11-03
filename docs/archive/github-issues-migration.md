@@ -1,6 +1,6 @@
 # GitHub Issues 迁移索引
 
-> 后续清理：迁移时保留的 `.scratch/` 规格快照也已从工作树移除。现行规格及历史快照入口见 [首版规格入口](mvp-spec.md)。下文保留迁移当时的事实，JSON 中的 `formerSource` 等字段用于追溯原路径。
+> 后续清理：迁移时保留的 `.scratch/` 规格快照也已从工作树移除。现行规格及历史快照入口见 [首版规格入口](../mvp-spec.md)。下文保留迁移当时的事实，JSON 中的 `formerSource` 等字段用于追溯原路径。
 
 2026-09-22。仓库：[Leonz3n/PiDock](https://github.com/Leonz3n/PiDock)；父规格与执行控制：[https://github.com/Leonz3n/PiDock/issues/1](https://github.com/Leonz3n/PiDock/issues/1)。
 
@@ -39,4 +39,4 @@
 | 20 | [#3 [PiDock 20] 渲染层基线（React 19／TypeScript／Zustand 复原现有草稿）](https://github.com/Leonz3n/PiDock/issues/3) | 无 |
 | 21 | [#4 [PiDock 21] Electron 桌面壳可见浏览器验证（已确认 Electron + Node 路线）](https://github.com/Leonz3n/PiDock/issues/4) | 无 |
 
-操作规则见 [Issue tracker](agents/issue-tracker.md) 与 [Triage labels](agents/triage-labels.md)。
+操作规则见 [Issue tracker](../agents/issue-tracker.md) 与 [Triage labels](../agents/triage-labels.md)。

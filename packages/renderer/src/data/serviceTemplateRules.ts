@@ -1,7 +1,7 @@
 /**
  * Renderer mirror of the shell's shared-template rules
  * (`packages/shell/src/main/service-config.ts`) — the boundary note in
- * `docs/task-graph.md` keeps the renderer from importing shell modules, so
+ * `docs/development/task-graph.md` keeps the renderer from importing shell modules, so
  * this is an independent pure mirror with the *same* codes and messages:
  * `validateServiceDescriptor` (program/args/ports/healthCheck/runType),
  * `validateSharedServiceProgram` / `validateSharedServiceArgument` /

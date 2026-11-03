@@ -11,7 +11,7 @@
  *
  * Unit-level: config shape and script line only. Nothing here builds, installs
  * or signs an MSI — the Windows acceptance is manual and is described in
- * `docs/electron-packaging.md`.
+ * `docs/development/electron-packaging.md`.
  */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";

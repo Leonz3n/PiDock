@@ -2,14 +2,14 @@
 
 ## 当前范围与最近安装证据
 
-本文件的安装、耗时和哈希均是按日期 / 产物记录的历史证据，不证明当前源码或 Pencil 改版已验收。现行功能以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，UI 以 [Pencil](design/README.md) 为准。Windows 内部 / 自用未签名 MSI 剩余项归 [#22](https://github.com/Leonz3n/PiDock/issues/22)，对外发布与 macOS 分发门槛归 [#80](https://github.com/Leonz3n/PiDock/issues/80)，后者继续暂缓。
+本文件的安装、耗时和哈希均是按日期 / 产物记录的历史证据，不证明当前源码或 Pencil 改版已验收。现行功能以 [#135](https://github.com/Leonz3n/PiDock/issues/135) 为准，UI 以 [Pencil](../design/README.md) 为准。Windows 内部 / 自用未签名 MSI 剩余项归 [#22](https://github.com/Leonz3n/PiDock/issues/22)，对外发布与 macOS 分发门槛归 [#80](https://github.com/Leonz3n/PiDock/issues/80)，后者继续暂缓。
 
 最近记录的 Windows 安装证据为 **0.1.6**：#98 已合并，#95 / #97 / #92 完成；安装载荷与候选哈希一致，已验证所列文件 / main 会话 / 草稿 / 重开退出场景，补齐覆盖与跨版本升级矩阵、第二账户、首次运行和启动耗时（详见下方 2026-10-15 记录）。**未测**：无开发工具链的干净机器、安装版真实 Provider 往返、多会话 UI、外部编辑器真实启动及 per-machine / per-user 并存。旧 0.1.5 重开退出失败保留为历史，不再列为 0.1.6 当前失败。
 
 内置终端已按 #95 撤销；Agent SDK 命令执行、资源归属与退出回收保留。独立文件 / 差异工作台、服务编排、内置浏览器等按 #135 延后，旧安装验证不恢复其首版范围。下列 PTY 载荷、终端与旧版观察供追溯。
 
 日期：2026-09-22（Asia/Shanghai）
-状态：macOS arm64 **已实测产出未签名 DMG 候选**；macOS 侧 node-pty 原生载荷随包分发已实测（2026-10-13，见「macOS：node-pty 原生载荷随包分发」）；Windows x64 安装资产为 MSI（[ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13），**已在 win32-x64 主机上实测产出未签名 MSI**（2026-10-14 起，见「Windows x64 MSI 实测」）；**2026-10-15 在 0.1.6 上补齐安装矩阵（覆盖/跳版本/降级被拒/卸载）、上一兼容版本升级、第二账户（标准非管理员）、首次运行与启动耗时**（见「Windows x64 MSI 实测（2026-10-15，…）」）。**仍未验证**：该主机的代码签名与公证、干净系统（无 dev 工具链）安装、安装版真实 Provider 模型往返与运行工具/服务中的退出、外部编辑器真实启动、多会话 UI（产线 UI 目前只有 `main`）。
+状态：macOS arm64 **已实测产出未签名 DMG 候选**；macOS 侧 node-pty 原生载荷随包分发已实测（2026-10-13，见「macOS：node-pty 原生载荷随包分发」）；Windows x64 安装资产为 MSI（[ADR 0004](../adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13），**已在 win32-x64 主机上实测产出未签名 MSI**（2026-10-14 起，见「Windows x64 MSI 实测」）；**2026-10-15 在 0.1.6 上补齐安装矩阵（覆盖/跳版本/降级被拒/卸载）、上一兼容版本升级、第二账户（标准非管理员）、首次运行与启动耗时**（见「Windows x64 MSI 实测（2026-10-15，…）」）。**仍未验证**：该主机的代码签名与公证、干净系统（无 dev 工具链）安装、安装版真实 Provider 模型往返与运行工具/服务中的退出、外部编辑器真实启动、多会话 UI（产线 UI 目前只有 `main`）。
 实际分发与发布验收归 #22 / #80（逻辑编号 15，**不是 GitHub #15**）；本文件记录工具链与各版本实测边界。
 
 ## 工具链
@@ -92,7 +92,7 @@ CSC_IDENTITY_AUTO_DISCOVERY=false pnpm package:win    # Windows x64 MSI
 
 ## Windows x64 候选状态
 
-Windows 安装资产为 **MSI**（[ADR 0004](adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13 人工决定），不再是 NSIS 单一 EXE。MSI 已在 **win32-x64 主机**上实测产出并完成安装/启动/覆盖升级/卸载复核（2026-10-14，见「Windows x64 MSI 实测」）；产物未签名。
+Windows 安装资产为 **MSI**（[ADR 0004](../adr/0004-windows-installer-msi-instead-of-nsis-exe.md)，2026-10-13 人工决定），不再是 NSIS 单一 EXE。MSI 已在 **win32-x64 主机**上实测产出并完成安装/启动/覆盖升级/卸载复核（2026-10-14，见「Windows x64 MSI 实测」）；产物未签名。
 
 以下三条是 **darwin-arm64 主机**（2026-09-22）的记录，只说明「这台机器为什么不构建 MSI」，不代表 Windows 主机的状态：
 

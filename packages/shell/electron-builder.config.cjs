@@ -25,7 +25,7 @@ const localElectronDist = path.join(
  * scheme.json (the builder sets `additionalProperties: false`, so NSIS-only keys
  * such as `allowToChangeInstallationDirectory` would be rejected), and no MSI
  * has been produced on this darwin-arm64 host — the Windows acceptance is
- * manual (docs/electron-packaging.md).
+ * manual (docs/development/electron-packaging.md).
  *
  * @type {import('electron-builder').Configuration}
  */

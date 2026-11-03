@@ -83,7 +83,7 @@ const PREPARE_STATES = [
 
 /**
  * Pilot-inspection release dependencies, used by the in-memory projection.
- * `docs/pilot-repository-inspection.md`: the versions are per language and
+ * `docs/archive/pilot-repository-inspection.md`: the versions are per language and
  * cannot be compared across languages.
  */
 const FIXTURE_RELEASE_DEPENDENCIES: Record<string, string> = {

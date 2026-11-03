@@ -13,7 +13,7 @@
 
 - 在本仓库创建独立 issue，包含可交付行为、验收项、父规格、直接阻塞项和执行控制。发布前完成规格与拆分审阅；已审阅的拆分不重复 triage。
 - 同时维护父 issue 的原生 sub-issue 关系和阻塞 issue 的原生 blocked-by 关系。正文列出真实 GitHub issue 链接供阅读；原生关系不支持时明确记录失败并暂以正文为准，不声称已建成。
-- GitHub issue 号码与旧 01–21 逻辑编号不同，不靠同名数字猜测。映射见 [迁移索引](../github-issues-migration.md)。
+- GitHub issue 号码与旧 01–21 逻辑编号不同，不靠同名数字猜测。映射见 [迁移索引](../archive/github-issues-migration.md)。
 - 用 `gh issue view/create/edit/close` 和 GitHub API 操作；长正文通过文件或结构化参数提交，保留真实换行。发布前检查已有 issue 和迁移标识，避免重复创建。
 
 ## 仓库文件
