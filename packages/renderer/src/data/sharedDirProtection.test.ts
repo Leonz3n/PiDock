@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SHARED_DIR_MANAGED_PROTECTION, SHARED_DIR_MANAGED_PROTECTION_SHORT, sharedDirRefusalText } from "./sharedDirProtection";
 
-describe("[Pencil T06] #141 受管保护的界面文案", () => {
+describe("[Pencil T06] ticket 141 受管保护的界面文案", () => {
   it("说清范围、真实路径键、持有者与具名恢复，并明确外部编辑器豁免", () => {
     expect(SHARED_DIR_MANAGED_PROTECTION).toContain("受管保护");
     expect(SHARED_DIR_MANAGED_PROTECTION).toContain("真实路径");

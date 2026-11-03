@@ -14,7 +14,6 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  MAX_SHARED_PATH_LOCK_FILES,
   SHARED_PATH_LOCK_DIRECTORY,
   SHARED_PATH_LOCK_OWNER_DEAD,
   SharedPathLock,
@@ -40,10 +39,11 @@ function fixture() {
   return { userData, shared: real(shared), other: real(other), nested: real(nested) };
 }
 
-function lockFor(userData: string, options: { alive?: number[]; notify?: (message: string) => void } = {}) {
+function lockFor(userData: string, options: { alive?: number[]; notify?: (message: string) => void; maxRecords?: number } = {}) {
   return new SharedPathLock(userData, {
     isProcessAlive: (pid) => (options.alive ?? [process.pid]).includes(pid),
     ...(options.notify ? { notify: options.notify } : {}),
+    ...(options.maxRecords !== undefined ? { maxRecords: options.maxRecords } : {}),
   });
 }
 
@@ -211,10 +211,10 @@ describe("释放、取消与崩溃回收", () => {
     const f = fixture();
     const directory = join(f.userData, SHARED_PATH_LOCK_DIRECTORY);
     mkdirSync(directory, { recursive: true });
-    for (let index = 0; index < MAX_SHARED_PATH_LOCK_FILES + 1; index += 1) {
+    for (let index = 0; index < 3; index += 1) {
       writeFileSync(join(directory, `${index.toString(16).padStart(64, "0")}.lock`), "{}");
     }
-    const refused = lockFor(f.userData).claim(owner("task-a"), [f.shared]);
+    const refused = lockFor(f.userData, { maxRecords: 2 }).claim(owner("task-a"), [f.shared]);
     expect(refused.ok).toBe(false);
     if (refused.ok) return;
     expect(refused.error).toContain("shared-path-lock-unavailable");

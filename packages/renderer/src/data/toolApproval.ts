@@ -22,9 +22,9 @@ export type TaskApproval = {
   sessionId: string;
   tool: string;
   target: string;
-  /** [T06 #141] Host-resolved REAL path of `target`; `null` = Host could not resolve it (say so, never guess). */
+  /** [T06 ticket 141] Host-resolved REAL path of `target`; `null` = Host could not resolve it (say so, never guess). */
   realTarget: string | null;
-  /** [T06 #141] the linked original a shared-directory write really changes; `null` = not a linked original. */
+  /** [T06 ticket 141] the linked original a shared-directory write really changes; `null` = not a linked original. */
   sharedOriginal: string | null;
   /** 真实际命令（`exec.run`），目标字段放不下时由 Host 记录。 */
   operation: string | null;
@@ -116,7 +116,7 @@ export function approvalRefusal(approval: TaskApproval): string | null {
  * 三条必须让读者看到的影响，按真实语义分开写：
  * - 批准只授权**这一次**，不授权未来；
  * - 普通目录链接不是副本，写入直接改动原始目录的真实文件；
- * - [T06 #141] 跨任务／跨 Host 进程的共享真实路径由 Host 的写协调互斥（已接线），
+ * - [T06 ticket 141] 跨任务／跨 Host 进程的共享真实路径由 Host 的写协调互斥（已接线），
  *   外部编辑器的写入按 ADR 0006 明确豁免。
  */
 export const APPROVAL_IMPACT_TEXT =

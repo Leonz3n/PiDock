@@ -113,10 +113,12 @@ describe("ticket 140 状态与影响文本不夸大", () => {
     expect(approvalStatusText({ ...pending, status: "expired" })).toBe("已过期（未执行）");
   });
 
-  it("影响文本写明一次性授权、共享原目录真实影响与 ticket 141 前的跨任务边界", () => {
+  it("影响文本写明一次性授权、共享原目录真实影响与跨任务互斥边界", () => {
     expect(APPROVAL_IMPACT_TEXT).toContain("仅授权这一次");
     expect(SHARED_ROOT_IMPACT_TEXT).toContain("不是副本");
-    expect(SHARED_ROOT_IMPACT_TEXT).toContain("ticket 141");
+    // [ticket 141] 真实接线完成后不再说「仍由 Host 拒绝」，而是说出互斥范围与编辑器豁免。
+    expect(SHARED_ROOT_IMPACT_TEXT).toContain("互斥");
+    expect(SHARED_ROOT_IMPACT_TEXT).toContain("ADR 0006");
   });
 
   it("工具名有中文标签，未知工具名不被改写", () => {

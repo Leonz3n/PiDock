@@ -278,7 +278,7 @@ function RootGroup({ rootId, rows, changes, links }: { rootId: string; rows: rea
           <p className="text-[11px] text-[#9a6032]">
             本项目 {rows.length} 个任务指向同一原目录：共享原目录，文件未隔离，写入会互相影响。
           </p>
-          {/* [Pencil T06] #141: 只有真实接线完成后才能说「受管保护」，并同时说出外部编辑器豁免。 */}
+          {/* [Pencil T06] ticket 141: 只有真实接线完成后才能说「受管保护」，并同时说出外部编辑器豁免。 */}
           <p className="mt-0.5 text-[11px] text-muted" data-testid={`shared-dir-managed-protection-${rootId}`}>
             {SHARED_DIR_MANAGED_PROTECTION}
           </p>

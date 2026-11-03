@@ -100,6 +100,8 @@ export interface SharedPathLockOptions {
   notify?: (message: string) => void;
   /** Host-instance nonce; production default is a fresh random value per instance. */
   hostInstance?: string;
+  /** Bound on records read for one claim; injectable so a test need not write 512 files. */
+  maxRecords?: number;
 }
 
 export type SharedPathLockOutcome =
@@ -121,6 +123,7 @@ export class SharedPathLock {
   private readonly isProcessAlive: (pid: number) => boolean;
   private readonly notify: (message: string) => void;
   private readonly hostInstance: string;
+  private readonly maxRecords: number;
   /** taskId::sessionId -> key -> the exact record this process wrote. */
   private readonly held = new Map<string, Map<string, SharedPathLockRecord>>();
   private instancePublished = false;
@@ -136,6 +139,7 @@ export class SharedPathLock {
     this.isProcessAlive = options.isProcessAlive ?? defaultIsProcessAlive;
     this.notify = options.notify ?? (() => undefined);
     this.hostInstance = options.hostInstance ?? randomUUID();
+    this.maxRecords = options.maxRecords ?? MAX_SHARED_PATH_LOCK_FILES;
     // A crashed process leaves its marker behind, which is harmless: the pid
     // check still proves it gone. The marker is what proves a RECYCLED pid is
     // not the original holder.
@@ -449,10 +453,10 @@ export class SharedPathLock {
       return { ok: false, error: this.unavailableError((error as NodeJS.ErrnoException).code) };
     }
     const files = names.filter((name) => RECORD_FILE.test(name)).map((name) => join(this.root, name));
-    if (files.length > MAX_SHARED_PATH_LOCK_FILES) {
+    if (files.length > this.maxRecords) {
       return {
         ok: false,
-        error: `shared-path-lock-unavailable: 共享路径锁目录记录过多（${files.length} > ${MAX_SHARED_PATH_LOCK_FILES}），拒绝在未核验其他持有者的情况下写入`,
+        error: `shared-path-lock-unavailable: 共享路径锁目录记录过多（${files.length} > ${this.maxRecords}），拒绝在未核验其他持有者的情况下写入`,
       };
     }
     return { ok: true, files };
