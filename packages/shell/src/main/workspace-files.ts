@@ -120,6 +120,13 @@ export interface WorkspaceRoot {
   /** Worktree only: pinned baseline commit the diff compares against. */
   baseCommit?: string;
   /**
+   * Worktree only, RECORDED: the registered source checkout the worktree came
+   * from, as its resolved real path ([Pencil T07] #142, #137 leftover). The
+   * worktree path alone cannot tell WHICH original repository this task reads
+   * and writes around, so the facts surface shows both.
+   */
+  sourceRealPath?: string;
+  /**
    * Existing-git only: this root is the original checkout itself, not a copy.
    * Writes modify the original files and there is no task baseline to diff or
    * deliver against.
@@ -145,7 +152,7 @@ export interface WorkspaceRootsInput {
   /** Worktree folder names inside the task folder (single-repo tasks: one). */
   repos: readonly string[];
   /** Per-repo baselines ([PiDock 03] #6); absent on pre-#6 records. */
-  repoSources?: readonly { repoDir: string; remoteBranch: string; baseCommit?: string }[];
+  repoSources?: readonly { repoDir: string; remoteBranch: string; baseCommit?: string; sourceRealPath?: string }[];
   /** Plain-directory links ([PiDock 03] #6). */
   dirLinks?: readonly { linkName: string; directoryId: string; sourcePath: string }[];
   /** Existing-Git-dir sources ([Pencil T02] #137): the registered checkout in place. */
@@ -181,12 +188,14 @@ export function workspaceRoots(input: WorkspaceRootsInput): WorkspaceRoot[] {
   const roots: WorkspaceRoot[] = [];
   const branchByRepo = new Map((input.repoSources ?? []).map((source) => [source.repoDir, source.remoteBranch] as const));
   const baseByRepo = new Map((input.repoSources ?? []).map((source) => [source.repoDir, source.baseCommit] as const));
+  const sourceRealPathByRepo = new Map((input.repoSources ?? []).map((source) => [source.repoDir, source.sourceRealPath] as const));
   const seen = new Set<string>();
   for (const repoDir of input.repos) {
     const id = repoDir.trim();
     if (id.length === 0 || seen.has(id)) continue;
     seen.add(id);
     const baseCommit = baseByRepo.get(id) ?? input.baseCommit;
+    const sourceRealPath = sourceRealPathByRepo.get(id);
     roots.push({
       id,
       kind: "worktree",
@@ -196,6 +205,7 @@ export function workspaceRoots(input: WorkspaceRootsInput): WorkspaceRoot[] {
       baselineBranch: branchByRepo.get(id) ?? input.baselineBranch ?? "",
       ...(input.taskBranch !== undefined && input.taskBranch.length > 0 ? { expectedBranch: input.taskBranch } : {}),
       ...(baseCommit !== undefined && baseCommit.length > 0 ? { baseCommit } : {}),
+      ...(sourceRealPath !== undefined && sourceRealPath.length > 0 ? { sourceRealPath } : {}),
     });
   }
   // Existing-Git-dir sources ([Pencil T02] #137): the root IS the registered

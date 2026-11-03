@@ -56,7 +56,7 @@ describe("Desktop task creation", () => {
     // The intent's own name is validated non-empty by the reader, so it still
     // renders verbatim.
     expect(preview).toHaveTextContent(`任务路径预览 · ${intent.name}`);
-    expect(preview).toHaveTextContent("Host 未上报仓库名称 · Host 未上报远程名/Host 未上报远程分支 · Host 未上报提交");
+    expect(preview).toHaveTextContent("Host 未上报仓库名称 · 原检出 Host 未上报原检出路径 · Host 未上报远程名/Host 未上报远程分支 · 固定基线 Host 未上报提交");
     expect(preview).toHaveTextContent("Host 未上报目录名");
     expect(preview).toHaveTextContent("Host 未上报目录名称 · Host 未上报目录路径 → " + blank.taskDir + "/Host 未上报链接名（共享可写）");
   });

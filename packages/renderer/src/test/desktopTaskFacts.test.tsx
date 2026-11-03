@@ -34,6 +34,9 @@ describe("task workspace facts (S08)", () => {
     await screen.findByTestId("task-facts-mode");
     expect(screen.getByTestId("task-facts-mode")).toHaveTextContent("已有 Git 目录 · 共享原检出");
     expect(screen.getAllByText("已有 Git 目录 · 共享原检出").length).toBeGreaterThan(0);
+    // An existing-git task shows no invented task branch on the facts surface:
+    // the mode badge and per-source branch/HEAD are the honest facts.
+    expect(screen.queryByText(/任务分支 task\/task-abc12345/)).not.toBeInTheDocument();
     expect(screen.getByText("普通目录 · 共享原文件")).toBeInTheDocument();
     expect(screen.getByText(/原检出真实路径: \/src\/pidock/)).toBeInTheDocument();
     expect(screen.getByText(/当前分支 main（实测）/)).toBeInTheDocument();
@@ -62,7 +65,8 @@ describe("task workspace facts (S08)", () => {
       taskDir: "/tasks/task-1", workspaceMode: "worktree",
       roots: [
         { id: "repo-1", kind: "worktree", label: "repo-1", path: "/tasks/task-1/repo-1", baselineBranch: "main", baseCommit: "b".repeat(40),
-          workingBranch: { state: "observed", value: "task/task-1" }, dirty: { state: "observed", value: true },
+          expectedBranch: "task/task-abc12345", sourceRealPath: "/src/pidock",
+          workingBranch: { state: "observed", value: "task/task-abc12345" }, dirty: { state: "observed", value: true },
           verification: { state: "mismatch", reason: "身份不符：来源的 Git 公共目录已改变" } },
         { id: "dir-1", kind: "shared-dir", label: "docs", path: "/tasks/task-1/dir-1", sourcePath: "/work/docs",
           verification: { state: "repair-required", reason: "待修复：任务记录缺少来源身份（设备/索引节点），无法核验" } },
@@ -70,7 +74,13 @@ describe("task workspace facts (S08)", () => {
     } }));
     render(<DesktopTaskFacts taskId="task-1" taskName="Mixed" bridge={bridge(taskOp)} />);
     expect(await screen.findByText("独立 Git worktree (隔离副本)")).toBeInTheDocument();
-    expect(screen.getByText(/分支 task\/task-1（实测）/)).toBeInTheDocument();
+    // [Pencil T07] #142: per-repo facts name the LOCAL task branch, the worktree
+    // path, the pinned base commit AND the source checkout the copy came from.
+    expect(screen.getByText(/目标检出路径: \/tasks\/task-1\/repo-1/)).toBeInTheDocument();
+    expect(screen.getByText(/任务分支 task\/task-abc12345/)).toBeInTheDocument();
+    expect(screen.getByText(/工作分支 task\/task-abc12345（实测）/)).toBeInTheDocument();
+    expect(screen.getByText(/基线 main @ b{40}/)).toBeInTheDocument();
+    expect(screen.getByText(/来源检出 \/src\/pidock/)).toBeInTheDocument();
     expect(screen.getByText(/身份不符：来源的 Git 公共目录已改变/)).toBeInTheDocument();
     expect(screen.getByText(/待修复：任务记录缺少来源身份/)).toBeInTheDocument();
     expect(screen.getByText("普通目录 · 共享原文件")).toBeInTheDocument();

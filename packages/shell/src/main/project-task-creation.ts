@@ -102,11 +102,44 @@ function git(cwd: string, args: string[]): string {
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }, stdio: ["ignore", "pipe", "pipe"] }).trim(); }
   catch { throw new Error("Git 获取或工作树创建失败，请检查远程、分支与本机仓库后重试"); }
 }
+/**
+ * [Pencil T07] #142: the one fetch a worktree creation makes for one repo.
+ * A failure is named by repository and branch, and states the two things the
+ * creation must NOT do: reuse a stale baseline, or quietly become an
+ * existing-directory task. The pin taken at `prepare` is never exchanged for
+ * a cached local ref on this path.
+ */
+function fetchPinnedBaseline(repo: Repo): void {
+  try {
+    execFileSync("git", ["fetch", "--no-tags", repo.remote, `refs/heads/${repo.remoteBranch}`], {
+      cwd: repo.path, encoding: "utf8", timeout: 30000, maxBuffer: 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }, stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    throw new Error(`获取失败：仓库 ${repo.repoDir} 的 ${repo.remote}/${repo.remoteBranch} 未获取成功，已保留本次创建意图以便重试；未使用旧基线，也不会改用已有 Git 目录模式`);
+  }
+}
 function optionalGit(cwd: string, args: string[]): string | null {
   try { return git(cwd, args); } catch { return null; }
 }
 function gitCommonDir(path: string): string {
   return realpathSync(resolve(path, git(path, ["rev-parse", "--git-common-dir"])));
+}
+/**
+ * [Pencil T07] #142: the ACTUAL identity of the checkout this creation just
+ * made/verified — real path, branch and HEAD read back from the worktree. An
+ * unreadable branch is refused by name instead of being recorded as the
+ * declared task branch; the observed values are what the record keeps.
+ */
+function observeCheckout(target: string, branch: string): { targetRealPath: string; targetBranch: string; targetHead: string } {
+  let targetRealPath: string;
+  try { targetRealPath = realpathSync(target); }
+  catch { throw new Error(`任务工作副本路径不可读取（${target}），未创建任务记录`); }
+  const head = optionalGit(target, ["rev-parse", "--verify", "HEAD"]);
+  if (head === null || !/^[a-f0-9]{40}$/.test(head)) throw new Error("任务工作副本 HEAD 不可读取，未创建任务记录");
+  const actual = optionalGit(target, ["symbolic-ref", "--short", "-q", "HEAD"]);
+  if (actual !== branch) throw new Error(`任务工作副本不在任务分支 ${branch} 上（实际 ${actual ?? "detached"}），未创建任务记录`);
+  return { targetRealPath, targetBranch: actual, targetHead: head };
 }
 function verifyRepo(repo: Repo): void {
   checkSource(repo);
@@ -431,6 +464,9 @@ export class ProjectTaskCreation {
       // branch, worktree or record.
       const acquisition = this.acquireWorktreeLock(intent.repos.map((repo) => repo.path), { taskId: intent.taskId, label: "创建任务" });
       if (!acquisition.ok) throw new Error(acquisition.error);
+      // Observed identity of every task worktree, keyed by repoDir: filled only
+      // from a real read of the created checkout, never derived from the pin.
+      const checkoutIdentities: Record<string, { targetRealPath: string; targetBranch: string; targetHead: string }> = {};
       try {
         if (intent.rootDevice === null) {
           if (!pathPresent(intent.root)) {
@@ -481,13 +517,20 @@ export class ProjectTaskCreation {
             }
             continue;
           }
-          git(repo.path, ["fetch", "--no-tags", repo.remote, `refs/heads/${repo.remoteBranch}`]);
+          fetchPinnedBaseline(repo);
           if (git(repo.path, ["rev-parse", "FETCH_HEAD"]) !== repo.commit) throw new Error("远程分支已变化，不使用旧基线");
           if (optionalGit(repo.path, ["show-ref", "--verify", "--hash", `refs/heads/${intent.branch}`]) !== null) throw new Error(TASK_BRANCH_EXISTS_NO_WORKTREE);
           missingRepos.push(repo);
         }
         for (const repo of missingRepos) {
           git(repo.path, ["worktree", "add", "-b", intent.branch, join(intent.taskDir, repo.repoDir), repo.commit]);
+        }
+        // [Pencil T07] #142: read back the checkout THIS creation produced (or
+        // verified on a retry) and keep that observation for the record. Read
+        // inside the lock so no competing creation can swap the checkout
+        // between `worktree add` and the recorded identity.
+        for (const repo of (intent.workspaceMode === "existing-git" ? [] : intent.repos)) {
+          checkoutIdentities[repo.repoDir] = observeCheckout(join(intent.taskDir, repo.repoDir), intent.branch);
         }
       } finally {
         // Released on success, on refusal and on every throw; a crash leaves the
@@ -527,7 +570,8 @@ export class ProjectTaskCreation {
             repoSelections: intent.repos.map((repo) => ({ repoDir: repo.repoDir, remote: repo.remote, remoteBranch: repo.remoteBranch, mainCheckoutDir: repo.path })),
             fetchedCommits: Object.fromEntries(intent.repos.map((repo) => [repo.repoDir, repo.commit])),
             repoIdentities: Object.fromEntries(intent.repos.map((repo) => [repo.repoDir, { sourcePath: repo.path, sourceRealPath: repo.realPath,
-              sourceDevice: repo.device, sourceInode: repo.inode, commonDir: repo.commonDir, remoteDigest: repo.remoteDigest }])),
+              sourceDevice: repo.device, sourceInode: repo.inode, commonDir: repo.commonDir, remoteDigest: repo.remoteDigest,
+              ...(checkoutIdentities[repo.repoDir] ?? {}) }])),
           }),
           plainDirs: intent.directories.map((dir) => ({ directoryId: dir.id, sourcePath: dir.path })),
         } });
@@ -540,6 +584,10 @@ export class ProjectTaskCreation {
       // Compare the canonical key; a record naming another folder still differs.
       const mode = intent.workspaceMode ?? "worktree";
       const expectedRepoCount = mode === "existing-git" ? 0 : intent.repos.length;
+      // [Pencil T07] #142 (#137 leftover): the record's branch spelling must
+      // match what this mode really created — a task branch only for worktrees.
+      const expectedBranch = mode === "worktree" ? intent.branch : "";
+      const expectedBranchKind = mode === "worktree" ? "task-worktree" : "none";
       // Existing-Git-dir mode records the shared checkout in `sharedRepos`
       // (real source path, branch, observed HEAD) and has no worktree folders;
       // worktree mode records one `repoSources` entry per repo. Neither shape
@@ -548,10 +596,20 @@ export class ProjectTaskCreation {
         ? (record?.sharedRepos?.length ?? 0) === intent.repos.length &&
           intent.repos.every((repo) => record?.sharedRepos?.some((entry) => entry.rootId === repo.repoDir &&
             (entry.sourceRealPath ?? entry.sourcePath) === repo.realPath && entry.remoteBranch === repo.remoteBranch))
-        : !intent.repos.some((repo) => !record?.repoSources?.some((entry) => entry.repoDir === repo.repoDir && entry.remote === repo.remote && entry.remoteBranch === repo.remoteBranch && entry.baseCommit === repo.commit));
+        : mode === "plain-dirs"
+        ? (record?.repoSources?.length ?? 0) === 0
+        : intent.repos.length > 0 && !intent.repos.some((repo) => !record?.repoSources?.some((entry) => entry.repoDir === repo.repoDir && entry.remote === repo.remote && entry.remoteBranch === repo.remoteBranch && entry.baseCommit === repo.commit &&
+            // #142: the record keeps the ACTUAL observed checkout identity. Its
+            // real path and branch are stable facts of this creation; the HEAD
+            // may legitimately advance when the user commits in the worktree
+            // between a failed attempt and a retry, so it is not compared (the
+            // `merge-base --is-ancestor` check above already proves lineage).
+            (entry.targetRealPath === undefined || entry.targetRealPath === checkoutIdentities[repo.repoDir]?.targetRealPath) &&
+            (entry.targetBranch === undefined || entry.targetBranch === intent.branch)));
       if (!record || record.taskId !== intent.taskId || record.dirId !== intent.taskId || record.root !== intent.root ||
           normalizeTaskPath(record.taskDir) !== normalizeTaskPath(intent.taskDir) ||
-          record.branch !== intent.branch || record.name !== intent.name || record.repos.length !== expectedRepoCount ||
+          record.branch !== expectedBranch || (record.branchKind ?? "task-worktree") !== expectedBranchKind ||
+          record.name !== intent.name || record.repos.length !== expectedRepoCount ||
           (record.workspaceMode ?? "worktree") !== mode || !repoRecordOk ||
           (record.dirLinks?.length ?? 0) !== intent.directories.length || intent.directories.some((dir) => !record.dirLinks?.some((entry) => entry.directoryId === dir.id && entry.linkName === dir.linkName && entry.sourcePath === dir.path))) {
         throw new Error("任务磁盘记录与创建意图不符");

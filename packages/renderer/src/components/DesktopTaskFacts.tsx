@@ -51,7 +51,11 @@ function rootFact(root: WorkspaceRootView): string {
   if (root.kind === "worktree") {
     const branch = observedText(root.workingBranch, (value) => value, "Host 未上报工作分支");
     const base = root.baseCommit !== undefined && root.baseCommit.length > 0 ? ` @ ${root.baseCommit}` : "";
-    return `目标检出路径: ${hostText(root.path, "Host 未上报路径")} · 分支 ${branch}（基线 ${hostText(root.baselineBranch, "未记录基线分支")}${base}）`;
+    // [Pencil T07] ticket 142: the LOCAL task branch, the worktree path, the pinned
+    // base commit and the source checkout identity are four separate facts —
+    // a row that showed only the observed branch would leave "which original
+    // repository is this?" unanswerable on the facts surface.
+    return `目标检出路径: ${hostText(root.path, "Host 未上报路径")} · 任务分支 ${hostText(root.expectedBranch, "Host 未上报任务分支")} · 工作分支 ${branch}（基线 ${hostText(root.baselineBranch, "未记录基线分支")}${base}）· 来源检出 ${hostText(root.sourceRealPath, "Host 未上报来源检出路径")}`;
   }
   if (root.kind === "existing-git") {
     const head = observedText(root.headCommit, (value) => value, "Host 未上报 HEAD");

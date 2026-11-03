@@ -552,6 +552,14 @@ export interface ProvisionTaskInput {
     sourceInode?: string;
     commonDir?: string;
     remoteDigest?: string;
+    /**
+     * [Pencil T07] #142: the checkout's ACTUAL identity observed by the caller
+     * right after `git worktree add` (real path, branch, HEAD). Stored verbatim
+     * beside the pinned baseline; absent values are not stored at all.
+     */
+    targetRealPath?: string;
+    targetBranch?: string;
+    targetHead?: string;
   }>>;
   now?: string;
 }
@@ -1565,6 +1573,12 @@ export class TaskWorkspaceHost {
     if (workspaceMode !== "existing-git" && hasSharedRepos) {
       throw new Error("invalid-payload: sharedRepos require existing-git mode");
     }
+    // [Pencil T07] #142 (#137 leftover): only a worktree task owns a task
+    // branch. Existing-Git-dir and plain-directory tasks create none, so their
+    // record says so explicitly (`branchKind: "none"`, empty `branch`) instead
+    // of spelling a fictitious `task/<id>` that never exists in any repository.
+    const taskBranch = workspaceMode === "worktree" ? branched.branch : "";
+    const branchKind: "task-worktree" | "none" = workspaceMode === "worktree" ? "task-worktree" : "none";
     let pinned: { ok: true; remoteBranch: string; commit: string };
     const requiresRemotePin = workspaceMode !== "existing-git" &&
       (hasRepos || !hasPlainDirs || (input.remoteBranch && input.remoteBranch.length > 0) || (input.fetchedCommit && input.fetchedCommit.length > 0));
@@ -1685,7 +1699,8 @@ export class TaskWorkspaceHost {
       taskId: this.taskId,
       name: named.name,
       dirId: input.dirId,
-      branch: branched.branch,
+      branch: taskBranch,
+      branchKind,
       root: resolved.root,
       taskDir: this.taskDir,
       remoteBranch: pinned.remoteBranch,
@@ -1711,6 +1726,11 @@ export class TaskWorkspaceHost {
                 ...(recorded?.commonDir !== undefined ? { commonDir: recorded.commonDir } : {}),
                 ...(recorded?.remoteDigest !== undefined ? { remoteDigest: recorded.remoteDigest } : {}),
                 ...(target !== undefined ? { targetDevice: target.device, targetInode: target.inode } : {}),
+                // [Pencil T07] #142: the observed target identity the caller read
+                // back from the real worktree, never derived from `baseCommit`.
+                ...(recorded?.targetRealPath !== undefined ? { targetRealPath: recorded.targetRealPath } : {}),
+                ...(recorded?.targetBranch !== undefined ? { targetBranch: recorded.targetBranch } : {}),
+                ...(recorded?.targetHead !== undefined ? { targetHead: recorded.targetHead } : {}),
               };
             })
           : undefined,
@@ -1913,6 +1933,7 @@ export class TaskWorkspaceHost {
       name: stored.name,
       dirId: stored.dirId,
       branch: stored.branch,
+      ...(stored.branchKind !== undefined ? { branchKind: stored.branchKind } : {}),
       root: stored.root,
       taskDir: stored.taskDir,
       remoteBranch: stored.remoteBranch,
@@ -2032,6 +2053,7 @@ export class TaskWorkspaceHost {
       name: stored.name,
       dirId: stored.dirId,
       branch: stored.branch,
+      ...(stored.branchKind !== undefined ? { branchKind: stored.branchKind } : {}),
       root: stored.root,
       taskDir: this.taskDir,
       remoteBranch: stored.remoteBranch,
@@ -2403,6 +2425,7 @@ export class TaskWorkspaceHost {
       name: stored.name,
       dirId: stored.dirId,
       branch: stored.branch,
+      ...(stored.branchKind !== undefined ? { branchKind: stored.branchKind } : {}),
       root: stored.root,
       taskDir: stored.taskDir,
       remoteBranch: stored.remoteBranch,
