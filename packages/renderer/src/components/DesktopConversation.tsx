@@ -15,8 +15,8 @@ import { executionLabel, executionStepLabel } from "../pages/executionView";
 import { TurnStream } from "../data/turnStream";
 import {
   activateSession, archiveSession, createSession, deleteSession, formatWindow, mergeSessionList, readSessionReadout, readTaskSessions,
-  REASONING_LEVEL_TEXT, renameSession, restoreSession, setSessionReasoning, switchSessionModel,
-  type SessionList, type SessionReadout, type SessionThinkingLevel, type TaskSession,
+  REASONING_LEVEL_TEXT, renameSession, restoreSession, sessionActionRows, setSessionReasoning, stopSession, switchSessionModel,
+  type SessionActionId, type SessionLifecycleReply, type SessionList, type SessionReadout, type SessionThinkingLevel, type TaskSession,
 } from "../data/taskSessions";
 import { definiteTurnRefusal } from "../data/turnRefusal";
 import { parseLifecycle } from "./DesktopArchivePage";
@@ -220,6 +220,15 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  /**
+   * [#146] Delete is the only irreversible session action, so it is always asked
+   * for explicitly. The dialog names the real impact (history + drafts go, the
+   * task workspace and the user's own directories stay, scheduled history keeps
+   * an explicit deleted state); nothing is deleted by a single click.
+   */
+  const [deletePrompt, setDeletePrompt] = useState<TaskSession | null>(null);
+  /** What a lifecycle write really did (`已停止 1 个回合` / `该会话没有执行中的回合`). */
+  const [lifecycleNotice, setLifecycleNotice] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const recovered = useRef(readReceipt(taskId, sessionId));
   const [draft, setDraft] = useState(recovered.current.receipt?.text ?? "");
@@ -903,6 +912,16 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     if (!result.ok) { setSessionNotice(result.error); return; }
     applyList(result.list);
   };
+  /** [#146] Adopt a lifecycle reply and say what actually happened, never more. */
+  const applyLifecycleWrite = (action: SessionActionId, session: TaskSession, result: { ok: true; reply: SessionLifecycleReply } | { ok: false; error: string }): boolean => {
+    if (!result.ok) { setSessionNotice(`${session.name}：${result.error}`); return false; }
+    applyList(result.reply.list);
+    const verb = action === "stop" ? "停止" : action === "archive" ? "归档" : action === "delete" ? "删除" : action;
+    setLifecycleNotice(result.reply.stopped
+      ? `已先停止「${session.name}」的 ${result.reply.abortedTurnIds.length} 个执行回合并等待结算，然后完成${verb}`
+      : `「${session.name}」没有正在执行的回合，已直接完成${verb}`);
+    return true;
+  };
   const renameOne = async () => {
     if (renaming === null || sessionBusy) return;
     setSessionBusy(true);
@@ -912,32 +931,51 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   };
   const archiveOne = async (id: string) => {
     if (sessionBusy) return;
+    const session = sessions.find((entry) => entry.id === id);
+    if (!session) return;
     setSessionBusy(true);
     const result = await archiveSession(taskId, id);
     setSessionBusy(false);
-    applySessionWrite(result);
-    // Archiving the session being shown moves the page to the next real one.
-    if (result.ok && id === sessionId) {
-      const next = result.list.activeSessionId;
+    // Archiving the session being shown moves the page to the next real one;
+    // an archived session is read-only and never takes another turn.
+    if (applyLifecycleWrite("archive", session, result) && id === sessionId) {
+      const next = result.ok ? result.reply.list.activeSessionId : null;
       if (next !== null) resetForSession(next);
     }
+  };
+  const stopOne = async (id: string) => {
+    if (sessionBusy) return;
+    const session = sessions.find((entry) => entry.id === id);
+    if (!session) return;
+    setSessionBusy(true);
+    const result = await stopSession(taskId, id);
+    setSessionBusy(false);
+    applyLifecycleWrite("stop", session, result);
+    // The stopped turn's terminal state is the Host's; re-read it instead of
+    // painting a local "已停止" that the JSONL may not agree with.
+    if (result.ok && id === sessionId) void reconcile(generation.current, attemptRef.current?.requestId);
   };
   const restoreOne = async (id: string) => {
     if (sessionBusy) return;
     setSessionBusy(true);
+    // Restore keeps the history and replays nothing: no turn, no approval, no
+    // tool is sent by this path (the Host only clears the archive flag).
     applySessionWrite(await restoreSession(taskId, id));
     setSessionBusy(false);
   };
   const deleteOne = async (id: string) => {
     if (sessionBusy) return;
+    const session = sessions.find((entry) => entry.id === id) ?? deletePrompt;
+    if (!session) return;
     setSessionBusy(true);
     const result = await deleteSession(taskId, id);
     setSessionBusy(false);
-    applySessionWrite(result);
+    setDeletePrompt(null);
+    const deleted = applyLifecycleWrite("delete", session, result);
     // [Pencil T10] #145 删除会话要连带它的草稿与待确认记录：Host 侧会话记录随
     // 会话一起消失，本机这条会话的 pending receipt 也必须删掉，否则下一次读取会
     // 把已删除会话的文字当成"还没核验的请求"提示出来。
-    if (result.ok) {
+    if (deleted) {
       useDraftStore.getState().forget(taskId, id);
       const pending = readReceipt(taskId, id);
       if (pending.receipt !== null) {
@@ -945,8 +983,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         catch { setNotice("会话已删除，但本机待确认请求记录无法清除；请核验本机数据"); }
       }
     }
-    if (result.ok && id === sessionId) {
-      const next = result.list.activeSessionId;
+    if (deleted && id === sessionId) {
+      const next = result.ok ? result.reply.list.activeSessionId : null;
       if (next !== null) resetForSession(next);
       else { setSnapshot(null); setValid(false); setConnected(false); setActiveSessionId(SDK_SESSION_ID); }
     }
@@ -1336,6 +1374,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           <Button type="button" size="sm" variant="ghost" aria-label="关闭会话列表" onClick={() => { setSessionsOpen(false); setRenaming(null); }}>×</Button>
         </div>
         {sessionNotice && <p role="alert" data-testid="session-notice" className="mt-2 rounded-[6px] border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-[11px] leading-5 break-words text-[#ad4545]">{sessionNotice}</p>}
+        {lifecycleNotice && <p role="status" data-testid="session-lifecycle-notice" className="mt-2 rounded-[6px] border border-line bg-soft p-2 text-[11px] leading-5 break-words text-ink">{lifecycleNotice}</p>}
         <ul className="mt-3 space-y-1.5">
           {sessions.length === 0 && <li className="text-[11px] text-muted">本任务还没有会话。</li>}
           {sessions.map((session) => <li key={session.id} data-testid={`session-row-${session.id}`} className={`rounded-[7px] border p-2 ${session.id === sessionId ? "border-accent bg-soft" : "border-line"}`}>
@@ -1349,19 +1388,53 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
               {session.archived && <Badge variant="soft">已归档</Badge>}
               <span className="text-[10px] text-muted">{session.binding?.modelId ?? "跟随任务模型"} · {session.id}</span>
             </div>}
-            <div className="mt-1 flex flex-wrap items-center gap-1">
-              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy || session.archived || session.id === sessionId} onClick={() => void switchToSession(session)}>{session.id === sessionId ? "当前会话" : "继续对话"}</Button>
+            <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={`session-actions-${session.id}`}>
+              {sessionActionRows(session, { current: session.id === sessionId }).map((action) => (
+                <Button
+                  key={action.id}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  data-testid={`session-${action.id}-${session.id}`}
+                  disabled={sessionBusy || !action.enabled}
+                  title={action.reason ?? `${action.label}「${session.name}」`}
+                  onClick={() => {
+                    if (action.id === "resume") void switchToSession(session);
+                    else if (action.id === "stop") void stopOne(session.id);
+                    else if (action.id === "archive") void archiveOne(session.id);
+                    else if (action.id === "restore") void restoreOne(session.id);
+                    else setDeletePrompt(session);
+                  }}
+                >
+                  {action.label}
+                </Button>
+              ))}
               <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => setRenaming({ id: session.id, name: session.name })}>重命名</Button>
-              {session.archived
-                ? <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void restoreOne(session.id)}>恢复</Button>
-                : <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void archiveOne(session.id)}>归档</Button>}
-              <Button type="button" size="sm" variant="ghost" disabled={sessionBusy} onClick={() => void deleteOne(session.id)}>删除</Button>
             </div>
           </li>)}
         </ul>
         <div className="mt-3 flex items-center gap-2">
           <Button type="button" size="sm" disabled={sessionBusy || sessions.length >= 50} onClick={() => void newSession()}><Icon name="plus" />新建会话</Button>
-          <span className="text-[10px] text-muted">新会话从零开始：不复用任何会话的历史。删除会话会同时删除它的 SDK 记录，无法恢复。</span>
+          <span className="text-[10px] text-muted">新会话从零开始：不复用任何会话的历史，也不会沿用已删除会话的身份。删除会话会同时删除它的 SDK 记录，无法恢复。</span>
+        </div>
+      </div>
+    </div>}
+    {/* [#146] 删除确认：先说明真实影响，再执行。历史与草稿随会话删除；任务工作
+        区与用户自己的原始目录不受影响；定时任务历史保留，并明确显示「会话已删除」。 */}
+    {deletePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="删除会话" data-testid="session-delete-confirm">
+      <div className="w-full max-w-[460px] rounded-[10px] border border-line bg-paper p-5 shadow-lg">
+        <h2 className="text-[14px] font-semibold">删除会话「{deletePrompt.name}」</h2>
+        <p className="mt-2 text-[11px] leading-5 text-muted">删除不可恢复。如果你只是想让它不再出现在对话里，请用「归档」：归档保留全部历史且只读。</p>
+        <ul className="mt-3 flex list-disc flex-col gap-1.5 pl-4 text-[11px] leading-5 text-ink">
+          <li>本会话的记录、SDK JSONL 转录与执行日志会被删除。</li>
+          <li>本会话的未发送草稿与待确认请求记录会被丢弃。</li>
+          <li>任务工作区、仓库与用户原始目录不受影响：这里只删除会话，不删除任何文件。</li>
+          <li>引用过本会话的定时任务执行记录会保留，并明确标记「会话已删除」（T18 边界）。</li>
+          {deletePrompt.archived ? null : <li>若该会话正在执行：Host 会先中止回合、等待结算并释放工具与待确认操作，然后才删除。</li>}
+        </ul>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button type="button" variant="outline" disabled={sessionBusy} onClick={() => setDeletePrompt(null)}>取消</Button>
+          <Button type="button" data-testid="session-delete-confirm-button" disabled={sessionBusy} onClick={() => void deleteOne(deletePrompt.id)}>{sessionBusy ? "删除中…" : "确认删除"}</Button>
         </div>
       </div>
     </div>}
