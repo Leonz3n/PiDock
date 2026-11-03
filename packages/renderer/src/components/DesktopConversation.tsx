@@ -168,7 +168,7 @@ function ExecutionCardSection({ children }: { children: ReactNode }) {
  * record shape `TaskPage` renders). The stop entry is NOT duplicated here — the
  * composer's 停止 button stays the single one.
  */
-function ExecutionStateCard({ taskId, sessionId: session, read }: { taskId: string; sessionId: string; read: ExecutionRead }) {
+function ExecutionStateCard({ taskId, sessionId: session, read, approvals }: { taskId: string; sessionId: string; read: ExecutionRead; approvals: readonly TaskApproval[] }) {
   if (read.phase === "reading") {
     return <ExecutionCardSection><p role="status" className="text-[11px] text-muted">正在读取 Host 执行状态…</p></ExecutionCardSection>;
   }
@@ -180,7 +180,15 @@ function ExecutionStateCard({ taskId, sessionId: session, read }: { taskId: stri
     </ExecutionCardSection>;
   }
   const record = runRecordFromExecutionState(taskId, session, read.view);
-  const state = runStateOfExecution(read.view.session) ?? record?.state;
+  const reported = runStateOfExecution(read.view.session) ?? record?.state;
+  // [Pencil T05] ticket 140: a tool call parked on a pending confirmation is still an
+  // `executing` turn in the Host's execution ledger, so the card used to say
+  // 执行中 while the approval card asked for a decision. The REAL pending record
+  // (`task/listApprovals`) wins: 等待确认 until that record is settled, then the
+  // ledger's own state (执行中/…) returns. A foreign session's record never
+  // turns THIS session's card into a waiting state.
+  const pendingApproval = approvals.some((approval) => approval.status === "pending" && !approval.foreign);
+  const state = pendingApproval ? "approval" : reported;
   if (state === undefined) {
     return <ExecutionCardSection>
       <p role="status" data-testid="desktop-execution-unreported" className="break-words text-[11px] text-muted">
@@ -1205,7 +1213,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         {sessions.length === 0 && sessionList.phase === "read" && <span data-testid="desktop-sessions-empty" className="pb-2 text-[11px] text-[#9a6032]">本任务暂无会话；新建一个会话后才能对话</span>}
       </div>
     </div>
-    <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} />
+    <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} approvals={approvalRead.phase === "read" ? approvalRead.approvals : []} />
     {/* [Pencil T05] ticket 140 S01 的审批位：只呈现 Host 已记录的确认，批准/拒绝走
         `task/approve|reject`。没有待确认时也说明「记录为空」，不把空读数当成功。 */}
     <DesktopApprovalCard read={approvalRead} onResolve={resolveToolApproval} />
