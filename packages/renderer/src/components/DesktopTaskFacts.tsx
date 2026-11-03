@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
+import { SHARED_DIR_MANAGED_PROTECTION } from "../data/sharedDirProtection";
 import { fileRootsThroughShell, type PidockBridge } from "../data/shellBridge";
 import { readTaskSessions } from "../data/taskSessions";
 import {
@@ -118,7 +119,7 @@ export function DesktopTaskFacts({ taskId, taskName, bridge }: {
     <div className="flex flex-wrap items-start justify-between gap-2">
       <div className="min-w-0">
         <h2 className="text-[12px] font-semibold tracking-[0.2px]">任务工作区访问来源</h2>
-        <p className="mt-0.5 text-[10px] text-muted">混合来源分别展示事实，不以一个独立 worktree 概括全部；写入按本任务审批，跨任务隔离尚未完成（T06）</p>
+        <p className="mt-0.5 text-[10px] text-muted">混合来源分别展示事实，不以一个独立 worktree 概括全部；写入按本任务审批，共享真实路径由受管写协调跨任务互斥</p>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {mode !== null && <span data-testid="task-facts-mode" className="rounded-[3px] border border-line bg-bg px-1.5 py-0.5 text-[10px] font-semibold text-accent">{MODE_LABELS[mode]}</span>}
@@ -152,6 +153,7 @@ export function DesktopTaskFacts({ taskId, taskName, bridge }: {
         </li>;
       })}
     </ul>}
+    {roots.some((root) => root.kind === "shared-dir") && <p data-testid="shared-dir-managed-protection" className="mt-2 break-words text-[10px] leading-4 text-muted">{SHARED_DIR_MANAGED_PROTECTION}</p>}
     <p data-testid="task-facts-sessions" className="mt-2 text-[10px] text-muted">任务 {hostText(taskName, "Host 未上报任务名称")} · 会话 {sessionError !== null ? `列表读取失败：${sessionError}` : sessionCount === null ? "未读取" : `${sessionCount} 个（可在对话页新建、切换，各自独立上下文）`}</p>
   </section>;
 }

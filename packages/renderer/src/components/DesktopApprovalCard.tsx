@@ -4,6 +4,7 @@ import { Badge } from "./ui/badge";
 import {
   APPROVAL_EXPIRY_TEXT,
   APPROVAL_IMPACT_TEXT,
+  approvalRealTargetText,
   SHARED_ROOT_IMPACT_TEXT,
   approvalRefusal,
   approvalStatusText,
@@ -100,6 +101,7 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
           {approval.operation !== null && (
             <p data-testid="desktop-approval-operation" className="mt-0.5 break-all text-[11px] text-ink">操作：{approval.operation}</p>
           )}
+          <p data-testid="desktop-approval-real-target" className="mt-0.5 break-all text-[11px] text-ink">{approvalRealTargetText(approval)}</p>
           <p data-testid="desktop-approval-impact" className="mt-0.5 break-words text-[10px] leading-4 text-muted">{APPROVAL_IMPACT_TEXT}</p>
           <p data-testid="desktop-approval-shared" className="break-words text-[10px] leading-4 text-muted">{SHARED_ROOT_IMPACT_TEXT}</p>
           <p data-testid="desktop-approval-expiry" className="break-words text-[10px] leading-4 text-muted">{APPROVAL_EXPIRY_TEXT}</p>

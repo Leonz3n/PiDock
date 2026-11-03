@@ -51,6 +51,21 @@ import {
   type PathScopeVerdict,
   type SharedRoot,
 } from "./path-coordination.js";
+/**
+ * The cross-process half of the shared real-path rule ([Pencil T06] #141).
+ * `SharedPathCoordinator` is one table per Host process, so two real Hosts (two
+ * tasks sharing a directory) need the app-private lock on disk as well. The port
+ * keeps `TaskWorkspaceHost` testable with a standalone table (absent = one task).
+ */
+export interface SharedPathLockPort {
+  claim(
+    owner: { taskId: string; sessionId: string; label: string },
+    paths: readonly string[],
+  ): { ok: true; added: readonly string[] } | { ok: false; error: string };
+  release(input: { taskId: string; sessionId: string; keepPaths?: readonly string[] }): string[];
+  releaseTask(taskId: string): string[];
+}
+
 import { validateProviderProfile, type ProviderProfileRow } from "../main/provider-config.js";
 import {
   buildTaskBranch,
@@ -797,6 +812,17 @@ export interface HostApprovalListing {
   executed: boolean;
   /** The concrete operation when `target` cannot state it (an `exec.run` command). */
   operation?: string;
+  /**
+   * [Pencil T06] #141 the resolved REAL path of `target` (absent when it cannot be
+   * resolved — the reader must then say it does not know, not guess).
+   */
+  realTarget?: string;
+  /**
+   * The linked original a shared plain-directory write really changes (absent for
+   * a task-private target). `sharedOriginal === undefined` is "not a linked
+   * original", never "unknown".
+   */
+  sharedOriginal?: string;
 }
 
 /**
@@ -846,6 +872,7 @@ export class TaskWorkspaceHost {
         claimWrite: (sessionId, permission, intent) => this.claimWrite(sessionId, permission, intent),
         releaseWrite: (claimId) => this.releaseWrite(claimId),
       },
+      sharedPaths: (input) => this.claimAgentPath(input.sessionId, input.label, input.realPath),
       scope: () => this.sdkToolScope(),
       resolveRealPath: (path) => this.resolveRealPath(path),
       // [PiDock 04] #7 box 5: the Agent's service tools read and control this
@@ -872,11 +899,23 @@ export class TaskWorkspaceHost {
     // its original, reachable only through its stable in-task link name. The
     // broker confines every read/write to the recorded original under that
     // name, so the Agent sees the same files the user confirmed for sharing.
-    const sharedDirs = (record?.dirLinks ?? []).map((link) => ({
-      linkName: link.linkName,
-      path: `${taskDir}/${link.linkName}`,
-      sourcePath: link.sourcePath,
-    }));
+    const sharedDirs = [
+      ...(record?.dirLinks ?? []).map((link) => ({
+        linkName: link.linkName,
+        path: `${taskDir}/${link.linkName}`,
+        sourcePath: link.sourcePath,
+      })),
+      // [Pencil T06] #141: an `existing-git` task uses its registered checkouts
+      // IN PLACE (no copy, no task-private worktree), so those real paths are
+      // shared roots too and go through the SAME real-path claim as a plain
+      // directory link — two tasks on one checkout are two Hosts writing one
+      // resolved path.
+      ...(record?.sharedRepos ?? []).map((repo) => ({
+        linkName: repo.rootId,
+        path: repo.sourcePath,
+        sourcePath: repo.sourcePath,
+      })),
+    ];
     return {
       taskDir: this.taskDir,
       taskRoot: parentDirOf(this.taskDir),
@@ -1099,6 +1138,12 @@ export class TaskWorkspaceHost {
      * template tool refused by name with nothing read or written.
      */
     private readonly templateEdits: () => ServiceTemplateEditPort | undefined = () => undefined,
+    /**
+     * [Pencil T06] #141 the app-private shared-path lock (`host.ts` wires the real
+     * one under `userData`). Absent means this Host has no cross-process partner,
+     * which is the truth for a standalone task Host in a test.
+     */
+    private readonly sharedPathLock?: SharedPathLockPort,
   ) {
     if (taskId.trim().length === 0) throw new Error("taskId must be non-empty");
     if (taskDir.trim().length === 0) throw new Error("taskDir must be non-empty");
@@ -1315,6 +1360,7 @@ export class TaskWorkspaceHost {
     if (channel) this.store.writeSession(this.taskDir, channel.snapshot());
     this.settleApprovalClaim(sessionId);
     this.sharedPaths.release({ taskId: this.taskId, sessionId });
+    this.sharedPathLock?.release({ taskId: this.taskId, sessionId });
   }
 
   /**
@@ -1420,11 +1466,20 @@ export class TaskWorkspaceHost {
       this.protection?.assert(link.sourcePath);
       this.protection?.assert(`${this.taskDir}/${link.linkName}`);
     }
-    return (record?.dirLinks ?? []).map((link) => ({
-      directoryId: link.directoryId,
-      sourcePath: link.sourcePath,
-      realPath: this.resolveRealPath(link.sourcePath),
-    }));
+    return [
+      ...(record?.dirLinks ?? []).map((link) => ({
+        directoryId: link.directoryId,
+        sourcePath: link.sourcePath,
+        realPath: this.resolveRealPath(link.sourcePath),
+      })),
+      // [Pencil T06] #141 the same rule for an existing Git checkout used in
+      // place: a shared root keyed by its REAL path, never by a task id.
+      ...(record?.sharedRepos ?? []).map((repo) => ({
+        directoryId: repo.rootId,
+        sourcePath: repo.sourcePath,
+        realPath: this.resolveRealPath(repo.sourcePath),
+      })),
+    ];
   }
 
   /**
@@ -1465,13 +1520,31 @@ export class TaskWorkspaceHost {
   private claimPathScope(input: { sessionId: string; label: string; scope: AllowedPathScope }): ClaimedPathScope {
     if (input.scope.kind === "task") return { added: [], heldBefore: [] };
     const heldBefore = this.sessionPathKeys(input.sessionId);
+    const label = `${input.label}（共享目录 ${input.scope.directoryId}）`;
     const claim = this.sharedPaths.claim({
       taskId: this.taskId,
       sessionId: input.sessionId,
-      label: `${input.label}（共享目录 ${input.scope.directoryId}）`,
+      label,
       paths: [input.scope.key],
     });
     if (!claim.ok) throw new Error(sharedPathClaimError(claim));
+    // [Pencil T06] #141: the in-process table cannot serialize a DIFFERENT Host
+    // process, so the same real path is also taken in the app-private lock. A
+    // cross-process refusal rolls the in-process claim back to what it was, so a
+    // refused claim holds nothing (and an open confirmation keeps its own keys).
+    const locked = this.sharedPathLock?.claim(
+      { taskId: this.taskId, sessionId: input.sessionId, label },
+      [input.scope.key],
+    );
+    if (locked !== undefined && !locked.ok) {
+      this.sharedPaths.release({
+        taskId: this.taskId,
+        sessionId: input.sessionId,
+        keepPaths: heldBefore,
+        keepDerivedExecutionIds: this.liveDerivedExecutionIds(input.sessionId),
+      });
+      throw new Error(locked.error);
+    }
     return { added: claim.keys.filter((key) => !heldBefore.includes(key)), heldBefore };
   }
 
@@ -1488,6 +1561,8 @@ export class TaskWorkspaceHost {
   /** Release one session's shared path keys, keeping those a live derived execution still writes. */
   private releasePathScope(sessionId: string): void {
     this.sharedPaths.release({ taskId: this.taskId, sessionId, keepDerivedExecutionIds: this.liveDerivedExecutionIds(sessionId) });
+    // What the table still holds is exactly what the disk lock must keep.
+    this.sharedPathLock?.release({ taskId: this.taskId, sessionId, keepPaths: this.sessionPathKeys(sessionId) });
   }
 
   /**
@@ -1505,6 +1580,54 @@ export class TaskWorkspaceHost {
       keepPaths: claimed.heldBefore,
       keepDerivedExecutionIds: this.liveDerivedExecutionIds(sessionId),
     });
+    this.sharedPathLock?.release({ taskId: this.taskId, sessionId, keepPaths: this.sessionPathKeys(sessionId) });
+  }
+
+  /**
+   * [Pencil T06] #141 the Agent tool surface's shared-target claim: a mutating
+   * `fs.write` / `exec.run` from the real SDK path must take the SAME real-path
+   * keys a turn tool takes, in-process and cross-process. Task-private targets
+   * claim nothing (two tasks never share a worktree path).
+   */
+  claimAgentPath(sessionId: string, label: string, requested: string):
+    { ok: true; release: () => void } | { ok: false; reason: string } {
+    let scope: PathScopeVerdict;
+    try {
+      scope = this.pathScopeOf(requested);
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : "路径无法按真实路径校验" };
+    }
+    if (scope.kind === "outside") return { ok: true, release: () => undefined };
+    let claimed: ClaimedPathScope;
+    try {
+      claimed = this.claimPathScope({ sessionId, label, scope });
+    } catch (error) {
+      return { ok: false, reason: error instanceof Error ? error.message : "共享真实路径不可用" };
+    }
+    return { ok: true, release: () => { this.releaseClaimedPathScope(sessionId, claimed); } };
+  }
+
+  /**
+   * The real target of one recorded tool target ([Pencil T06] #141): the resolved
+   * real path plus whether it is a shared plain-directory link (the original that
+   * a write really changes). `null` when the target cannot be resolved: the
+   * caller must then say it does not know instead of showing a guess.
+   */
+  realTargetOf(requested: string): { realPath: string; linkedOriginal: { directoryId: string; sourcePath: string } | null } | null {
+    if (requested.trim().length === 0) return null;
+    try {
+      const scope = this.pathScopeOf(requested);
+      if (scope.kind === "outside") return null;
+      const linked = scope.kind === "shared"
+        ? this.sharedRoots().find((root) => root.directoryId === scope.directoryId) ?? null
+        : null;
+      return {
+        realPath: scope.path,
+        linkedOriginal: linked ? { directoryId: linked.directoryId, sourcePath: linked.sourcePath } : null,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /** Session currently holding the Host-owned task write right, if any. */
@@ -3283,7 +3406,14 @@ export class TaskWorkspaceHost {
       if (sessionId !== undefined && id !== sessionId) continue;
       const channel = this.openSession(id);
       for (const approval of channel.snapshot().approvals) {
-        out.push({ ...approval });
+        // [Pencil T06] #141: the confirmation states the REAL target and whether
+        // the write changes a linked original, not just the lexical path.
+        const real = this.realTargetOf(approval.target);
+        out.push({
+          ...approval,
+          realTarget: real?.realPath,
+          sharedOriginal: real?.linkedOriginal?.sourcePath,
+        });
       }
     }
     return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -3314,6 +3444,9 @@ export class TaskWorkspaceHost {
     this.executions.stopSession(sessionId, { derive: derived });
     // 盒子 5：中止后不留共享真实路径的旧声明（派生条目已一并丢弃）。
     this.sharedPaths.release({ taskId: this.taskId, sessionId });
+    // [Pencil T06] #141: cancel releases the app-private lock too, so the other
+    // Host process can write the same real path right away.
+    this.sharedPathLock?.release({ taskId: this.taskId, sessionId });
     this.store.writeSession(this.taskDir, channel.snapshot());
     return this.writeState();
   }
@@ -3336,6 +3469,9 @@ export class TaskWorkspaceHost {
       this.approvalClaims.clear();
       this.write.reset();
       this.sharedPaths.releaseTask(this.taskId);
+      // [Pencil T06] #141: Host exit releases every real-path lock of this task
+      // instead of leaving a record for the stale-owner policy to recover.
+      this.sharedPathLock?.releaseTask(this.taskId);
     });
   }
 
