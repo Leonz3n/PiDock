@@ -7,17 +7,18 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
 import { readHostDraft, saveHostDraft } from "../data/draftStore";
-import { executionStateThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
+import { executionStateThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell, shellTaskOp } from "../data/shellBridge";
 import { DesktopApprovalCard, type ApprovalRead } from "./DesktopApprovalCard";
 import { approvalFailureText, approvalRequest, parseTaskApprovals, type ApprovalDecision, type TaskApproval } from "../data/toolApproval";
 import { executionStateFromHost, runRecordFromExecutionState, runStateOfExecution, type SessionExecutionView } from "../data/executionLedger";
 import { executionLabel, executionStepLabel } from "../pages/executionView";
 import { TurnStream } from "../data/turnStream";
 import {
-  activateSession, archiveSession, createSession, deleteSession, readSessionReadout, readTaskSessions,
+  activateSession, archiveSession, createSession, deleteSession, formatWindow, mergeSessionList, readSessionReadout, readTaskSessions,
   REASONING_LEVEL_TEXT, renameSession, restoreSession, setSessionReasoning, switchSessionModel,
   type SessionList, type SessionReadout, type SessionThinkingLevel, type TaskSession,
 } from "../data/taskSessions";
+import { definiteTurnRefusal } from "../data/turnRefusal";
 import { parseLifecycle } from "./DesktopArchivePage";
 import { attachmentRefusal, attachmentSelectionReport, attachmentSourceLabel, classifyComposerAttachment, describeReferenceChip, referenceProvenance, referenceSourceLabel, type CandidateRow } from "../data/composerRules";
 import type { Reference } from "../data/types";
@@ -25,6 +26,9 @@ import { DesktopToolDock, DESKTOP_TOOL_ICONS, DESKTOP_TOOL_LABELS, DESKTOP_TOOLS
 import { DesktopTaskSources } from "./DesktopTaskSources";
 import { BrandMark, LocalUserAvatar } from "./ui";
 import { hostText } from "../data/workspaceFiles";
+import { REFERENCE_KIND_TEXT, referenceIssues, referenceRootFacts, referenceSendRefusal, rootReferenceIssue, type ReferenceIssue } from "../data/referenceGuard";
+import { splitPromptContext } from "../data/historyReferences";
+import { useDraftStore } from "../stores/drafts";
 
 type Turn = { taskId: string; sessionId: string; requestId: string; turnId: string; state: "accepted" | "done" | "cancelled" | "failed" | "interrupted"; error?: string; needsResync: boolean };
 type Message = SdkMessage;
@@ -239,6 +243,13 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
    */
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [attachmentReport, setAttachmentReport] = useState<string | null>(null);
+  /**
+   * [Pencil T10] #145 发送前的引用重检结果。`issues` 按芯片 id 命名，芯片上直接
+   * 标出原因；发送被拒绝时草稿和引用都留在本会话，不丢输入也绝不静默改来源。
+   */
+  const [referenceProblems, setReferenceProblems] = useState<ReferenceIssue[]>([]);
+  const [referenceReport, setReferenceReport] = useState<string | null>(null);
+  const messageInput = useRef<HTMLTextAreaElement | null>(null);
   const attachmentInput = useRef<HTMLInputElement | null>(null);
   const attachmentSequence = useRef(0);
   const draftLoaded = useRef(false);
@@ -319,6 +330,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       if (turn.state !== "accepted") {
         try { clearReceipt(taskId, sessionId, requestId); setReceiptError(null); }
         catch { setReceiptError("本机待确认请求记录无法清除，已禁止发送；请核验本机数据"); }
+        // [#139] The turn settled: its request is now in this session's JSONL,
+        // so the context/usage readout changes here — not only on switch.
+        readoutRefresh.current();
       }
       setCurrent({ ...attemptRef.current, turnId: turn.turnId, phase: turn.state === "accepted" ? "accepted" : "terminal", state: turn.state });
     }
@@ -341,6 +355,14 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const [thinkingError, setThinkingError] = useState<string | null>(null);
   const [thinkingBusy, setThinkingBusy] = useState(false);
   const readoutAttempt = useRef(0);
+  /**
+   * [#139] The turn's own settle is a readout change: the Host derives `used`
+   * from this session's JSONL, which only has the new request AFTER the turn
+   * lands. `reconcile` calls this on terminal (done/failed/cancelled/
+   * interrupted); it re-reads quietly so the settled numbers appear without
+   * blanking the header to 未读取 for a frame.
+   */
+  const readoutRefresh = useRef<() => void>(() => {});
   const executionReadAttempt = useRef(0);
   const approvalReadAttempt = useRef(0);
   const [taskMenu, setTaskMenu] = useState(false);
@@ -483,10 +505,52 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     try { await verify(); if (epoch !== generation.current) return; await reconcile(epoch, attemptRef.current?.requestId); if (epoch === generation.current) setValid(true); }
     catch (error) { setValid(false); setConnected(false); setNotice(errorText(error)); setInvalidated(true); }
   };
+  /**
+   * [Pencil T10] #145 发送前的引用重检。两步：芯片自身身份（无需宿主）与 Host 真实
+   * 读到的 `task/fileRoots`。根目录读不到也算一个具名问题：不假定引用可用，不把
+   * 无法核对的来源当作已发送。
+   */
+  const verifyReferences = async (list: readonly Reference[]): Promise<ReferenceIssue[]> => {
+    const issues = referenceIssues(list, taskId);
+    const named = new Set(issues.map((issue) => issue.id));
+    const pending = list.filter((reference) => !named.has(reference.id) && reference.kind !== "attachment" && reference.kind !== "skill");
+    if (pending.length === 0) return issues;
+    const failed = (message: string): ReferenceIssue[] => [...issues, ...pending.map((reference) => ({ id: reference.id, label: reference.label, message }))];
+    let read;
+    try { read = await shellTaskOp(taskId, "task/fileRoots"); }
+    catch (error) { return failed(`来源重检失败：${error instanceof Error ? error.message : String(error)}；请重试或重新选择引用`); }
+    if (!read.ok) return failed(`来源重检失败：${read.error}；请重试或重新选择引用`);
+    const facts = referenceRootFacts(read.payload);
+    if (facts.error !== null) return failed(facts.error);
+    for (const reference of pending) {
+      const message = rootReferenceIssue(reference, facts.roots);
+      if (message !== null) issues.push({ id: reference.id, label: reference.label, message });
+    }
+    return issues;
+  };
   const start = async (reuse = false) => {
     if (busy.current || !connected || !valid || receiptError || (!reuse && (attemptRef.current?.phase === "unknown" || attemptRef.current?.phase === "accepted" || snapshot?.pending))) return;
     const text = reuse ? attemptRef.current?.text : draft;
     if (!text?.trim()) return;
+    // [Pencil T10] #145 引用先重检再发送：芯片上的来源身份与 Host 真实读到的任务
+    // 根目录对比，失效／跨任务／越界的来源按名字提示修正。草稿与引用都留在本会话，
+    // 发送被拒绝时不丢输入也不静默改用源仓库或另一个任务里的同名文件。按原 ID 重试
+    // 沿用已接受的上下文，不再重检（Host 指纹会拒绝被改过的上下文）。
+    if (!reuse) {
+      // A refused send must not be able to race a second click: the same guard
+      // the turn uses (`busy`) is held across the re-check and released on refusal.
+      busy.current = true;
+      let problems: ReferenceIssue[];
+      try { problems = await verifyReferences(references); }
+      catch (error) {
+        problems = references.map((reference) => ({ id: reference.id, label: reference.label, message: `来源重检失败：${error instanceof Error ? error.message : String(error)}；请重试或重新选择引用` }));
+      }
+      if (problems.length > 0) busy.current = false;
+      setReferenceProblems(problems);
+      const refusal = referenceSendRefusal(problems);
+      setReferenceReport(refusal);
+      if (refusal !== null) return;
+    }
     // A reference/attachment is part of what the Host fingerprints: a replay
     // reuses the exact context it was accepted with, otherwise the Host would
     // refuse the request id as `idempotency-mismatch`.
@@ -524,7 +588,14 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         if (errorText(error).includes("provider-not-configured") || errorText(error).includes("invalid-prompt")) {
           try { clearReceipt(taskId, sessionId, current.requestId); setCurrent(null); setNotice(`无法发送：${errorText(error)}`); }
           catch { setReceiptError("本机待确认请求记录无法清除，已禁止发送；请核验本机数据"); }
-        } else { setCurrent({ ...current, phase: "unknown" }); setNotice(`请求结果未知：${errorText(error)}；请核验或按原 ID 重试`); }
+        } else {
+          // [#139] A DEFINITE refusal (`task-locked`/`sdk-session-busy`) never
+          // started a turn: it is busy/refused, not an unknown outcome. The
+          // request id is kept so the retry the evidence exercised still works.
+          const refusal = definiteTurnRefusal(errorText(error));
+          setCurrent({ ...current, phase: "unknown" });
+          setNotice(refusal === null ? `请求结果未知：${errorText(error)}；请核验或按原 ID 重试` : refusal.notice);
+        }
         return;
       }
       if (epoch !== generation.current) return;
@@ -559,6 +630,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   };
   const submit = (event: FormEvent) => { event.preventDefault(); void start(); };
   const addFileReference = (row: CandidateRow) => {
+    // [Pencil T10] #145 a new chip is unverified until the next send re-checks it.
+    setReferenceProblems([]);
     // The same id spelling and field set `TaskPage.chooseCompletion` records for
     // a picked candidate (`pages/TaskPage.tsx`), including this task as the
     // owner, so a reference can never be read as another task's file.
@@ -581,6 +654,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     });
   };
   const removeFileReference = (id: string) => setReferences((current) => {
+    setReferenceProblems((problems) => problems.filter((entry) => entry.id !== id));
+    setReferenceReport(null);
     const next = current.filter((entry) => entry.id !== id);
     if (valid && connected && !invalidated) queueDraftSave({ text: draft, references: next });
     return next;
@@ -732,6 +807,16 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     return null;
   };
   /**
+   * [#139] Adopt a list reply. The Host now carries the same `provider` row in
+   * every read AND write reply; merging keeps a partial reply from nulling the
+   * provider the page already had (the model menu is the only way to switch
+   * models). `sessions`/`activeSessionId` always come from the reply.
+   */
+  const applyList = useCallback((list: SessionList) => setSessionList((current) => ({
+    phase: "read",
+    list: mergeSessionList(current.phase === "read" ? current.list : null, list),
+  })), []);
+  /**
    * [#139] The session list is the page's only session truth. It is read once
    * per task (and after every session write), and a failed read is a named state:
    * the page then keeps addressing the migrated `main` session, which the Host
@@ -740,7 +825,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const loadSessions = useCallback(async () => {
     const result = await readTaskSessions(taskId);
     if (!result.ok) { setSessionList({ phase: "failed", error: result.error }); return; }
-    setSessionList({ phase: "read", list: result.list });
+    applyList(result.list);
     // The Host's active pointer wins on the first read; once the reader has picked
     // a session, only a session that no longer exists (archived or deleted) moves
     // them — never a silent jump back.
@@ -749,13 +834,20 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       const present = result.list.sessions.some((session) => session.id === current && !session.archived);
       return picked.current && present ? current : target;
     });
-  }, [taskId]);
+  }, [applyList, taskId]);
   useEffect(() => { void loadSessions(); }, [loadSessions]);
   // The sidebar's session rows navigate here: an explicitly named session wins
   // over the task's stored active pointer until the user picks another one.
   useEffect(() => {
     if (initialSessionId !== undefined) setActiveSessionId((current) => (current === initialSessionId ? current : initialSessionId));
   }, [initialSessionId]);
+  /**
+   * [Pencil T10] #145 切换会话后把焦点放回输入区（键盘流程不因切换而中断）：
+   * 每个会话自己的草稿照常从 Host 恢复，焦点不跟随上一个会话残留。
+   */
+  useEffect(() => {
+    messageInput.current?.focus();
+  }, [sessionId]);
   const sessions = sessionList.phase === "read" ? sessionList.list.sessions : [];
   const activeSession = sessions.find((session) => session.id === sessionId) ?? null;
   /**
@@ -772,6 +864,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     draftSave.current.pending = undefined;
     setDraft(receipt.receipt?.text ?? "");
     setReferences([]);
+    setReferenceProblems([]);
+    setReferenceReport(null);
     setAttachments([]);
     setAttachmentReport(null);
     setDraftError(null);
@@ -790,7 +884,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const result = await activateSession(taskId, target.id);
     setSessionBusy(false);
     if (!result.ok) { setSessionNotice(result.error); return; }
-    setSessionList({ phase: "read", list: result.list });
+    applyList(result.list);
     resetForSession(target.id);
     setSessionsOpen(false);
   };
@@ -800,14 +894,14 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const result = await createSession(taskId, name === undefined ? {} : { name });
     setSessionBusy(false);
     if (!result.ok) { setSessionNotice(result.error); return; }
-    setSessionList({ phase: "read", list: result.list });
+    applyList(result.list);
     const created = result.list.sessions.find((session) => session.id === result.list.activeSessionId);
     if (created) resetForSession(created.id);
     setSessionsOpen(false);
   };
   const applySessionWrite = (result: { ok: true; list: SessionList } | { ok: false; error: string }) => {
     if (!result.ok) { setSessionNotice(result.error); return; }
-    setSessionList({ phase: "read", list: result.list });
+    applyList(result.list);
   };
   const renameOne = async () => {
     if (renaming === null || sessionBusy) return;
@@ -840,6 +934,17 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     const result = await deleteSession(taskId, id);
     setSessionBusy(false);
     applySessionWrite(result);
+    // [Pencil T10] #145 删除会话要连带它的草稿与待确认记录：Host 侧会话记录随
+    // 会话一起消失，本机这条会话的 pending receipt 也必须删掉，否则下一次读取会
+    // 把已删除会话的文字当成"还没核验的请求"提示出来。
+    if (result.ok) {
+      useDraftStore.getState().forget(taskId, id);
+      const pending = readReceipt(taskId, id);
+      if (pending.receipt !== null) {
+        try { clearReceipt(taskId, id, pending.receipt.requestId); }
+        catch { setNotice("会话已删除，但本机待确认请求记录无法清除；请核验本机数据"); }
+      }
+    }
     if (result.ok && id === sessionId) {
       const next = result.list.activeSessionId;
       if (next !== null) resetForSession(next);
@@ -854,14 +959,23 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
    * The attempt counter makes a late answer from a replaced read (or from the
    * session the user just left) unable to overwrite the current one.
    */
-  const loadReadout = useCallback(async () => {
+  const loadReadout = useCallback(async (mode: "show" | "quiet" = "show") => {
     const attempt = readoutAttempt.current + 1;
     readoutAttempt.current = attempt;
-    setReadoutRead({ phase: "reading" });
+    if (mode === "show") setReadoutRead({ phase: "reading" });
     const result = await readSessionReadout(taskId, sessionId);
     if (readoutAttempt.current !== attempt) return;
-    setReadoutRead(result.ok ? { phase: "read", readout: result.readout } : { phase: "failed", error: result.error });
+    if (result.ok) setReadoutRead({ phase: "read", readout: result.readout });
+    // A quiet refresh (the turn settled) keeps the previous numbers on a failed
+    // re-read instead of replacing them with an older "failed" state.
+    else if (mode === "show") setReadoutRead({ phase: "failed", error: result.error });
   }, [sessionId, taskId]);
+  // `reconcile` (declared earlier) refreshes through this ref so a settled turn
+  // re-reads the same readout the switch path reads.
+  useEffect(() => {
+    readoutRefresh.current = () => { void loadReadout("quiet"); };
+    return () => { readoutRefresh.current = () => {}; };
+  }, [loadReadout]);
   // A readout is only read for a session the page has actually resolved; before
   // the list answers there is no session to read.
   useEffect(() => { if (sessionList.phase === "reading") return; void loadReadout(); }, [loadReadout, sessionList.phase]);
@@ -878,6 +992,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const thinkingLabel = readoutRead.phase === "reading"
     ? "正在读取推理档位"
     : readoutRead.phase === "failed" ? `推理档位读取失败：${readoutRead.error}`
+    // [#139] An unbound session says so: "该模型不支持推理" would claim a model
+    // fact nobody read. Only a BOUND model can be unsupported.
+    : boundModel === null ? "推理 · 未绑定模型"
     : reasoningLevels.length === 0 ? "该模型不支持推理档位"
     : `推理 · ${thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}`;
 
@@ -906,7 +1023,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   /** `used` is the prompt size of this session's last request; `null` is unknown, never 0. */
   const contextLabel = readout === null
     ? `上下文 ${readoutRead.phase === "reading" ? "未读取" : "读取失败"}`
-    : `上下文 ${readout.context.used === null ? "未报告" : `${(readout.context.used / 1000).toFixed(1)}k`} / ${readout.context.window === null ? "窗口未知" : `${Math.round(readout.context.window / 1000)}k`}`;
+    : `上下文 ${readout.context.used === null ? "未报告" : `${(readout.context.used / 1000).toFixed(1)}k`} / ${readout.context.window === null ? "窗口未知" : formatWindow(readout.context.window)}`;
   const contextTitle = readoutRead.phase === "reading"
     ? "正在读取本会话的 SDK 上下文占用；读取完成前不显示数字"
     : readoutRead.phase === "failed" ? `本会话上下文读数读取失败：${readoutRead.error}`
@@ -968,8 +1085,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
                 The composer carries the same three as controls; here they are
                 read-only, and every unknown stays named as unknown. */}
             <span data-testid="desktop-session-meta" className="inline-flex min-w-0 flex-wrap items-center gap-2" title={contextTitle}>
-              <span data-testid="desktop-session-model" className="truncate">模型 · {boundModel?.name ?? (sessionList.phase === "read" ? "未绑定" : "未读取")}</span>
-              <span data-testid="desktop-session-reasoning" className="truncate">推理 · {readoutRead.phase !== "read" ? (readoutRead.phase === "reading" ? "未读取" : "读取失败") : reasoningLevels.length === 0 ? "该模型不支持" : thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}</span>
+              <span data-testid="desktop-session-model" className="truncate">模型 · {boundModel?.name ?? (sessionList.phase === "read" ? "未绑定模型" : "未读取")}</span>
+              <span data-testid="desktop-session-reasoning" className="truncate">推理 · {readoutRead.phase !== "read" ? (readoutRead.phase === "reading" ? "未读取" : "读取失败") : boundModel === null ? "未绑定模型" : reasoningLevels.length === 0 ? "该模型不支持" : thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}</span>
               <span data-testid="desktop-session-context" className="truncate">{contextLabel}</span>
             </span>
             <Badge variant="soft">工具由 Host 代执行</Badge>
@@ -1055,22 +1172,39 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     <section aria-label="SDK 对话历史" className="mx-auto w-full max-w-[820px] min-w-0 space-y-3 px-3 py-4">
       <p className="text-xs text-muted">SDK JSONL 已确认历史 · 最近最多 80 条</p>
       {snapshot && !snapshot.messages.length && <p className="py-8 text-center text-sm text-muted">尚未开始 · 无 SDK 会话记录</p>}
-      {snapshot?.messages.map((message, index) => <article key={index} className="min-w-0 text-sm">
+      {snapshot?.messages.map((message, index) => {
+        // [Pencil T10] #145 历史里的来源芯片：Host 拼在提示词末尾的身份清单单独
+        // 渲染为芯片，正文不再把这段尾注当作用户打字。无法解析时整条消息原样显示。
+        const parsed = message.role === "user" ? splitPromptContext(message.text) : { text: message.text, references: [] };
+        return (<article key={index} className="min-w-0 text-sm">
         <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
           {message.role === "user" ? <LocalUserAvatar /> : <BrandMark size="sm" />}
           <span className="font-semibold text-ink">{message.role === "user" ? "你" : "Pi"}</span>
           <span>实现与验证</span>
         </div>
         <div className={`min-w-0 rounded-[10px] border px-3 py-2 ${message.role === "user" ? "border-line bg-paper" : "border-line bg-paper"}`}>
-          <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.text}</p>
+          <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{parsed.text}</p>
         </div>
+        {parsed.references.length > 0 && <div data-testid="history-references" className="mt-1 min-w-0">
+          <ul className="flex min-w-0 flex-wrap gap-1.5">
+            {parsed.references.map((entry, entryIndex) => <li key={entryIndex} data-testid="history-reference" data-reference-kind={entry.kind} title={[entry.source, entry.detail].filter(Boolean).join(" · ")} className="flex min-w-0 flex-wrap items-baseline gap-1.5 rounded-full border border-line bg-soft px-2 py-0.5 text-[11px]">
+              <span className="shrink-0 text-muted">{REFERENCE_KIND_TEXT[entry.kind as Reference["kind"]] ?? entry.kind}</span>
+              <span className="min-w-0 break-all font-mono text-ink">{entry.label}</span>
+              {entry.source && <span className="min-w-0 break-all text-muted">{entry.source}</span>}
+              {entry.detail && <span className="min-w-0 break-all text-muted">{entry.detail}</span>}
+            </li>)}
+          </ul>
+          <p className="mt-1 text-[11px] text-muted">本条消息附带以上来源；Host 附带的是身份清单，内容由 Agent 用工具读取。</p>
+        </div>}
         {message.usage && <p className="mt-1 text-xs text-muted">SDK 用量 · 输入 {message.usage.input} / 输出 {message.usage.output} / 缓存读取 {message.usage.cacheRead} / 写入 {message.usage.cacheWrite}</p>}
-      </article>)}
+      </article>);
+      })}
       {stream && <article className="min-w-0 border-l-2 border-ink pl-3 text-sm"><p className="mb-1 text-xs text-muted">暂存回复 · 尚未核验</p><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stream}</p></article>}
     </section>
     </div>
     <div className="shrink-0 border-t border-line bg-paper px-3 py-3"><div className="mx-auto max-w-[820px] min-w-0">
       {draftError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{draftError}</p>}
+      {referenceReport && <p role="alert" data-testid="composer-reference-refusal" className="mb-2 break-words text-xs text-[#ad4545]">{referenceReport}</p>}
       {receiptError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{receiptError}</p>}
       {notice && <p role="status" className="mb-2 break-words text-xs text-muted">{notice}</p>}
       <div className="mb-2 flex flex-wrap gap-2">{invalidated ? <Button type="button" onClick={onBack}>返回任务列表</Button> : (!connected || !valid) && <Button type="button" onClick={() => setConnectionKey((key) => key + 1)}>重新连接</Button>}
@@ -1078,19 +1212,27 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         {attempt?.phase === "unknown" && <Button type="button" disabled={!valid} onClick={() => void start(true)}>按原 ID 重试</Button>}
         {attempt?.phase === "accepted" && <Button type="button" onClick={() => void stop()}><Icon name="stop" />停止</Button>}
       </div>
-      <form onSubmit={submit} className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
+      {/* [Pencil T10] #145 S01/S06 的浮动 Composer：S01 内联对话里与紧凑窗口共用
+          这一个输入区（同一份文字、引用、模型与推理、权限、发送/停止逻辑），没有
+          第二份实现；它就是该列底部钉住的最后一格，900 与 560 高度都可达。 */}
+      <form onSubmit={submit} data-testid="desktop-composer" data-surface="floating" className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
         {references.length > 0 && <div className="mb-2 min-w-0" data-testid="composer-file-references">
           <ul className="flex min-w-0 flex-wrap gap-1.5">
-            {references.map((reference) => (
-              <li key={reference.id} data-testid={`composer-file-reference-${reference.id}`} data-source-kind={reference.sourceKind ?? "none"} title={describeReferenceChip(reference)} className="flex min-w-0 flex-wrap items-baseline gap-1.5 rounded-full border border-line bg-soft px-2 py-0.5 text-[11px]">
+            {references.map((reference) => {
+              const problem = referenceProblems.find((entry) => entry.id === reference.id);
+              return (
+              <li key={reference.id} data-testid={`composer-file-reference-${reference.id}`} data-source-kind={reference.sourceKind ?? "none"} data-reference-state={problem ? "invalid" : "ok"} title={problem ? problem.message : describeReferenceChip(reference)} className={`flex min-w-0 flex-wrap items-baseline gap-1.5 rounded-full border px-2 py-0.5 text-[11px] ${problem ? "border-[#e0b4b4] bg-[#fdf3f3]" : "border-line bg-soft"}`}>
                 <span className="min-w-0 break-all font-mono text-ink">引用 · {reference.label}</span>
+                <span className="shrink-0 text-muted">{REFERENCE_KIND_TEXT[reference.kind]}</span>
                 <span className="shrink-0 text-muted">{referenceSourceLabel(reference)}</span>
                 <span className="min-w-0 break-all text-muted">{reference.detail}</span>
+                {problem && <span data-testid={`composer-file-reference-problem-${reference.id}`} role="status" className="min-w-0 break-words text-[#ad4545]">{problem.message}</span>}
                 <button type="button" aria-label={`移除引用 ${reference.label}`} onClick={() => removeFileReference(reference.id)} className="shrink-0 text-muted">×</button>
               </li>
-            ))}
+              );
+            })}
           </ul>
-          <p className="mt-1 text-[11px] text-muted">引用随消息提交：Host 会把类型、来源与路径附在提示词末尾，供 Agent 定位；引用不读取也不写入文件，文件内容不在提示词里。</p>
+          <p className="mt-1 text-[11px] text-muted">引用随消息提交：Host 会把类型、来源与路径附在提示词末尾，供 Agent 定位；发送前会重检来源身份（失效／越界按名字提示重新选择）。引用不把文件内容伪装成正文：内容由 Agent 用工具读取，Host 不改写来源。</p>
         </div>}
         {attachmentReport && <p role="status" data-testid="desktop-composer-attachment-report" className="mb-2 border-l-2 border-[#dfc99f] pl-2 text-[11px] text-[#9a6032]">{attachmentReport}</p>}
         {attachments.length > 0 && <div className="mb-2 min-w-0" data-testid="desktop-composer-attachments">
@@ -1105,7 +1247,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           </ul>
           <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件。</p>
         </div>}
-        <textarea aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
+        <textarea ref={messageInput} aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); if (valid && connected && !invalidated) queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
             <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="text-muted"><Icon name="plus" /></Button>
@@ -1123,12 +1265,12 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
             <Button type="button" size="sm" data-testid="composer-model" aria-haspopup="menu" aria-expanded={modelOpen}
               title={boundModel === null ? "本会话尚未绑定模型：先在「能力管理 → Providers」完成配置" : `${boundModel.name} · 窗口 ${boundModel.contextWindow} tokens · 切换模型保留本会话历史`}
               onClick={() => { setThinkingError(null); setModelOpen((open) => !open); }}>
-              <span data-testid="composer-model-name">{boundModel === null ? (provider ? "未配置模型" : "正在读取模型") : boundModel.name}</span><Icon name="down" className="h-3 w-3" />
+              <span data-testid="composer-model-name">{boundModel === null ? (sessionList.phase === "read" ? "未绑定模型" : "正在读取模型") : boundModel.name}</span><Icon name="down" className="h-3 w-3" />
             </Button>
             {modelOpen && <div role="menu" aria-label="会话模型" className="absolute right-0 bottom-full z-30 mb-1 w-[280px] rounded-[7px] border border-line bg-paper p-2 text-left shadow-md">
               {providerModels.length === 0 ? <p className="px-1 text-[10px] leading-5 text-muted">Host 未返回当前 Provider 的模型列表；切换模型不可用。</p> : <>
                 <p className="px-1 pb-1 text-[10px] leading-5 text-muted">切换只改本会话的绑定：历史与 JSONL 不变，后续回合用新模型。窗口装不下本会话上下文或回合进行中时，Host 会按名字拒绝。</p>
-                {providerModels.map((row) => <Button key={row.id} type="button" role="menuitemradio" aria-checked={row.id === boundModelId} variant="ghost" size="sm" className="w-full justify-start" disabled={thinkingBusy} onClick={() => void chooseModel(row.id)}>{row.name}<span className="ml-auto text-muted">{Math.round(row.contextWindow / 1000)}k · {row.reasoningLevels.length === 0 ? "无推理档位" : `${row.reasoningLevels.length} 档`}</span></Button>)}
+                {providerModels.map((row) => <Button key={row.id} type="button" role="menuitemradio" aria-checked={row.id === boundModelId} variant="ghost" size="sm" className="w-full justify-start" disabled={thinkingBusy} onClick={() => void chooseModel(row.id)}>{row.name}<span className="ml-auto text-muted">{formatWindow(row.contextWindow)} · {row.reasoningLevels.length === 0 ? "无推理档位" : `${row.reasoningLevels.length} 档`}</span></Button>)}
                 <Button type="button" variant="ghost" size="sm" className="mt-1 w-full justify-start" onClick={() => { setModelOpen(false); onOpenProviders(); }}><Icon name="settings" />能力管理 · Providers</Button>
               </>}
               {thinkingError && <p role="alert" className="mt-1 border border-[#e0b4b4] bg-[#fdf3f3] p-1.5 text-[10px] leading-5 break-words text-[#ad4545]">{thinkingError}</p>}
@@ -1136,6 +1278,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           </div>
           <div data-testid="composer-reasoning" role="group" aria-label="推理档位" title={thinkingLabel} className="inline-flex min-w-0 items-center gap-0.5 rounded-[6px] border border-line bg-soft px-0.5">
             {readoutRead.phase !== "read" ? <span className="px-1.5 py-0.5 text-[10px] text-muted">{readoutRead.phase === "reading" ? "推理档位未读取" : "推理档位读取失败"}</span>
+              : boundModel === null ? <span className="px-1.5 py-0.5 text-[10px] text-muted">未绑定模型</span>
               : reasoningLevels.length === 0 ? <span className="px-1.5 py-0.5 text-[10px] text-muted">无推理档位</span>
               : reasoningLevels.map((level: SessionThinkingLevel) => <Button key={level} type="button" size="sm" variant={level === thinkingLevel ? "secondary" : "ghost"} aria-pressed={level === thinkingLevel} disabled={thinkingBusy} className="h-6 px-1.5 text-[10px]" onClick={() => void chooseThinking(level)}>{REASONING_LEVEL_TEXT[level] ?? level}</Button>)}
           </div>

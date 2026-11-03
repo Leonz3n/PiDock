@@ -43,6 +43,8 @@ export const SHELL_BRIDGE_SURFACE = [
   "onHostStatus",
   "onSdkTurnEvent",
   "openTaskEditor",
+  // [Pencil T14] #149 the settings surface (appearance + native keybindings).
+  "preferencesOp",
   "projectOp",
   "providerOp",
   "sdkTurn",

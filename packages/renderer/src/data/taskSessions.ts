@@ -56,6 +56,17 @@ export type SessionReadout = {
   interrupted: boolean;
 };
 
+/**
+ * [#139] A declared context window, honestly. Sub-1k windows keep their real
+ * token count: the evidence caught `Math.round(8 / 1000)` rendering `0k` for a
+ * model that declares 8 tokens. A whole-kilo window keeps the existing `k`
+ * spelling so the menu still reads `131k · 3 档` for a normal model.
+ */
+export function formatWindow(tokens: number): string {
+  if (!Number.isSafeInteger(tokens) || tokens < 0) return "窗口未知";
+  return tokens < 1000 ? String(tokens) : `${Math.round(tokens / 1000)}k`;
+}
+
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const SAFE_ID = /^[a-zA-Z0-9_-]{1,80}$/;
 const nonNegative = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null);
@@ -152,6 +163,41 @@ export function parseSessionReadout(value: unknown): SessionReadout {
   };
 }
 
+/**
+ * [#139] Merge a list reply over the list the page already holds.
+ *
+ * A write reply is always a full list reply now (`session-list-payload`), but a
+ * partial reply (an older Host, a field lost in transit) must not null the
+ * provider the page already read: the model menu is the only way to switch
+ * models, and an empty `provider` makes it say 切换模型不可用 until a remount.
+ * `sessions`/`activeSessionId` always come from the reply — it is newer truth.
+ */
+export function mergeSessionList(previous: SessionList | null, next: SessionList): SessionList {
+  return { ...next, provider: next.provider ?? previous?.provider ?? null };
+}
+
+/**
+ * [#139] Every session-list writer announces its task after the Host accepted
+ * the write. List readers that are NOT the writer (the sidebar's
+ * `TaskSessionRows`) subscribe here instead of polling: creating/renaming/
+ * archiving/restoring/deleting/activating in the conversation must refresh the
+ * row the user is looking at. A refused write announces nothing.
+ */
+type SessionWriteListener = (taskId: string) => void;
+const sessionWriteListeners = new Set<SessionWriteListener>();
+
+export function subscribeSessionWrites(listener: SessionWriteListener): () => void {
+  sessionWriteListeners.add(listener);
+  return () => { sessionWriteListeners.delete(listener); };
+}
+
+function announceSessionWrite(taskId: string): void {
+  for (const listener of [...sessionWriteListeners]) {
+    // A reader's own failure is its own named state; it must not fail the write.
+    try { listener(taskId); } catch { /* the listener reports its own read */ }
+  }
+}
+
 type Op = (taskId: string, op: Parameters<typeof shellTaskOp>[1], payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
 const run: Op = (taskId, op, payload) => shellTaskOp(taskId, op, payload);
 
@@ -167,8 +213,12 @@ export async function readTaskSessions(taskId: string): Promise<{ ok: true; list
 }
 
 async function sessionMutation(taskId: string, op: Parameters<typeof shellTaskOp>[1], payload: Record<string, unknown>) {
-  try { return await listFrom(await run(taskId, op, payload)); }
-  catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : String(error) }; }
+  try {
+    const result = await listFrom(await run(taskId, op, payload));
+    // The write landed: every other list reader re-reads the Host's index.
+    if (result.ok) announceSessionWrite(taskId);
+    return result;
+  } catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : String(error) }; }
 }
 
 export const createSession = (taskId: string, input: { name?: string } = {}) =>

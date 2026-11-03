@@ -766,10 +766,18 @@ export interface StoredSchedule {
   updatedAt: string;
   /** Set when a run refused because the saved config no longer resolves. */
   repairIssue?: string;
+  /**
+   * [Pencil T17] #152 persisted plan: the next instant this rule fires in its own
+   * zone. `null` means the rule has no further occurrence (a consumed one-shot);
+   * absent means it was written before this field existed.
+   */
+  nextRunAt?: string | null;
+  /** Provider installation generation the save was valid against ([#139]). */
+  providerGeneration?: number;
 }
 
 export type ScheduledRunTrigger = "due" | "manual";
-export type ScheduledRunResult = "completed" | "awaiting-approval" | "skipped" | "failed";
+export type ScheduledRunResult = "running" | "completed" | "awaiting-approval" | "skipped" | "failed";
 
 /**
  * One trigger result (盒子 4 定时执行是独立记录): the schedule config version it
@@ -796,6 +804,16 @@ export interface ScheduledRunRecord {
   model: string;
   permission: PiPermission;
   ruleText: string;
+  /**
+   * [Pencil T17] #152 the model that ACTUALLY served this run (reported by the
+   * SDK), distinct from the configured `model`. Absent = the run never started a
+   * turn, so history must not claim this model was used.
+   */
+  actualModel?: string;
+  /** Provider installation generation this run started against. */
+  providerGeneration?: number;
+  /** Named failure code (`credential-missing`, `directory-missing`, …). */
+  failureCode?: string;
 }
 
 /** What must survive a restart: the schedules plus every trigger record. */

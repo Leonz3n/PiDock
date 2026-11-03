@@ -24,6 +24,18 @@ export type EditorSettingsRequest =
   | { op: "clear" }
   | { op: "save"; program: string; args?: string[] };
 
+/**
+ * [Pencil T14] #149 the settings surface's one channel. `appearance/save` names
+ * one of light/dark/system; `native/saveKeybinding` names ONE managed Pi action
+ * and its keys. No variant carries a path, a file name or an agent directory:
+ * main resolves both directories itself.
+ */
+export type PreferencesRequest =
+  | { op: "appearance/read" }
+  | { op: "appearance/save"; appearance: "light" | "dark" | "system" }
+  | { op: "native/read" }
+  | { op: "native/saveKeybinding"; action: string; keys: string[] };
+
 export interface PidockBridge {
   getSecurityState?: () => { sandboxed: boolean; contextIsolated: boolean };
   getVersions?: () => Promise<unknown>;
@@ -38,7 +50,7 @@ export interface PidockBridge {
    */
   projectOp?: (request: { op: "list" | "get" | "create" | "update" | "rename" | "delete" | "association" | "associations" | "claim" | "unlink" | "transfer" | "status" | "recover" | "verifySources" | "blockers" | "variables" | "setVariable" | "removeVariable" | "taskVariables" | "setTaskVariable" | "removeTaskVariable"; projectId?: string; name?: string; input?: unknown; taskId?: string; expectedProjectId?: string; fromProjectId?: string; toProjectId?: string; confirmed?: boolean; key?: string; value?: string }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   serviceCatalogOp?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
-  createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon"; input?: unknown; id?: string; confirmed?: boolean }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  createTask?: (request: { op: "current" | "prepare" | "commit" | "abandon" | "status" | "retry"; input?: unknown; id?: string; confirmed?: boolean; cleanup?: "keep" | "owned"; adoptOrphanBranches?: boolean }) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
    * [PiDock 03] (#6) production append for an existing task. The page names
    * project repository ids, remote names and baseline branches only: main
@@ -79,6 +91,8 @@ export interface PidockBridge {
    * `taskOp`.
    */
   editorSettingsOp?: (request: EditorSettingsRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  /** [Pencil T14] #149 PiDock 外观偏好 + Pi 原生 keybindings 的有界投影（一个通道，四个具名 op）。 */
+  preferencesOp?: (request: PreferencesRequest) => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   taskOp?: (taskId: string, op: string, payload?: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   sdkTurn?: (request: Record<string, unknown>) => Promise<ShellTaskOpResult>;
   onSdkTurnEvent?: (listener: (event: unknown) => void) => () => void;

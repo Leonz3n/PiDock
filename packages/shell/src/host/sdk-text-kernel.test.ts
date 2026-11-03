@@ -447,6 +447,12 @@ it("refuses disk-backed scripted sends while keeping legacy snapshots readable",
 it("records production scheduled triggers as failed without a synthetic session", async () => {
   const dir = task("task-a");
   const host = new TaskWorkspaceHost("task-a", dir);
+  // [#152] a schedule only lives in a task created as its own dedicated task.
+  host.store.writeTask(dir, buildTaskDiskRecord({
+    taskId: "task-a", name: "Check", dirId: "task-a", branch: "task/task-a", root: dir,
+    taskDir: dir, remoteBranch: "", baseCommit: "", repos: [], kind: "scheduled",
+    now: "2026-09-23T02:00:00.000Z",
+  }));
   host.setProviderCatalog([{ id: "local-test", name: "Local test", protocol: "anthropic-messages", baseUrl: "http://127.0.0.1", enabled: true,
     models: [{ id: "fixture", name: "Fixture", contextWindow: 2048 }] }]);
   const saved = host.saveSchedule({ name: "Check", ruleText: "每日 09:15", timezone: "Asia/Shanghai", prompt: "hello",
