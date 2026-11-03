@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { remoteDigest } from "../main/remote-identity.js";
-import { memoryTaskStore } from "./task-host.js";
+import { TaskWorkspaceHost, memoryTaskStore } from "./task-host.js";
 import { TaskWorkspaceFiles, realWorkspaceFileReaders, type WorkspaceFileReaders } from "./workspace-files.js";
 import type { TaskDiskRecord } from "./task-store.js";
 
@@ -160,5 +160,15 @@ describe("per-source reopen verification", () => {
     // A different directory at the same path is a replacement, not the original.
     mkdirSync(target);
     expect(files.facts()[0]?.verification?.state).toBe("mismatch");
+  });
+
+  it("refuses to append a worktree repo to an existing-git task, leaving the record readable", () => {
+    const disk = store(record());
+    const host = new TaskWorkspaceHost("task-aaaaaaaa", TASK_DIR, disk, () => "2026-11-01T00:00:00.000Z");
+    expect(() => host.appendRepos({
+      repoSelections: [{ repoDir: "repo-other1", remote: "origin", remoteBranch: "main", mainCheckoutDir: "/src/repo" }],
+      fetchedCommits: { "repo-other1": "b".repeat(40) },
+    })).toThrow(/workspace-mode-refusal/);
+    expect(disk.readTask(TASK_DIR)?.workspaceMode).toBe("existing-git");
   });
 });

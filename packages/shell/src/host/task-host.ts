@@ -1832,6 +1832,14 @@ export class TaskWorkspaceHost {
     const stored = this.store.readTask(this.taskDir);
     if (!stored) throw new Error("unknown task: no task record; provision the task before appending");
     if (stored.taskId !== this.taskId) throw new Error("task-unknown: this Host serves a different task");
+    // [Pencil T02] #137: a task whose workspace mode is not `worktree` has no
+    // independent worktrees. Appending one would contradict the recorded mode
+    // (and the record parser refuses it), so this fails closed by name instead
+    // of corrupting a shared-checkout / plain-directory task.
+    const storedMode = stored.workspaceMode ?? ((stored.sharedRepos?.length ?? 0) > 0 ? "existing-git" : stored.repos.length > 0 ? "worktree" : "plain-dirs");
+    if (storedMode !== "worktree") {
+      throw new Error("workspace-mode-refusal: 该任务不是独立 Worktree 模式（已有 Git 目录 / 仅普通目录），不能追加独立 Worktree 仓库；请新建独立 Worktree 任务");
+    }
     const validated = validateRepoSelections(input.repoSelections);
     if (!validated.ok) {
       const error: MultiRepoError = validated.error;
