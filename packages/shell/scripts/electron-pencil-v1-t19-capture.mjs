@@ -48,6 +48,16 @@ delete process.env["PIDOCK_TASK_URL"];
 const repoRoot = resolve(import.meta.dirname, "..", "..", "..");
 const argValue = (name) => (process.argv.includes(name) ? process.argv[process.argv.indexOf(name) + 1] : undefined);
 const phase = argValue("--phase") ?? "primary";
+// A fixed window size avoids the macOS Electron 44 quirk where a WebContentsView
+// can keep its old renderer viewport when the window grows again. Each size is
+// then a REAL window created/resized once, not a crop of the other size.
+const fixedArg = argValue("--window-size");
+const FIXED_SIZE = fixedArg === undefined ? null : (() => {
+  const match = /^(\d+)x(\d+)$/.exec(fixedArg);
+  if (!match) throw Error(`--window-size must be <width>x<height>, got ${fixedArg}`);
+  return [Number(match[1]), Number(match[2])];
+})();
+const SIZES = FIXED_SIZE === null ? [[1440, 900], [720, 560]] : [FIXED_SIZE];
 const outDir = resolve(repoRoot, argValue("--out") ?? "docs/evidence/pencil-v1-t19");
 const command = `pnpm --filter @pidock/shell exec electron scripts/electron-pencil-v1-t19-capture.mjs --phase ${phase}`;
 
@@ -237,7 +247,7 @@ const nodeBin = execFileSync("/bin/sh", ["-lc", "command -v node"], { encoding: 
 
 async function run() {
   let stage = "startup";
-  const log = { shots: [], assertions: [], findings: [], failed: [], sections: [], realVsTest: {}, identity: {} };
+  const log = { shots: [], assertions: [], findings: [], failed: [], sections: [], layout: [], ime: [], focus: {}, reachability: [], realVsTest: {}, identity: {} };
   const check = (name, condition, detail = "") => {
     const entry = { name, ok: condition === true, detail: String(detail).slice(0, 900) };
     log.assertions.push(entry);
@@ -397,6 +407,7 @@ async function run() {
   stage = "window";
   const workspaceId = `pencil-v1-t19-${phase}`;
   views = await createTrustedWindow(workspaceId, "production");
+  if (FIXED_SIZE !== null) { views.window.setContentSize(FIXED_SIZE[0], FIXED_SIZE[1], false); await wait(250); }
   registry = new PerTaskHostRegistry(workspaceId, async (workspace, task, variables) => {
     const entry = join(import.meta.dirname, "..", "dist", "host", "host-entry.js");
     const child = utilityProcess.fork(entry, [], {
@@ -466,6 +477,90 @@ async function run() {
     if (response.exceptionDetails) throw Error(JSON.stringify(response.exceptionDetails));
     return response.result.value;
   };
+  // [T19 geometry] Every number below is read from the real production renderer
+  // in the real Electron window at the exact content size of this shot. No value
+  // is asserted or filled in by hand; a missing element is recorded as null.
+  const measureExpression = `(() => {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const box = (selector) => {
+      const el = document.querySelector(selector);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return { top: +r.top.toFixed(2), left: +r.left.toFixed(2), right: +r.right.toFixed(2), bottom: +r.bottom.toFixed(2),
+        width: +r.width.toFixed(2), height: +r.height.toFixed(2),
+        inViewport: r.top >= -0.5 && r.left >= -0.5 && r.bottom <= vh + 0.5 && r.right <= vw + 0.5,
+        display: cs.display, visibility: cs.visibility, overflowY: cs.overflowY, minHeight: cs.minHeight,
+        scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, text: (el.innerText || el.value || "").replace(/\\s+/g, " ").trim().slice(0, 120) };
+    };
+    const scrollEl = document.querySelector('[data-testid=desktop-conversation-scroll]');
+    let scroll = null;
+    if (scrollEl) {
+      const original = scrollEl.scrollTop;
+      const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      scrollEl.scrollTop = max;
+      const sr = scrollEl.getBoundingClientRect();
+      const articles = [...scrollEl.querySelectorAll('article')];
+      const last = articles.at(-1);
+      const lr = last ? last.getBoundingClientRect() : null;
+      const composer = document.querySelector('[data-testid=desktop-composer]');
+      const cr = composer ? composer.getBoundingClientRect() : null;
+      scroll = { clientHeight: scrollEl.clientHeight, scrollHeight: scrollEl.scrollHeight,
+        maxScrollTop: +max.toFixed(2), scrollTopAtMax: +scrollEl.scrollTop.toFixed(2),
+        reachedMax: Math.abs(scrollEl.scrollTop - max) < 1,
+        articleCount: articles.length,
+        lastMessageVisible: lr ? lr.bottom <= sr.bottom + 1 && lr.top >= sr.top - 1 : null,
+        composerInViewportAfterScroll: cr ? cr.top >= -0.5 && cr.bottom <= vh + 0.5 : null };
+      scrollEl.scrollTop = original;
+    }
+    const shellContentEl = document.querySelector('[data-testid=desktop-shell-content]');
+    let outerScroll = null;
+    if (shellContentEl) {
+      const before = shellContentEl.scrollTop;
+      const max = Math.max(0, shellContentEl.scrollHeight - shellContentEl.clientHeight);
+      shellContentEl.scrollTop = max;
+      const sr = shellContentEl.getBoundingClientRect();
+      const composer = document.querySelector('[data-testid=desktop-composer]');
+      const cr = composer ? composer.getBoundingClientRect() : null;
+      const articles = [...document.querySelectorAll('[data-testid=desktop-conversation-scroll] article')];
+      const lr = articles.at(-1)?.getBoundingClientRect() ?? null;
+      outerScroll = { clientHeight: shellContentEl.clientHeight, scrollHeight: shellContentEl.scrollHeight,
+        maxScrollTop: +max.toFixed(2), scrollTopBefore: +before.toFixed(2), scrollTopAtMax: +shellContentEl.scrollTop.toFixed(2),
+        reachedMax: Math.abs(shellContentEl.scrollTop - max) < 1,
+        composerInViewportAfterOuterScroll: cr ? cr.top >= sr.top - 0.5 && cr.bottom <= Math.min(sr.bottom, vh) + 0.5 : null,
+        composerTopAfterOuterScroll: cr ? +cr.top.toFixed(2) : null,
+        composerBottomAfterOuterScroll: cr ? +cr.bottom.toFixed(2) : null,
+        lastMessageVisibleAfterOuterScroll: lr ? lr.bottom <= Math.min(sr.bottom, vh) + 1 && lr.bottom > sr.top : null };
+      shellContentEl.scrollTop = before;
+    }
+    const active = document.activeElement;
+    return { viewport: { width: vw, height: vh, devicePixelRatio: window.devicePixelRatio },
+      outerScroll,
+      breadcrumb: box('[data-testid=desktop-breadcrumb]'),
+      shellContent: box('[data-testid=desktop-shell-content]'),
+      conversation: box('[data-testid=desktop-conversation]'),
+      conversationHeader: box('[data-testid=desktop-conversation-header]'),
+      composer: box('[data-testid=desktop-composer]'),
+      composerTextarea: box('textarea[aria-label="消息"]'),
+      composerReasoning: box('[data-testid=composer-reasoning]'),
+      composerModel: box('[data-testid=composer-model]'),
+      composerContext: box('[data-testid=composer-context]'),
+      composerUsage: box('[data-testid=composer-usage]'),
+      scroll,
+      activeElement: active ? { tag: active.tagName, ariaLabel: active.getAttribute?.('aria-label') ?? null,
+        testId: active.getAttribute?.('data-testid') ?? null } : null };
+  })()`;
+  const recordLayout = async (stateName, width, height) => {
+    try {
+      const measured = await evalJs(measureExpression);
+      log.layout.push({ state: stateName, width, height, measuredAt: new Date().toISOString(), ...measured });
+      return measured;
+    } catch (error) {
+      const failure = { state: stateName, width, height, error: String(error?.message ?? error) };
+      log.layout.push(failure);
+      return failure;
+    }
+  };
   const text = async () => { try { return await evalJs("document.body.innerText"); } catch { return ""; } };
   const until = async (match, label, attempts = 600) => {
     let last = "";
@@ -494,23 +589,44 @@ async function run() {
     if (typed !== value) throw Error(`typing into "${label}" #${index} did not stick: ${JSON.stringify(typed)}`);
     return typed;
   };
-  const sizeTo = async (width, height) => { views.window.setContentSize(width, height); await wait(140); };
-  const url = await evalJs("location.href");
-  if (typeof url !== "string" || !/^file:\/\/.*\/renderer\/index\.html$/.test(url)) throw Error(`not the production file:// renderer: ${url}`);
+  // `BrowserWindow.setContentSize` changes the window before the production
+  // view layout/renderer viewport follows. Drive the production layout and wait
+  // until the RENDERER really reports this viewport, otherwise a "720x560" shot
+  // would silently be a crop of the 1440x900 layout.
+  const sizeTo = async (width, height) => {
+    views.window.setContentSize(width, height);
+    await wait(120);
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const viewport = await evalJs("({ width: window.innerWidth, height: window.innerHeight })");
+      if (viewport.width === width && viewport.height === height) { await wait(80); return viewport; }
+      await wait(80);
+    }
+    // A window state that accepted `setContentSize` for the frame but did not
+    // deliver it to the embedded WebContentsView: apply the production layout
+    // bound once, AFTER the window has settled, then wait again.
+    views.shellView.setBounds({ x: 0, y: 0, width, height });
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const viewport = await evalJs("({ width: window.innerWidth, height: window.innerHeight })");
+      if (viewport.width === width && viewport.height === height) { await wait(80); return viewport; }
+      await wait(80);
+    }
+    const last = await evalJs("({ width: window.innerWidth, height: window.innerHeight })");
+    throw Error(`renderer viewport did not reach ${width}x${height} (last ${JSON.stringify(last)}, content ${JSON.stringify(views.window.getContentBounds())}, shell ${JSON.stringify(views.shellView.getBounds())})`);
+  };
 
   const capture = async (stateName, ticket = "t19") => {
-    const sizes = [[1440, 900], [720, 560]];
-    for (const [width, height] of sizes) {
+    for (const [width, height] of SIZES) {
       stage = `${ticket}:${stateName} ${width}x${height}`;
-      views.window.setContentSize(width, height);
+      await sizeTo(width, height);
       views.shellView.setVisible(true);
       views.window.show();
       app.focus({ steal: true });
       views.window.moveTop();
       views.window.focus();
-      await wait(260);
+      await wait(120);
       const bounds = views.window.getContentBounds();
       if (bounds.width !== width || bounds.height !== height) throw Error(`unexpected content bounds ${JSON.stringify(bounds)}`);
+      const layout = await recordLayout(stateName, width, height);
       const name = `${width}x${height}-${stateName}.png`;
       const shot = await views.shellView.webContents.debugger.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
       const png = Buffer.from(shot.data, "base64");
@@ -518,25 +634,115 @@ async function run() {
       const pixels = pngPixelSize(png);
       log.shots.push({ state: stateName, file: name, width: bounds.width, height: bounds.height,
         pixelWidth: pixels.width, pixelHeight: pixels.height, sha256: sha256(png),
-        bodyText: flat(await text()).slice(0, 1800) });
+        bodyText: flat(await text()).slice(0, 1800), layout });
       console.log("T19_SHOT=" + JSON.stringify({ state: stateName, file: name, sha256: sha256(png) }));
     }
-    await sizeTo(1440, 900);
+    if (FIXED_SIZE === null) await sizeTo(1440, 900);
   };
   const captureOne = async (stateName, width, height) => {
     stage = `t19:${stateName} ${width}x${height}`;
-    views.window.setContentSize(width, height);
-    await wait(260);
+    await sizeTo(width, height);
     const bounds = views.window.getContentBounds();
     if (bounds.width !== width || bounds.height !== height) throw Error(`unexpected content bounds ${JSON.stringify(bounds)}`);
+    const layout = await recordLayout(stateName, width, height);
     const name = `${width}x${height}-${stateName}.png`;
     const shot = await views.shellView.webContents.debugger.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
     const png = Buffer.from(shot.data, "base64");
     writeFileSync(join(outDir, name), png);
-    log.shots.push({ state: stateName, file: name, width, height, pixelWidth: pngPixelSize(png).width, pixelHeight: pngPixelSize(png).height, sha256: sha256(png), bodyText: flat(await text()).slice(0, 1800) });
+    log.shots.push({ state: stateName, file: name, width, height, pixelWidth: pngPixelSize(png).width, pixelHeight: pngPixelSize(png).height, sha256: sha256(png), bodyText: flat(await text()).slice(0, 1800), layout });
     console.log("T19_SHOT=" + JSON.stringify({ state: stateName, file: name, sha256: sha256(png) }));
-    await sizeTo(1440, 900);
+    if (FIXED_SIZE === null) await sizeTo(1440, 900);
   };
+  // [T19 reachability] The product's own "进入活跃对话（main）" entry calls
+  // `scrollIntoView` on the conversation. Measure where the composer really is
+  // before and after that control, at both production sizes; never assume.
+  const reachProbe = async (width, height) => {
+    await sizeTo(width, height);
+    const clicked = await evalJs(`(() => {
+      const button = [...document.querySelectorAll('button')].find((el) => el.textContent.includes('进入活跃对话'));
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    await wait(450);
+    await captureOne("s01-conversation-entered", width, height);
+    const measured = log.layout.at(-1);
+    log.reachability.push({ width, height, clicked,
+      composer: measured.composer, reasoning: measured.composerReasoning, conversation: measured.conversation,
+      scroll: measured.scroll, outerScroll: measured.outerScroll, activeElement: measured.activeElement });
+    console.log("T19_REACH=" + JSON.stringify({ width, height, clicked, composer: measured.composer && { top: measured.composer.top, bottom: measured.composer.bottom, inViewport: measured.composer.inViewport },
+      reasoningInViewport: measured.composerReasoning?.inViewport ?? null, conversationHeight: measured.conversation?.height ?? null,
+      innerScrollClientHeight: measured.scroll?.clientHeight ?? null, outerScroll: measured.outerScroll && { max: measured.outerScroll.maxScrollTop, reached: measured.outerScroll.reachedMax } }));
+    return measured;
+  };
+
+  // [T19 IME] Real composition through the Chromium DevTools Protocol. A
+  // composition must reach the textarea, and Enter while composing must not
+  // send a turn. `imeSetComposition` is a real CDP Input method; if this
+  // Chromium build does not implement it, the result is recorded as UNVERIFIED.
+  const imeProbe = async (label, width, height) => {
+    const result = { label, width, height, events: [], measuredAt: new Date().toISOString() };
+    await sizeTo(width, height);
+    const focused = await evalJs(`(() => {
+      const el = document.querySelector('textarea[aria-label="消息"]');
+      if (!el) return { ok: false, reason: "missing textarea[aria-label=消息]" };
+      el.focus();
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(el, '');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      window.__ime = { start: 0, update: 0, end: 0, composing: false };
+      if (!window.__imeHooked) {
+        window.__imeHooked = true;
+        el.addEventListener('compositionstart', () => { window.__ime.start += 1; window.__ime.composing = true; });
+        el.addEventListener('compositionupdate', () => { window.__ime.update += 1; });
+        el.addEventListener('compositionend', () => { window.__ime.end += 1; window.__ime.composing = false; });
+      }
+      return { ok: document.activeElement === el, activeAriaLabel: document.activeElement?.getAttribute?.('aria-label') ?? null };
+    })()`);
+    result.focus = focused;
+    if (focused.ok !== true) { log.ime.push(result); if (FIXED_SIZE === null) await sizeTo(1440, 900); return result; }
+    const requestsBefore = chatRequests().length;
+    try {
+      await views.shellView.webContents.debugger.sendCommand("Input.imeSetComposition", { text: "ni hao", selectionStart: 6, selectionEnd: 6 });
+      result.imeSetComposition = "ok";
+    } catch (error) {
+      result.imeSetComposition = String(error?.message ?? error);
+      log.ime.push(result);
+      if (FIXED_SIZE === null) await sizeTo(1440, 900);
+      return result;
+    }
+    await wait(180);
+    result.duringComposition = await evalJs(`({ value: document.querySelector('textarea[aria-label="消息"]')?.value ?? null, ime: window.__ime, activeAriaLabel: document.activeElement?.getAttribute?.('aria-label') ?? null })`);
+    try {
+      await views.shellView.webContents.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: "\r" });
+      await views.shellView.webContents.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+      result.enterDispatch = "ok";
+    } catch (error) { result.enterDispatch = String(error?.message ?? error); }
+    await wait(350);
+    result.afterEnterWhileComposing = await evalJs(`({ value: document.querySelector('textarea[aria-label="消息"]')?.value ?? null, ime: window.__ime })`);
+    result.modelRequestsAfterEnter = chatRequests().length - requestsBefore;
+    try {
+      await views.shellView.webContents.debugger.sendCommand("Input.imeSetComposition", { text: "你好", selectionStart: 2, selectionEnd: 2 });
+      await wait(80);
+      await views.shellView.webContents.debugger.sendCommand("Input.insertText", { text: "你好" });
+      result.commit = "ok";
+    } catch (error) { result.commit = String(error?.message ?? error); }
+    await wait(180);
+    result.afterCommit = await evalJs(`({ value: document.querySelector('textarea[aria-label="消息"]')?.value ?? null, ime: window.__ime, activeAriaLabel: document.activeElement?.getAttribute?.('aria-label') ?? null })`);
+    await evalJs(`(() => { const el = document.querySelector('textarea[aria-label="消息"]'); if (!el) return false; const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; setter.call(el, ''); el.dispatchEvent(new Event('input', { bubbles: true })); el.blur(); return true; })()`);
+    await wait(120);
+    result.ok = result.imeSetComposition === "ok" && (result.duringComposition?.ime?.start ?? 0) > 0 &&
+      result.modelRequestsAfterEnter === 0 && (result.afterCommit?.ime?.end ?? 0) > 0 &&
+      String(result.afterCommit?.value ?? "").includes("你好");
+    log.ime.push(result);
+    console.log("T19_IME=" + JSON.stringify({ label, width, height, ok: result.ok, imeSetComposition: result.imeSetComposition,
+      start: result.duringComposition?.ime?.start ?? null, end: result.afterCommit?.ime?.end ?? null,
+      during: result.duringComposition?.value ?? null, afterEnter: result.afterEnterWhileComposing?.value ?? null,
+      modelRequestsAfterEnter: result.modelRequestsAfterEnter, afterCommit: result.afterCommit?.value ?? null }));
+    if (FIXED_SIZE === null) await sizeTo(1440, 900);
+    return result;
+  };
+
   const route = async (id, op, payload = {}) => {
     const result = await registry.routeTaskOp({ workspaceId, taskId: id, op, payload, origin: { kind: "shell-ui", senderWebContentsId: sender() } });
     return result?.payload ?? {};
@@ -735,6 +941,12 @@ async function run() {
     await gotoTask(taskId);
     await enterConversation();
     await capture("s01-conversation-empty");
+    stage = "layout:reach conversation";
+    for (const [width, height] of SIZES) await reachProbe(width, height);
+    stage = "layout:ime";
+    for (const [width, height] of SIZES) await imeProbe("conversation-empty", width, height);
+    await gotoTask(taskId);
+    await enterConversation();
 
     // ---- turn 1: a command tool that needs an approval
     stage = "turn:approval send";
@@ -809,6 +1021,25 @@ async function run() {
     sessionTwo = created.id;
     check("a second session exists inside the same task (same worktree, independent transcript)", sessionTwo !== "main", JSON.stringify(list.sessions.map((row) => row.id)));
     await capture("s01-session-two");
+    stage = "session2:focus after switch";
+    const focusAfterSwitch = async (sessionId) => {
+      await evalJs(`(() => { const b = document.querySelector('[data-testid="session-tab-' + ${JSON.stringify(sessionId)} + '"]'); if (!b) throw Error('missing session tab ' + ${JSON.stringify(sessionId)}); b.click(); return true; })()`);
+      await wait(500);
+      return evalJs(`(() => { const a = document.activeElement; const input = document.querySelector('textarea[aria-label="消息"]');
+        return { requestedSession: ${JSON.stringify(sessionId)}, activeTag: a?.tagName ?? null, activeAriaLabel: a?.getAttribute?.('aria-label') ?? null,
+          activeTestId: a?.getAttribute?.('data-testid') ?? null, composerFocused: a === input, composerValue: input?.value ?? null,
+          selectedTab: document.querySelector('[data-testid^="session-tab-"][aria-selected="true"]')?.getAttribute('data-testid') ?? null }; })()`);
+    };
+    const focusAt = async (width, height) => {
+      await sizeTo(width, height);
+      const mainFocus = await focusAfterSwitch("main");
+      const secondFocus = await focusAfterSwitch(sessionTwo);
+      return { width, height, afterSwitchToMain: mainFocus, afterSwitchToSecond: secondFocus };
+    };
+    log.focus = { measuredAt: new Date().toISOString() };
+    for (const [width, height] of SIZES) log.focus[`${width}x${height}`] = await focusAt(width, height);
+    if (FIXED_SIZE === null) await sizeTo(1440, 900);
+    console.log("T19_FOCUS=" + JSON.stringify(log.focus));
     stage = "session2:turn";
     await sendTurn(taskId, "[T19-S2] 第二个会话自己的消息", sessionTwo);
     await waitIdle(taskId, sessionTwo);
@@ -1164,9 +1395,10 @@ async function run() {
   const assets = existsSync(bundle) ? readdirSync(bundle).filter((name) => /\.(js|css)$/.test(name)).map((name) => ({ name, sha256: sha256File(join(bundle, name)) })) : [];
   log.identity = {
     phase, revision: gitHead, trackedFilesDirty: trackedDirty, command,
+    fixedWindowSize: FIXED_SIZE, sizes: SIZES,
     electron: process.versions["electron"], chrome: process.versions["chrome"], node: process.versions["node"],
     platform: `${process.platform}-${process.arch}`, deviceScaleFactor: 2,
-    rendererUrl: url, rendererAssets: assets, agentDir, profile, taskRoot, capturedAt: new Date().toISOString(),
+    rendererUrl: views.shellView.webContents.getURL(), rendererAssets: assets, agentDir, profile, taskRoot, capturedAt: new Date().toISOString(),
   };
   log.realVsTest = {
     real: ["compiled production runtime modules + production wiring (createTrustedWindow/registerIpc/PerTaskHostRegistry/ProjectTaskCreation+WorktreeMetadataLock/ProviderWiring/ServiceCatalog/TaskVariableStore/McpWiring)",
