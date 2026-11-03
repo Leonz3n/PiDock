@@ -52,7 +52,16 @@ function realRepo(home: string, name: string): { checkout: string; commit: strin
   return { checkout, commit: git(checkout, "rev-parse", "HEAD") };
 }
 
-describe("#6 privileged prep scan (boundary B)", () => {
+/**
+ * These cases run real `git init`/`worktree add`/`worktree list` against temp
+ * repositories. Measured on an idle machine they take 1-3s, but under the full
+ * suite pool the slowest exceeded Vitest's 5000ms default and turned into a
+ * load-dependent red — the same class `project-task-creation.test.ts` already
+ * budgets for. No assertion is weakened and a real hang still fails.
+ */
+const GIT_CASE_TIMEOUT_MS = 30_000;
+
+describe("#6 privileged prep scan (boundary B)", { timeout: GIT_CASE_TIMEOUT_MS }, () => {
   it("parses worktree porcelain blocks into path+branch rows", () => {
     const porcelain = [
       "worktree /src/frontend",
