@@ -1300,11 +1300,19 @@ async function performTaskOp(
         // plan (real cwds; empty only in the sense of zero ops). Both ride
         // the `host/task` result payload so a caller can persist-then-execute
         // without re-deriving git ops from the record.
+        // [Pencil T17] #152 creation intent: only an explicit `scheduled` value
+        // creates a dedicated schedule task; anything else stays an ordinary
+        // task that can never receive a schedule rule.
+        const kind = record["kind"];
+        if (kind !== undefined && kind !== "normal" && kind !== "scheduled") {
+          return { ok: false, error: "invalid-payload: task/provision.kind must be normal/scheduled" };
+        }
         const { record: saved, plan } = host.provision({
           name,
           dirId,
           branch,
           rootOverride,
+          ...(kind !== undefined ? { kind: kind as "normal" | "scheduled" } : {}),
           remoteBranch,
           fetchedCommit,
           repos,
