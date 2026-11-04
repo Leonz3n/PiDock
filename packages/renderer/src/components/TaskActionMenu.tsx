@@ -11,7 +11,7 @@
  * child agents) are omitted by the caller, so the menu cannot offer a dead end.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { IconButton } from "./ui";
 
 export interface TaskActionMenuItem {
@@ -22,7 +22,7 @@ export interface TaskActionMenuItem {
   onSelect: () => void;
 }
 
-export function TaskActionMenu({ items, label = "任务操作" }: { items: TaskActionMenuItem[]; label?: string }) {
+export function TaskActionMenu({ items, label = "任务操作", triggerRef }: { items: TaskActionMenuItem[]; label?: string; triggerRef?: RefObject<HTMLButtonElement | null> }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
@@ -59,7 +59,7 @@ export function TaskActionMenu({ items, label = "任务操作" }: { items: TaskA
   return (
     <div ref={wrap} className="relative">
       <IconButton
-        ref={trigger}
+        ref={(node) => { trigger.current = node; if (triggerRef) triggerRef.current = node; }}
         icon="more"
         label={label}
         aria-haspopup="menu"

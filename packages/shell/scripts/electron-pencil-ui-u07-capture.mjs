@@ -575,6 +575,17 @@ async function run() {
       "document.querySelector('[data-testid=schedule-detail]')",
       "S04 return",
     );
+    // Controlled dialogs have no DialogTrigger: cancellation must restore the surviving entry.
+    for (const dismissal of ["Cancel", "Escape"]) {
+      await click("编辑 每日依赖漏洞与安全巡检");
+      await until("document.querySelector('[aria-label=编辑定时任务]')", "focus rule editor");
+      check(`schedule ${dismissal} initial focus stays in dialog`, await evaluate("document.querySelector('[aria-label=编辑定时任务]').contains(document.activeElement)"));
+      if (dismissal === "Cancel") await click("取消");
+      else { wc.sendInputEvent({type:"keyDown",keyCode:"Escape"}); wc.sendInputEvent({type:"keyUp",keyCode:"Escape"}); }
+      await until("!document.querySelector('[aria-label=编辑定时任务]') && document.activeElement?.getAttribute('aria-label') === '编辑 每日依赖漏洞与安全巡检'", `schedule ${dismissal} focus return`);
+      check(`schedule ${dismissal} returns native focus to edit`, true);
+      await capture(`${theme}-s04-focus-${dismissal.toLowerCase()}`);
+    }
     await click("编辑 每日依赖漏洞与安全巡检");
     await until(
       "document.querySelector('[aria-label=编辑定时任务]')",
@@ -680,6 +691,17 @@ async function run() {
         !diffReply.ok && diffReply.error.includes("plain-dir-no-diff"),
         diffReply,
       );
+    }
+    for (const dismissal of ["Cancel", "Escape"]) {
+      await click("任务操作");
+      await evaluate("[...document.querySelectorAll('[role=menuitem]')].find(e=>e.textContent.includes('归档当前任务')).click()");
+      await until("document.querySelector('[aria-label=归档当前任务]') && document.activeElement?.textContent === '取消'", "archive Cancel initial focus");
+      check(`archive ${dismissal} initial focus is Cancel`, true);
+      if (dismissal === "Cancel") await click("取消");
+      else { wc.sendInputEvent({type:"keyDown",keyCode:"Escape"}); wc.sendInputEvent({type:"keyUp",keyCode:"Escape"}); }
+      await until("!document.querySelector('[aria-label=归档当前任务]') && document.activeElement?.getAttribute('aria-label') === '任务操作'", `archive ${dismissal} focus return`);
+      check(`archive ${dismissal} returns native focus to task actions`, true);
+      await capture(`${theme}-s05-focus-${dismissal.toLowerCase()}`);
     }
     await click("任务操作");
     await evaluate(

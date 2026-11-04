@@ -1333,3 +1333,42 @@ describe("Desktop SDK conversation", () => {
     expect(f.calls.filter((call) => call.action === "start")).toHaveLength(0);
   });
 });
+
+
+it.each(["Cancel", "Escape"])("archive %s returns keyboard focus to task actions", async (dismissal) => {
+  const f = setup(); mount(f);
+  await screen.findByText(/尚未开始/);
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: "任务操作" });
+  await user.click(trigger);
+  await user.click(screen.getByRole("menuitem", { name: "归档当前任务" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toHaveFocus());
+  if (dismissal === "Cancel") await user.click(screen.getByRole("button", { name: "取消" }));
+  else await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "归档当前任务" })).toBeNull());
+  await waitFor(() => expect(trigger).toHaveFocus());
+});
+
+
+it("archive pending write resists Escape and Cancel then allows dismissal after refusal", async () => {
+  const f = setup();
+  let refuse!: (value: unknown) => void;
+  f.bridge.taskOp = vi.fn((_taskId: string, op: string) => op === "task/archive"
+    ? new Promise((resolve) => { refuse = resolve; })
+    : Promise.resolve({ ok: false, error: "not-configured" })) as never;
+  mount(f);
+  await screen.findByText(/尚未开始/);
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: "任务操作" });
+  await user.click(trigger);
+  await user.click(screen.getByRole("menuitem", { name: "归档当前任务" }));
+  await user.click(screen.getByRole("button", { name: "确认归档" }));
+  expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  expect(screen.getByRole("dialog", { name: "归档当前任务" })).toBeInTheDocument();
+  await act(async () => refuse({ ok: false, error: "archive-refused" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("archive-refused");
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  await waitFor(() => expect(trigger).toHaveFocus());
+});

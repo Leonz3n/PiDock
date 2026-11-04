@@ -448,6 +448,7 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState("");
+  const taskActionsRef = useRef<HTMLButtonElement>(null);
   const archiveCancelRef = useRef<HTMLButtonElement>(null);
   const closeTool = (closedTool: DesktopTool) => {
     const index = openTools.indexOf(closedTool);
@@ -1253,7 +1254,7 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
               desktop page previously carried a hand-written archive-only popover,
               so `data-testid=task-action-menu` and the 审阅与交付 entry (ticket 148)
               never existed here even though the trigger announced a menu. */}
-          <TaskActionMenu items={taskMenuItems} />
+          <TaskActionMenu items={taskMenuItems} triggerRef={taskActionsRef} />
           <Button type="button" disabled={!connected} onClick={() => void refresh()} title={connected ? "核验 SDK 会话与任务身份" : "等待 SDK 会话连接后核验"}><Icon name="refresh" /><span className="below-narrow:hidden">核验</span></Button>
           <Button type="button" size="icon" onClick={onBack} aria-label="返回任务列表" title="返回任务列表"><Icon name="arrow" className="-rotate-90" /></Button>
       <div data-testid="desktop-session-strip" className="flex flex-wrap items-end gap-1 text-[12px]" role="tablist" aria-label="会话">
@@ -1450,7 +1451,7 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
       </form>
     </div></div>
     <Dialog open={archivePrompt} onOpenChange={(open) => { if (!archiveBusy) setArchivePrompt(open); }}>
-      <DialogContent aria-labelledby={undefined} aria-label="归档当前任务" onOpenAutoFocus={(event) => { event.preventDefault(); archiveCancelRef.current?.focus(); }} onEscapeKeyDown={(event) => { if (archiveBusy) event.preventDefault(); }} onInteractOutside={(event) => event.preventDefault()}>
+      <DialogContent aria-labelledby={undefined} aria-label="归档当前任务" onCloseAutoFocus={(event) => { event.preventDefault(); taskActionsRef.current?.focus(); }} onOpenAutoFocus={(event) => { event.preventDefault(); archiveCancelRef.current?.focus(); }} onEscapeKeyDown={(event) => { if (archiveBusy) event.preventDefault(); }} onInteractOutside={(event) => event.preventDefault()}>
         <DialogHeader><DialogTitle>任务收尾：归档与受管资源清理确认</DialogTitle><DialogDescription>当前任务：{name}</DialogDescription></DialogHeader>
         <div className="rounded-lg bg-sunken p-3 text-[11px] leading-5"><strong>安全清理检查项（受管生命周期保护）</strong><p>归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止。未执行确认会失效、定时任务暂停，代码和历史保留。恢复后服务与定时任务不会自动启动，清理需要单独处理。</p><p>归档并清理：先归档，再到已归档页逐个仓库检查未提交与未交付修改（未知交付状态不当作已交付），选择保留／导出／清理后才会移除身份核验通过的本任务工作副本。</p></div>
         <fieldset className="flex flex-col gap-2" disabled={archiveBusy}><legend className="mb-3 font-semibold">选择处理方式：</legend>

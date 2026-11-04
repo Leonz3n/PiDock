@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { shellSchedulerState, shellTaskOp } from "../data/shellBridge";
 import { parseProviderStatus, providerCall } from "../data/providerProfile";
 import { hostText } from "../data/workspaceFiles";
@@ -79,6 +79,7 @@ export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession, onCreat
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   /** The schedule being edited, copied from the Host's row; `null` = no editor. */
+  const editTriggerRef = useRef<HTMLButtonElement>(null);
   const [editing, setEditing] = useState<Schedule | null>(null);
   /** The task's real Provider profiles, as `shell/providerOp list` answered. */
   const [profiles, setProfiles] = useState<{ id: string; name: string; modelId: string }[] | null>(null);
@@ -219,7 +220,7 @@ export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession, onCreat
         <section aria-label="定时任务详情" className="min-w-0">
           {chosen && <div className="rounded-lg border border-line bg-paper p-4" data-testid="schedule-detail">
             <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h2 className="break-words text-sm font-semibold">{hostText(chosen.name, "Host 未上报定时任务名称")}</h2><p className="mt-1 break-all text-[11px] text-muted">规则: {hostText(chosen.ruleText, "Host 未上报规则")} · 时区 {hostText(chosen.timezone, "Host 未上报时区")}</p></div>
-              <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy !== null} aria-label={`立即运行 ${chosen.name}`} onClick={() => void act(chosen, "task/scheduleRunNow", { label: "定时任务页" })}>立即运行</Button><Button size="sm" variant="outline" disabled={busy !== null} aria-label={`编辑 ${chosen.name}`} onClick={() => edit(chosen)}>编辑</Button><Button size="sm" variant="outline" disabled={busy !== null} aria-label={`${chosen.enabled ? "暂停" : "启用"} ${chosen.name}`} onClick={() => void act(chosen, "task/scheduleSetEnabled", { enabled: !chosen.enabled })}>{chosen.enabled ? "暂停" : "启用"}</Button><Button size="sm" variant="ghost" onClick={() => onOpenTask(chosen.taskId)}>查看任务</Button></div>
+              <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy !== null} aria-label={`立即运行 ${chosen.name}`} onClick={() => void act(chosen, "task/scheduleRunNow", { label: "定时任务页" })}>立即运行</Button><Button size="sm" variant="outline" disabled={busy !== null} ref={editTriggerRef} aria-label={`编辑 ${chosen.name}`} onClick={() => edit(chosen)}>编辑</Button><Button size="sm" variant="outline" disabled={busy !== null} aria-label={`${chosen.enabled ? "暂停" : "启用"} ${chosen.name}`} onClick={() => void act(chosen, "task/scheduleSetEnabled", { enabled: !chosen.enabled })}>{chosen.enabled ? "暂停" : "启用"}</Button><Button size="sm" variant="ghost" onClick={() => onOpenTask(chosen.taskId)}>查看任务</Button></div>
             </div>
             <div className="mt-3 rounded bg-sunken p-3 text-xs"><p className="whitespace-pre-wrap break-words">提示词: {chosen.prompt || "Host 未上报提示词"}</p><p className="mt-2 break-words text-[11px] text-muted">绑定模型: {hostText(chosen.providerId, "Host 未上报 Provider")} / {hostText(chosen.model, "Host 未上报模型")} · 固定任务工作区 · 每次独立会话 · {permissionLabels[chosen.permission]}</p>{chosen.repairIssue && <p role="alert" className="mt-2 break-words text-destructive">配置待修复：{chosen.repairIssue}</p>}</div>
           </div>}
@@ -236,7 +237,7 @@ export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession, onCreat
       </div>
     </>}
     {editing && <Dialog open onOpenChange={(open) => { if (!open && !pending) setEditing(null); }}>
-      <DialogContent aria-labelledby={undefined} aria-label="编辑定时任务" className="max-w-[560px]" onInteractOutside={(event) => event.preventDefault()} onEscapeKeyDown={(event) => { if (pending) event.preventDefault(); }}>
+      <DialogContent aria-labelledby={undefined} aria-label="编辑定时任务" onCloseAutoFocus={(event) => { event.preventDefault(); editTriggerRef.current?.focus(); }} className="max-w-[560px]" onInteractOutside={(event) => event.preventDefault()} onEscapeKeyDown={(event) => { if (pending) event.preventDefault(); }}>
         <DialogTitle>编辑定时任务</DialogTitle>
         <DialogDescription>归属任务：{taskNames.get(editing.taskId) ?? editing.taskId}（编排不改归属）。规则、时区与 Provider 由 Host 校验；保存成功后以 Host 的下一份清单为准。</DialogDescription>
         {profilesError && <p role="alert" className="mt-3 border border-line bg-paper p-2 text-xs text-destructive">Provider 列表读取失败：{profilesError}。不改用其它 Provider：保存仍用该定时任务已存的 Provider / 模型。</p>}

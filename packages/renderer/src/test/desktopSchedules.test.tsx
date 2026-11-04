@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { DesktopSchedulesPage } from "../components/DesktopSchedulesPage";
 
 const tasks = [{ taskId: "a", name: "任务 A" }, { taskId: "b", name: "任务 B" }];
@@ -342,4 +343,39 @@ it("renders a reconciled interrupted run as a named outcome, not a success", asy
   render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
   await waitFor(() => expect(screen.getAllByText("已中断").length).toBeGreaterThan(0));
   expect(screen.getAllByText("状态不确定").length).toBeGreaterThan(0);
+});
+
+
+it.each(["Cancel", "Escape"])("schedule editor %s restores focus to edit", async (dismissal) => {
+  bridge((taskId, op) => ({ ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } }));
+  withProviders(providerStatus([profile("p-00000000-0000-0000-0000-000000000001", "Provider X", "model-x")]));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  const trigger = await screen.findByRole("button", { name: "编辑 计划 a" });
+  const user = userEvent.setup();
+  await user.click(trigger);
+  expect(screen.getByRole("dialog", { name: "编辑定时任务" })).toContainElement(document.activeElement as HTMLElement);
+  if (dismissal === "Cancel") await user.click(screen.getByRole("button", { name: "取消" }));
+  else await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑定时任务" })).toBeNull());
+  await waitFor(() => expect(trigger).toHaveFocus());
+});
+
+
+it("schedule pending save resists Escape and Cancel then restores focus after refusal", async () => {
+  let refuse!: (value: unknown) => void;
+  bridge((taskId, op) => op === "task/scheduleSave" ? new Promise((resolve) => { refuse = resolve; }) : { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } });
+  withProviders(providerStatus([profile("p-00000000-0000-0000-0000-000000000001", "Provider X", "model-x")]));
+  render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
+  const trigger = await screen.findByRole("button", { name: "编辑 计划 a" });
+  const user = userEvent.setup();
+  await user.click(trigger);
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  expect(screen.getByRole("dialog", { name: "编辑定时任务" })).toBeInTheDocument();
+  refuse({ ok: false, error: "save-refused" });
+  expect(await screen.findByText("save-refused")).toHaveAttribute("role", "alert");
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(trigger).toHaveFocus());
 });
