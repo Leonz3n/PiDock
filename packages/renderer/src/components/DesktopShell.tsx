@@ -82,6 +82,7 @@ export function DesktopShell({
   onNewTask,
   management,
   headerActions,
+  headerFacts,
   children,
 }: {
   view: DesktopView;
@@ -105,6 +106,7 @@ export function DesktopShell({
   onNewTask?: () => void;
   management?: ReactNode;
   headerActions?: ReactNode;
+  headerFacts?: ReactNode;
   children: ReactNode;
 }) {
   const activeTaskId = view.view === "task" ? view.taskId : undefined;
@@ -209,6 +211,7 @@ export function DesktopShell({
           <span className="min-w-0 truncate text-muted">{breadcrumb.project ?? "工作区"}</span>
           {breadcrumb.task && <><span className="text-muted">/</span><span className="min-w-0 truncate font-semibold">{breadcrumb.task}</span></>}
           {breadcrumb.page && <><span className="text-muted">/</span><span className="min-w-0 truncate">{breadcrumb.page}</span></>}
+          {headerFacts && <div className="min-w-0 flex-1">{headerFacts}</div>}
           {headerActions && <div className="ml-auto flex shrink-0 items-center gap-2">{headerActions}</div>}
         </header>}
         <DesktopRootErrors roots={roots} busy={rootRetry.busy} retryPending={rootRetry.pending} retryError={rootRetry.error} onRetry={rootRetry.run} className="shrink-0 border-b border-line bg-paper px-4 empty:hidden" />

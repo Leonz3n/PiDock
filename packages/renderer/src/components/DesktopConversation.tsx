@@ -1,4 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { Message as ChatMessage, MessageContent, MessageHeader } from "./ui/message";
+import { Bubble, BubbleContent } from "./ui/bubble";
+import { MessageScrollerProvider, MessageScroller, MessageScrollerViewport, MessageScrollerContent, MessageScrollerButton } from "./ui/message-scroller";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
+import { cn } from "../lib/utils";
+import { ConversationMarkdown } from "./ConversationMarkdown";
 import { Icon } from "./Icon";
 import { loadDesktopProjects, type DesktopProjects } from "../data/desktopProjects";
 import { Badge } from "./ui/badge";
@@ -62,6 +69,16 @@ type Receipt = { schema: 1; taskId: string; sessionId: string; requestId: string
 const receiptKey = (taskId: string, sessionId: string) => `pidock-sdk-pending-v1:${encodeURIComponent(taskId)}:${encodeURIComponent(sessionId)}`;
 /** [Pencil T19] #145 one keystroke burst becomes one Host draft write. */
 const DRAFT_SAVE_DEBOUNCE_MS = 200;
+// One SDK subscription belongs to the sender. Complete a stale subscribe and
+// its teardown before another session can install its subscription on that sender.
+const subscriptionWork = new WeakMap<object, Promise<void>>();
+function enqueueSubscription<T>(bridge: object | undefined, work: () => Promise<T>): Promise<T> {
+  if (!bridge) return Promise.reject(new Error("桌面壳 SDK 接口不可用"));
+  const previous = subscriptionWork.get(bridge) ?? Promise.resolve();
+  const result = previous.then(work, work);
+  subscriptionWork.set(bridge, result.then(() => {}, () => {}));
+  return result;
+}
 function readReceipt(taskId: string, sessionId: string): { receipt: Receipt | null; error: string | null } {
   try {
     const raw = localStorage.getItem(receiptKey(taskId, sessionId));
@@ -115,7 +132,7 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
  * named in the header instead of being filled in.
  */
 type TaskFacts = { branch: string; repoCount: number | null };
-type ConversationProps = TaskFacts & { taskId: string; /** [#139] the session the sidebar asked for; omitted = the task's active session. */ initialSessionId?: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
+type ConversationProps = TaskFacts & { toolbarTarget?: HTMLElement | null; taskId: string; /** [#139] the session the sidebar asked for; omitted = the task's active session. */ initialSessionId?: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
 /**
  * [PiDock 16] (#16 盒 1) one attachment of this desktop draft. The production
  * turn is `window.pidock.sdkTurn` → SDK `session.prompt(text)`: a string-only
@@ -157,7 +174,7 @@ function hostAnswerText(value: unknown): string {
 
 function ExecutionCardSection({ children }: { children: ReactNode }) {
   return (
-    <section data-testid="desktop-execution-card" aria-label="会话执行状态" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 below-mid:px-3">
+    <section data-testid="desktop-execution-card" aria-label="会话执行状态" className="min-w-0 rounded-md border border-line bg-paper px-3 py-1.5">
       {children}
     </section>
   );
@@ -193,15 +210,13 @@ function ExecutionStateCard({ taskId, sessionId: session, read, approvals }: { t
   const state = pendingApproval ? "approval" : reported;
   if (state === undefined) {
     return <ExecutionCardSection>
-      <p role="status" data-testid="desktop-execution-unreported" className="break-words text-[11px] text-muted">
-        Host 未上报执行状态：本页不推断未上报的状态；有执行记录时以 Host 执行账本为准。
-      </p>
+      <details className="text-[11px] text-muted"><summary className="cursor-pointer">执行状态未报告</summary><p role="status" data-testid="desktop-execution-unreported">Host 未上报执行状态：本页不推断未上报的状态；有执行记录时以 Host 执行账本为准。</p></details>
     </ExecutionCardSection>;
   }
   return <ExecutionCardSection>
-    <strong data-testid="desktop-execution-state" className="text-xs font-semibold text-ink">执行状态 · {executionLabel(state)}</strong>
-    {record?.summary ? <p data-testid="desktop-execution-summary" className="mt-0.5 break-words text-[11px] text-muted">{record.summary}</p> : null}
-    {record && record.steps.length > 0 ? <details data-testid="desktop-execution-steps" className="mt-1 text-[11px] text-muted">
+    <div className="flex min-w-0 flex-wrap items-center gap-2"><strong data-testid="desktop-execution-state" className="text-[11px] font-medium text-ink">执行状态 · {executionLabel(state)}</strong>
+    {record?.summary ? <p data-testid="desktop-execution-summary" className="min-w-0 truncate text-[10px] text-muted">{record.summary}</p> : null}
+    {record && record.steps.length > 0 ? <details data-testid="desktop-execution-steps" className="text-[10px] text-muted">
       <summary className="cursor-pointer">执行步骤（完成 {record.steps.filter((step) => step.state === "done").length} / 共 {record.steps.length}）</summary>
       <ol className="mt-1 flex flex-wrap gap-1.5">
         {record.steps.map((step) => <li key={step.label} className="rounded border border-line bg-paper px-1.5 py-0.5">
@@ -209,11 +224,11 @@ function ExecutionStateCard({ taskId, sessionId: session, read, approvals }: { t
           <span className="ml-1 text-muted">{executionStepLabel(step.state)}</span>
         </li>)}
       </ol>
-    </details> : null}
+    </details> : null}</div>
   </ExecutionCardSection>;
 }
 
-function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, roots, association, onBack, onOpenProviders, onArchived, onSourcesChanged }: ConversationProps) {
+function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branch, repoCount, roots, association, onBack, onOpenProviders, onArchived, onSourcesChanged }: ConversationProps) {
   const bridge = window.pidock;
   /**
    * [#139] Which session this page is showing. The Host's session list is the
@@ -300,6 +315,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const [receiptError, setReceiptError] = useState(recovered.current.error);
   const [attempt, setAttempt] = useState<Attempt | null>(recovered.current.receipt ? { ...recovered.current.receipt, phase: "unknown" } : null);
   const attemptRef = useRef<Attempt | null>(recovered.current.receipt ? { ...recovered.current.receipt, phase: "unknown" } : null);
+  const [toolPreviews, setToolPreviews] = useState<{ turnId: string; callId: string; tool: string; text: string; failed?: boolean }[]>([]);
   const [stream, setStream] = useState("");
   const streamRef = useRef("");
   const [notice, setNotice] = useState("正在连接 SDK 会话");
@@ -475,16 +491,20 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     window.addEventListener("keydown", dismiss);
     return () => window.removeEventListener("keydown", dismiss);
   }, [deliveryOpen]);
+  // Metadata refreshes keep the live session subscription. Reconnecting on each
+  // list object can let the previous unsubscribe revoke a pending new subscribe.
+  const awaitingSessionList = sessionList.phase === "reading";
+  const emptySessionList = sessionList.phase === "read" && sessionList.list.sessions.length === 0;
   useEffect(() => {
     if (invalidated) { setConnected(false); setValid(false); return; }
     // [#139] Wait for the session list before connecting: a page that subscribed
     // to the `main` fallback first and then jumped to the Host's active session
     // would show one session's history for a frame and issue a needless subscribe.
-    if (sessionList.phase === "reading") return;
+    if (awaitingSessionList) return;
     // A task whose sessions were all deleted has NO session to address. The page
     // says so and offers 新建会话 instead of subscribing to an id the Host does
     // not have (or inventing an empty one).
-    if (sessionList.phase === "read" && sessionList.list.sessions.length === 0) {
+    if (emptySessionList) {
       setConnected(false); setValid(false); setSnapshot(null); setNotice("本任务暂无会话：新建一个会话后才能对话");
       return;
     }
@@ -502,11 +522,12 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     let off: (() => void) | undefined;
     let subscribed = false;
     const active = () => generation.current === epoch;
+    const unsubscribe = () => { void enqueueSubscription(bridge, () => request("unsubscribe")).catch(() => {}); };
     const disconnect = (reason: string) => {
       if (!active()) return;
       setValid(false); setConnected(false); streamRef.current = ""; setStream(""); turnStream.current.reset(); setNotice(reason);
       off?.(); off = undefined;
-      if (subscribed) void request("unsubscribe").catch(() => {});
+      if (subscribed) unsubscribe();
     };
     const onEvent = (raw: unknown) => {
       if (!active() || !object(raw)) return;
@@ -530,6 +551,11 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       // drops duplicates/replays without clearing the staging, and asks for a
       // projection re-read only on a real sequence gap.
       const outcome = turnStream.current.ingest({ turnId: event.turnId, sequence: event.sequence, type: event.type, text: event.text });
+      if ((event.type === "tool_preview" || event.type === "tool_result") && outcome.kind !== "duplicate" && outcome.kind !== "resync" &&
+          typeof event.callId === "string" && event.callId.length <= 160 && typeof event.tool === "string" && event.tool.length <= 256 && typeof event.text === "string" && event.text.length <= 4200) {
+        const preview = { turnId: event.turnId, callId: event.callId, tool: event.tool, text: event.text, ...(event.type === "tool_result" ? { failed: event.failed === true } : {}) };
+        setToolPreviews(rows => [...rows.filter(row => row.turnId !== preview.turnId || row.callId !== preview.callId), preview].slice(-16));
+      }
       if (outcome.kind === "staged") { streamRef.current = outcome.text; setStream(outcome.text); }
       else if (outcome.kind === "resync") {
         turnStream.current.reset();
@@ -560,9 +586,14 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         }
         if (!bridge?.onSdkTurnEvent) throw new Error("SDK 事件接口不可用");
         off = bridge.onSdkTurnEvent(onEvent);
-        const reply = await request("subscribe", attemptRef.current ? { requestId: attemptRef.current.requestId } : {});
-        if (!active()) { off?.(); void request("unsubscribe").catch(() => {}); return; }
-        subscribed = true;
+        const reply = await enqueueSubscription(bridge, async () => {
+          if (!active()) return null;
+          const result = await request("subscribe", attemptRef.current ? { requestId: attemptRef.current.requestId } : {});
+          if (!active()) { await request("unsubscribe").catch(() => {}); return null; }
+          subscribed = true;
+          return result;
+        });
+        if (!reply || !active()) { off?.(); return; }
         if (reply.taskId !== taskId || reply.sessionId !== sessionId) throw new Error("SDK 订阅身份异常");
         const projection = parseSnapshot(reply.snapshot, sessionId);
         setSnapshot(projection); setValid(true); setConnected(true);
@@ -571,8 +602,8 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       } catch (error) { disconnect(errorText(error)); }
     };
     void connect();
-    return () => { if (generationRef.current === epoch) generationRef.current++; window.clearInterval(poll); off?.(); if (subscribed) void request("unsubscribe").catch(() => {}); };
-  }, [bridge, connectionKey, flushDraftSave, invalidated, queueDraftSave, reconcile, request, sessionId, sessionList, taskId, verify]);
+    return () => { if (generationRef.current === epoch) generationRef.current++; window.clearInterval(poll); off?.(); if (subscribed) unsubscribe(); };
+  }, [bridge, connectionKey, flushDraftSave, invalidated, queueDraftSave, reconcile, request, sessionId, awaitingSessionList, emptySessionList, taskId, verify]);
   const refresh = async () => {
     const epoch = generation.current;
     try { await verify(); if (epoch !== generation.current) return; await reconcile(epoch, attemptRef.current?.requestId); if (epoch === generation.current) setValid(true); }
@@ -900,6 +931,13 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     void loadApprovals();
     return () => { approvalReadAttempt.current += 1; };
   }, [attemptPhase, loadApprovals]);
+  // A command may ask for approval long after its ACK. Re-read the existing
+  // Host API while a turn is live; an idle conversation owns no polling timer.
+  useEffect(() => {
+    if (attemptPhase !== "accepted" && !snapshot?.pending) return;
+    const timer = window.setInterval(() => { void loadApprovals(); }, 750);
+    return () => { window.clearInterval(timer); approvalReadAttempt.current += 1; };
+  }, [attemptPhase, snapshot?.pending, loadApprovals]);
   /**
    * 一次决定：`task/approve` 或 `task/reject`，载荷只有 `{sessionId, approvalId}`。
    * 成功返回 `null`，失败返回具名原因（Host 自己的文本 + 一句可行动说明）；本页不
@@ -979,6 +1017,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     draftLoaded.current = false;
     draftSave.current.pending = undefined;
     setDraft(receipt.receipt?.text ?? "");
+    setToolPreviews([]);
     setReferences([]);
     setReferenceProblems([]);
     setReferenceReport(null);
@@ -1185,74 +1224,23 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     { id: "archive-task", label: "归档当前任务", detail: "停止执行并保留代码、会话与草稿", onSelect: () => { setArchiveError(""); setArchivePrompt(true); } },
   ];
 
-  return <TooltipProvider><main data-testid="desktop-conversation" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
-    {/* [#138] 720×560 裁切：面板只有 ~239px 高（breadcrumb + 汇总条后），旧结构把
-        任务头、会话条、执行卡当作 `shrink-0` 兄弟节点，历史区的 `flex-1` 被压到 0，
-        输入框被 `overflow-hidden` 裁掉且没有可滚动祖先能到达。现在面板自己拥有滚动：
-        消息区（连同它上面的任务头/会话/执行状态）在一个 `overflow-y-auto` 区域里滚动，
-        composer 作为该列最后一个 `shrink-0` 行钉在底部，900 与 560 高度都可达。 */}
+  return <TooltipProvider><main data-testid="desktop-conversation" aria-label={`${name} · 会话`} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg text-ink">
     <div className="flex min-h-0 min-w-0 flex-1">
-    <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${activeTool && !toolDockCollapsed ? "below-narrow:hidden" : ""}`}>
-    <div data-testid="desktop-conversation-scroll" className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-    <div className="border-b border-line bg-paper px-4 pt-3 below-mid:px-3">
-      {/* #49: the shell column is 280-380px when a task page is open, and the
-          prototype wraps the task header below 1180px (`.taskheader
-          .between{flex-wrap:wrap}`) and stacks it below 720px. Without the wrap
-          the fixed 288px actionset forced the `flex-1` title to 0 width, so the
-          `Task workspace` eyebrow painted under the icons and the column grew
-          an inner horizontal scrollbar. */}
-      <div data-testid="desktop-conversation-header" className="flex min-w-0 flex-wrap items-start gap-3">
-        <div data-testid="desktop-conversation-title" className="min-w-0 flex-1">
-          <p data-testid="desktop-conversation-eyebrow" className="text-[10px] tracking-[1.4px] text-muted uppercase">Task workspace</p>
-          <h1 className="mt-1 truncate text-[19px] font-semibold tracking-[-0.4px]">{name}</h1>
-          <div className="mt-1.5 mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
-            <span className="inline-flex min-w-0 items-center gap-1"><Icon name="branch" /><span className="truncate">{taskId}</span></span>
-            {/* #24: the branch and repository count the sidebar card already shows
-                (`DesktopShell.tsx` `TaskNavCard`), rendered from the SAME inventory
-                row passed down by `DesktopInventory` — no second `listTasks` read and
-                no locally derived count. A fact the Host did not report is named:
-                a blank chip, an `undefined`, or a guessed `main` would each claim
-                knowledge this read does not have. */}
-            <Badge data-testid="desktop-conversation-branch" variant="soft" title="本任务分支 · 来自 Host 任务清单" className={`max-w-full ${branch.length > 0 ? "" : "border-[#dfc99f] text-[#9a6032]"}`}>
-              <Icon name="branch" /><span className="min-w-0 truncate">{hostText(branch, "Host 未上报分支")}</span>
-            </Badge>
-            <Badge data-testid="desktop-conversation-repo-count" variant="soft" title="本任务仓库数 · 来自 Host 任务清单" className={repoCount === null ? "border-[#dfc99f] text-[#9a6032]" : undefined}>
-              <Icon name="folder" />{repoCount === null ? "Host 未上报仓库数" : `${repoCount} 仓库`}
-            </Badge>
-            <span data-testid="desktop-session-identity" className="inline-flex min-w-0 items-center gap-1" title="当前会话 · 由 Host 会话索引拥有">
-              <Icon name="settings" /><span className="truncate">会话 · {activeSession?.name ?? sessionId}</span>
-              {activeSession?.archived ? <Badge variant="soft">已归档</Badge> : null}
+    <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", activeTool && !toolDockCollapsed && "below-narrow:hidden")}>
+    {(() => {
+      const toolbar = <div data-testid="desktop-conversation-header" className="flex min-w-0 items-center gap-2">
+        <span data-testid="desktop-session-identity" title={`会话 · ${activeSession?.name ?? sessionId}`} className="max-w-32 truncate text-[11px] text-muted">会话 · {activeSession?.name ?? sessionId}{activeSession?.archived ? " · 已归档" : ""}</span>
+        <details className="conversation-actions relative">
+          <summary aria-label="会话与工具操作" className="cursor-pointer list-none rounded border border-line px-2 py-0.5 text-muted">···</summary>
+          <div data-testid="desktop-conversation-toolbar" className="conversation-actions-menu absolute right-0 top-full flex w-72 flex-wrap gap-1 rounded-md border border-line bg-paper p-2 shadow-md">
+            <span data-testid="desktop-session-meta" className="flex w-full flex-col gap-1 text-[10px] text-muted" title={contextTitle}>
+              <span data-testid="desktop-session-model">模型 · {boundModel?.name ?? (sessionList.phase === "read" ? "未绑定模型" : "未读取")}</span>
+              <span data-testid="desktop-session-reasoning">推理 · {readoutRead.phase !== "read" ? (readoutRead.phase === "reading" ? "未读取" : "读取失败") : boundModel === null ? "未绑定模型" : reasoningLevels.length === 0 ? "该模型不支持" : thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}</span>
+              <span data-testid="desktop-session-context">{contextLabel}</span>
+              <span>{ready ? "已连接" : invalidated ? "已失效" : "未连接"}</span>
             </span>
-            {/* [PiDock 02m] #5: this kernel's tool path is real, so the header
-                carries the two facts a reader can check instead of the old
-                claim that it had none. `installSdkProvider` always hands the
-                Host's `SdkAgentToolBroker` to the model context
-                (`task-host.ts`); the kernel offers exactly the declared task
-                tools and refuses to run if the session reports anything else
-                (`sdk-text-kernel.ts`); and every mutating call claims the task
-                write right before its effect, with a read-tier session refused
-                (`sdk-agent-tool-broker.ts` `runWithGate`). What is NOT claimed
-                here is a confirmation per write: under `default` only command
-                and browser tools ask (`pi-session.ts` `previewGate`). */}
-            {/* [#139] The session header names the four facts a reader needs about
-                THIS session: its name (above), the model it is bound to, the
-                reasoning level the model declares, and the context it occupies.
-                The composer carries the same three as controls; here they are
-                read-only, and every unknown stays named as unknown. */}
-            <span data-testid="desktop-session-meta" className="inline-flex min-w-0 flex-wrap items-center gap-2" title={contextTitle}>
-              <span data-testid="desktop-session-model" className="truncate">模型 · {boundModel?.name ?? (sessionList.phase === "read" ? "未绑定模型" : "未读取")}</span>
-              <span data-testid="desktop-session-reasoning" className="truncate">推理 · {readoutRead.phase !== "read" ? (readoutRead.phase === "reading" ? "未读取" : "读取失败") : boundModel === null ? "未绑定模型" : reasoningLevels.length === 0 ? "该模型不支持" : thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}</span>
-              <span data-testid="desktop-session-context" className="truncate">{contextLabel}</span>
-            </span>
-            <Badge variant="soft">工具由 Host 代执行</Badge>
-            <Badge variant="soft">写操作受 Host 写权约束</Badge>
-            <Badge>{ready ? "已连接" : invalidated ? "已失效" : "未连接"}</Badge>
-          </div>
-        </div>
-        {/* `min-w-0 flex-wrap` (no `shrink-0`): a fixed 288px toolbar would overflow any
-            shell column (the column never exceeds 380px), so it drops to its own line
-            and wraps its icon buttons inside the column width instead. */}
-        <div data-testid="desktop-conversation-toolbar" className="flex min-w-0 flex-wrap items-center gap-1 pb-1">
+            <span data-testid="desktop-conversation-branch" className="w-full truncate text-[11px]">{hostText(branch, "Host 未上报分支")}</span>
+            <span data-testid="desktop-conversation-repo-count" className="w-full text-[11px]">{repoCount === null ? "Host 未上报仓库数" : `${repoCount} 仓库`}</span>
           {toolIcons.map((item) => {
             const unwiredReason = DESKTOP_TOOLS_UNWIRED.find((entry) => entry.id === item.tool)?.reason;
             return unwiredReason === undefined
@@ -1277,12 +1265,6 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           <TaskActionMenu items={taskMenuItems} />
           <Button type="button" disabled={!connected} onClick={() => void refresh()} title={connected ? "核验 SDK 会话与任务身份" : "等待 SDK 会话连接后核验"}><Icon name="refresh" /><span className="below-narrow:hidden">核验</span></Button>
           <Button type="button" size="icon" onClick={onBack} aria-label="返回任务列表" title="返回任务列表"><Icon name="arrow" className="-rotate-90" /></Button>
-        </div>
-      </div>
-      {/* [#139] S01's session rows / S08's session list, in the conversation's own
-          header: the task's sessions with the active marker, a 新建会话 entry and
-          the full list. Nothing here is a tab bar of conversations the Host does
-          not have — every row is a session the Host reported. */}
       <div data-testid="desktop-session-strip" className="flex flex-wrap items-end gap-1 text-[12px]" role="tablist" aria-label="会话">
         {sessionList.phase === "reading" && <span className="pb-2 text-[11px] text-muted">正在读取会话列表…</span>}
         {sessionList.phase === "failed" && <span data-testid="desktop-session-list-error" role="status" className="pb-2 text-[11px] text-[#9a6032]">会话列表读取失败：{sessionList.error}；当前仅能寻址 main 会话</span>}
@@ -1299,11 +1281,18 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
         <Button type="button" size="sm" variant="ghost" data-testid="session-all" onClick={() => setSessionsOpen(true)}>全部会话 {sessions.length}</Button>
         {sessions.length === 0 && sessionList.phase === "read" && <span data-testid="desktop-sessions-empty" className="pb-2 text-[11px] text-[#9a6032]">本任务暂无会话；新建一个会话后才能对话</span>}
       </div>
-    </div>
+          </div>
+        </details>
+      </div>;
+      return toolbarTarget ? createPortal(toolbar, toolbarTarget) : <div className="flex shrink-0 justify-end px-4 py-1">{toolbar}</div>;
+    })()}
+    <MessageScrollerProvider><MessageScroller className="min-h-0 flex-1">
+    <MessageScrollerViewport data-testid="desktop-conversation-scroll" tabIndex={0} role="region" aria-label="对话消息">
+    <MessageScrollerContent className="mx-auto w-full max-w-[800px] gap-4 px-4 pt-5 pb-4">
     <ExecutionStateCard taskId={taskId} sessionId={sessionId} read={executionRead} approvals={approvalRead.phase === "read" ? approvalRead.approvals : []} />
     {/* [Pencil T05] ticket 140 S01 的审批位：只呈现 Host 已记录的确认，批准/拒绝走
         `task/approve|reject`。没有待确认时也说明「记录为空」，不把空读数当成功。 */}
-    <DesktopApprovalCard read={approvalRead} onResolve={resolveToolApproval} />
+
     {/* [Pencil T07] ticket 142: a created task lands on its `main` conversation entry
         even when no Provider/model is configured. The entry names that missing
         configuration and routes to 能力管理 → Providers; it never picks a
@@ -1323,22 +1312,20 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     {unwired && <p role="status" data-testid="desktop-unwired-tool" className="border-b border-line bg-soft px-4 py-1.5 text-[11px] text-muted">
       {unwired}面板未接线：{DESKTOP_TOOLS_UNWIRED.find((entry) => entry.label === unwired)?.reason ?? "生产读取路径尚未接线"}（不显示样例数据）
     </p>}
-    <section aria-label="SDK 对话历史" className="mx-auto w-full max-w-[820px] min-w-0 space-y-3 px-3 py-4">
-      <p className="text-xs text-muted">SDK JSONL 已确认历史 · 最近最多 80 条</p>
+    <section data-testid="desktop-message-column" aria-label="SDK 对话历史" className="flex min-w-0 flex-col gap-4">
       {snapshot && !snapshot.messages.length && <p className="py-8 text-center text-sm text-muted">尚未开始 · 无 SDK 会话记录</p>}
       {snapshot?.messages.map((message, index) => {
         // [Pencil T10] #145 历史里的来源芯片：Host 拼在提示词末尾的身份清单单独
         // 渲染为芯片，正文不再把这段尾注当作用户打字。无法解析时整条消息原样显示。
         const parsed = message.role === "user" ? splitPromptContext(message.text) : { text: message.text, references: [] };
-        return (<article key={index} className="min-w-0 text-sm">
-        <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
+        return (<article key={index} className="min-w-0 text-[13px]"><ChatMessage><MessageContent>
+        <MessageHeader className="gap-2 px-0 text-[12px] below-mid:text-[11px]">
           {message.role === "user" ? <LocalUserAvatar /> : <BrandMark size="sm" />}
           <span className="font-semibold text-ink">{message.role === "user" ? "你" : "Pi"}</span>
-          <span>实现与验证</span>
-        </div>
-        <div className={`min-w-0 rounded-[10px] border px-3 py-2 ${message.role === "user" ? "border-line bg-paper" : "border-line bg-paper"}`}>
-          <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{parsed.text}</p>
-        </div>
+        </MessageHeader>
+        <Bubble variant={message.role === "user" ? "outline" : "ghost"} className="w-full"><BubbleContent className="w-full">
+          {message.role === "assistant" ? <ConversationMarkdown text={parsed.text} /> : <p className="whitespace-pre-wrap break-words text-[13px] below-mid:text-[11px] [overflow-wrap:anywhere]">{parsed.text}</p>}
+        </BubbleContent></Bubble>
         {parsed.references.length > 0 && <div data-testid="history-references" className="mt-1 min-w-0">
           <ul className="flex min-w-0 flex-wrap gap-1.5">
             {parsed.references.map((entry, entryIndex) => <li key={entryIndex} data-testid="history-reference" data-reference-kind={entry.kind} title={[entry.source, entry.detail].filter(Boolean).join(" · ")} className="flex min-w-0 flex-wrap items-baseline gap-1.5 rounded-full border border-line bg-soft px-2 py-0.5 text-[11px]">
@@ -1350,17 +1337,39 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           </ul>
           <p className="mt-1 text-[11px] text-muted">本条消息附带以上来源；Host 附带的是身份清单，内容由 Agent 用工具读取。</p>
         </div>}
-        {message.usage && <p className="mt-1 text-xs text-muted">SDK 用量 · 输入 {message.usage.input} / 输出 {message.usage.output} / 缓存读取 {message.usage.cacheRead} / 写入 {message.usage.cacheWrite}</p>}
-      </article>);
+        {message.usage && <details className="mt-1 text-[10px] text-muted"><summary className="cursor-pointer">用量</summary><p>SDK 用量 · 输入 {message.usage.input} / 输出 {message.usage.output} / 缓存读取 {message.usage.cacheRead} / 写入 {message.usage.cacheWrite}</p></details>}
+      </MessageContent></ChatMessage></article>);
       })}
-      {stream && <article className="min-w-0 border-l-2 border-ink pl-3 text-sm"><p className="mb-1 text-xs text-muted">暂存回复 · 尚未核验</p><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stream}</p></article>}
+      {stream && <article className="min-w-0 border-l-2 border-ink pl-3 text-sm"><p className="mb-1 text-xs text-muted">暂存回复 · 尚未核验</p><ConversationMarkdown text={stream} /></article>}
     </section>
+    {toolPreviews.filter(row => row.turnId === attempt?.turnId).map(row => <section key={row.callId} data-testid="desktop-tool-preview" className="min-w-0 rounded-md border border-line bg-sidebar px-3 py-2 text-[11px]">
+      <div className="flex items-center justify-between gap-2"><strong className="font-mono">{row.tool}</strong><span className={row.failed ? "text-destructive" : "text-muted"}>{row.failed === undefined ? "参数预览 · 不用于审批" : row.failed ? "工具失败" : "工具结果"}</span></div>
+      <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">{row.text}</pre>
+    </section>)}
+    <DesktopApprovalCard key={sessionId} read={approvalRead} onResolve={resolveToolApproval} />
+    </MessageScrollerContent>
+    </MessageScrollerViewport>
+    <MessageScrollerButton aria-label="滚动到最新消息" />
+    </MessageScroller></MessageScrollerProvider>
     </div>
-    <div className="shrink-0 border-t border-line bg-paper px-3 py-3"><div className="mx-auto max-w-[820px] min-w-0">
+    <DesktopToolDock
+      taskId={taskId}
+      tool={activeTool}
+      tools={openTools}
+      activeTool={activeTool}
+      collapsed={toolDockCollapsed}
+      onSelectTool={(selected) => { setActiveTool(selected); setToolDockCollapsed(false); }}
+      onCloseTool={closeTool}
+      onCollapse={() => setToolDockCollapsed(true)}
+      onClose={() => { if (activeTool) closeTool(activeTool); }}
+      onReferenceFile={addFileReference}
+    />
+    </div>
+    <div data-testid="desktop-composer-container" className="shrink-0 px-4 pt-2 pb-4"><div className="mx-auto max-w-[768px] min-w-0">
       {draftError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{draftError}</p>}
       {referenceReport && <p role="alert" data-testid="composer-reference-refusal" className="mb-2 break-words text-xs text-[#ad4545]">{referenceReport}</p>}
       {receiptError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{receiptError}</p>}
-      {notice && <p role="status" className="mb-2 break-words text-xs text-muted">{notice}</p>}
+      {notice && <p role="status" className={cn("mb-2 break-words text-xs text-muted", notice === "已从 SDK 历史核验" && "sr-only")}>{notice}</p>}
       <div className="mb-2 flex flex-wrap gap-2">{invalidated ? <Button type="button" onClick={onBack}>返回任务列表</Button> : (!connected || !valid) && <Button type="button" onClick={() => setConnectionKey((key) => key + 1)}>重新连接</Button>}
         {attempt?.phase === "unknown" && <Button type="button" onClick={() => void refresh()}>查询原请求</Button>}
         {attempt?.phase === "unknown" && <Button type="button" disabled={!valid} onClick={() => void start(true)}>按原 ID 重试</Button>}
@@ -1369,7 +1378,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
       {/* [Pencil T10] #145 S01/S06 的浮动 Composer：S01 内联对话里与紧凑窗口共用
           这一个输入区（同一份文字、引用、模型与推理、权限、发送/停止逻辑），没有
           第二份实现；它就是该列底部钉住的最后一格，900 与 560 高度都可达。 */}
-      <form onSubmit={submit} data-testid="desktop-composer" data-surface="floating" className="min-w-0 rounded-[10px] border border-line bg-bg p-2">
+      <form onSubmit={submit} data-testid="desktop-composer" data-surface="floating" className="min-w-0 rounded-[10px] border border-line bg-paper px-3 py-2 shadow-xs">
         {references.length > 0 && <div className="mb-2 min-w-0" data-testid="composer-file-references">
           <ul className="flex min-w-0 flex-wrap gap-1.5">
             {references.map((reference) => {
@@ -1401,10 +1410,10 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           </ul>
           <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件。</p>
         </div>}
-        <textarea ref={messageInput} aria-label="消息" readOnly={historyReadOnly} value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
+        <textarea ref={messageInput} aria-label="消息" readOnly={historyReadOnly} value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={1} maxLength={16384} className="block max-h-32 w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent py-0 text-[12px] leading-[22px] outline-none" placeholder="输入后续指导 Agent，使用 @ 引用工作区文件，使用 $ 调用技能…" />
+        <div className="conversation-composer-controls mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
-            <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="text-muted"><Icon name="plus" /></Button>
+            <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="h-[26px] w-[26px] text-muted"><Icon name="plus" /></Button>
           </span></TooltipTrigger><TooltipContent>附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件</TooltipContent></Tooltip>
           <input ref={attachmentInput} type="file" multiple aria-label="附件选择" data-testid="desktop-composer-file-input" className="hidden" onChange={(event) => { addAttachments(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="权限说明" className="inline-flex">
@@ -1415,50 +1424,40 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
               session's own model menu (切换保留历史); the segmented control lists
               only the levels the bound model declares — a model without
               reasoning offers none, and no `off` is fabricated for it. */}
-          <div className="relative">
-            <Button type="button" size="sm" data-testid="composer-model" aria-haspopup="menu" aria-expanded={modelOpen}
-              title={boundModel === null ? "本会话尚未绑定模型：先在「能力管理 → Providers」完成配置" : `${boundModel.name} · 窗口 ${boundModel.contextWindow} tokens · 切换模型保留本会话历史`}
+          <div data-testid="composer-model-reasoning" className="ml-auto flex min-w-0 items-center gap-1 rounded-md border border-line">
+          <div className="relative min-w-0">
+            <Button type="button" variant="ghost" size="sm" data-testid="composer-model" aria-haspopup="menu" aria-expanded={modelOpen}
+              title={boundModel === null ? "本会话尚未绑定模型：先在「能力管理 → Providers」完成配置" : `${boundModel.name} · ID ${boundModel.id} · 窗口 ${boundModel.contextWindow} tokens · 切换模型保留本会话历史`}
               onClick={() => { setThinkingError(null); setModelOpen((open) => !open); }}>
-              <span data-testid="composer-model-name">{boundModel === null ? (sessionList.phase === "read" ? "未绑定模型" : "正在读取模型") : boundModel.name}</span><Icon name="down" className="h-3 w-3" />
+              <span data-testid="composer-model-name" className="max-w-36 truncate">{boundModel === null ? (sessionList.phase === "read" ? "未绑定模型" : "正在读取模型") : boundModel.name}</span><Icon name="down" />
             </Button>
             {modelOpen && <div role="menu" aria-label="会话模型" className="absolute right-0 bottom-full z-30 mb-1 w-[280px] rounded-[7px] border border-line bg-paper p-2 text-left shadow-md">
               {providerModels.length === 0 ? <p className="px-1 text-[10px] leading-5 text-muted">Host 未返回当前 Provider 的模型列表；切换模型不可用。</p> : <>
                 <p className="px-1 pb-1 text-[10px] leading-5 text-muted">切换只改本会话的绑定：历史与 JSONL 不变，后续回合用新模型。窗口装不下本会话上下文或回合进行中时，Host 会按名字拒绝。</p>
-                {providerModels.map((row) => <Button key={row.id} type="button" role="menuitemradio" aria-checked={row.id === boundModelId} variant="ghost" size="sm" className="w-full justify-start" disabled={thinkingBusy} onClick={() => void chooseModel(row.id)}>{row.name}<span className="ml-auto text-muted">{formatWindow(row.contextWindow)} · {row.reasoningLevels.length === 0 ? "无推理档位" : `${row.reasoningLevels.length} 档`}</span></Button>)}
+                {providerModels.map((row) => <Button key={row.id} type="button" role="menuitemradio" aria-checked={row.id === boundModelId} variant="ghost" size="sm" className="w-full justify-start" disabled={thinkingBusy} onClick={() => void chooseModel(row.id)}><span className="min-w-0 flex-1 truncate" title={`${row.name} · ${row.id}`}><span data-model-name>{row.name}</span><span className="block truncate text-[10px] text-muted">{row.id}</span></span><span className="ml-auto text-muted">{formatWindow(row.contextWindow)} · {row.reasoningLevels.length === 0 ? "无推理档位" : `${row.reasoningLevels.length} 档`}</span></Button>)}
                 <Button type="button" variant="ghost" size="sm" className="mt-1 w-full justify-start" onClick={() => { setModelOpen(false); onOpenProviders(); }}><Icon name="settings" />能力管理 · Providers</Button>
               </>}
               {thinkingError && <p role="alert" className="mt-1 border border-[#e0b4b4] bg-[#fdf3f3] p-1.5 text-[10px] leading-5 break-words text-[#ad4545]">{thinkingError}</p>}
             </div>}
           </div>
-          <div data-testid="composer-reasoning" role="group" aria-label="推理档位" title={thinkingLabel} className="inline-flex min-w-0 items-center gap-0.5 rounded-[6px] border border-line bg-soft px-0.5">
-            {readoutRead.phase !== "read" ? <span className="px-1.5 py-0.5 text-[10px] text-muted">{readoutRead.phase === "reading" ? "推理档位未读取" : "推理档位读取失败"}</span>
-              : boundModel === null ? <span className="px-1.5 py-0.5 text-[10px] text-muted">未绑定模型</span>
-              : reasoningLevels.length === 0 ? <span className="px-1.5 py-0.5 text-[10px] text-muted">无推理档位</span>
-              : reasoningLevels.map((level: SessionThinkingLevel) => <Button key={level} type="button" size="sm" variant={level === thinkingLevel ? "secondary" : "ghost"} aria-pressed={level === thinkingLevel} disabled={thinkingBusy} className="h-6 px-1.5 text-[10px]" onClick={() => void chooseThinking(level)}>{REASONING_LEVEL_TEXT[level] ?? level}</Button>)}
+          <div data-testid="composer-reasoning" role="group" aria-label="推理档位" title={thinkingLabel} className="min-w-0">
+            {readoutRead.phase !== "read" ? <span className="px-1 text-[10px] text-muted">{readoutRead.phase === "reading" ? "推理档位未读取" : "推理档位读取失败"}</span>
+              : boundModel === null ? <span className="px-1 text-[10px] text-muted">未绑定模型</span>
+              : reasoningLevels.length === 0 ? <span className="px-1 text-[10px] text-muted">无推理档位</span>
+              : <ToggleGroup type="single" size="sm" aria-label="推理档位" value={thinkingLevel ?? ""} disabled={thinkingBusy} onValueChange={(level) => { if (level) void chooseThinking(level as SessionThinkingLevel); }}>
+                {reasoningLevels.map((level) => <ToggleGroupItem key={level} value={level} aria-label={REASONING_LEVEL_TEXT[level] ?? level}>{REASONING_LEVEL_TEXT[level] ?? level}</ToggleGroupItem>)}
+              </ToggleGroup>}
+          </div>
           </div>
           {thinkingError && !modelOpen && <span role="alert" className="min-w-0 break-words text-[10px] text-[#ad4545]">{thinkingError}</span>}
-          <span data-testid="composer-context" title={contextTitle} className="min-w-0 break-words">{contextLabel}</span>
-          <span data-testid="composer-usage" title={`${usageDetail} 本会话 SDK 累计：${readout?.usage ? `输入 ${readout.usage.input} / 输出 ${readout.usage.output} / 缓存读 ${readout.usage.cacheRead} / 写 ${readout.usage.cacheWrite}（${readout.turns} 条回复）` : "SDK 未报告"}`} className="ml-auto min-w-0 break-words">
+          <span data-testid="composer-context" title={contextTitle} className="min-w-0 truncate text-[10px]">{contextLabel}</span>
+          <span data-testid="composer-usage" title={`${usageDetail} 本会话 SDK 累计：${readout?.usage ? `输入 ${readout.usage.input} / 输出 ${readout.usage.output} / 缓存读 ${readout.usage.cacheRead} / 写 ${readout.usage.cacheWrite}（${readout.turns} 条回复）` : "SDK 未报告"}`} className="sr-only">
             {!usageSnapshot ? "近期用量未核验" : reportedMessages.length ? `近期已报告输入+输出 ${recentTokens} tokens` : "近期用量未报告"}
           </span>
-          <Button type="submit" variant="default" size="icon" disabled={blocked || !draft.trim()} aria-label="发送" title="发送"><Icon name="arrow" /></Button>
+          <Button type="submit" variant="default" size="icon-sm" disabled={blocked || !draft.trim()} aria-label="发送" title="发送" className="h-[26px] w-[26px]"><Icon name="arrow" /></Button>
         </div>
       </form>
     </div></div>
-    </div>
-    <DesktopToolDock
-      taskId={taskId}
-      tool={activeTool}
-      tools={openTools}
-      activeTool={activeTool}
-      collapsed={toolDockCollapsed}
-      onSelectTool={(selected) => { setActiveTool(selected); setToolDockCollapsed(false); }}
-      onCloseTool={closeTool}
-      onCollapse={() => setToolDockCollapsed(true)}
-      onClose={() => { if (activeTool) closeTool(activeTool); }}
-      onReferenceFile={addFileReference}
-    />
-    </div>
     {archivePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
       <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
         <h2 className="text-base font-semibold">归档当前任务</h2>

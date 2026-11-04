@@ -582,7 +582,7 @@ describe("Desktop production data", () => {
     holdRead = false;
     releaseRead?.();
     expect(await screen.findByRole("alert")).toHaveTextContent("项目名称重复");
-    expect(screen.getByLabelText("工作空间名称 *")).toHaveValue("未保存项目");
+    expect(await screen.findByLabelText("工作空间名称 *")).toHaveValue("未保存项目");
     expect(screen.getByLabelText("仓库路径 1")).toHaveValue("/local/web");
     expect(screen.getByLabelText("目录路径 1")).toHaveValue("/local/notes");
     rejectCreate = false;
@@ -873,7 +873,7 @@ describe("Desktop production data", () => {
     fireEvent.click(await screen.findByRole("button", { name: "查看 main 会话" }));
     const conversation = await screen.findByTestId("desktop-conversation");
     expect(await within(conversation).findByText("SDK main 完成结果")).toBeInTheDocument();
-    expect(within(conversation).getByRole("tab", { name: "主会话" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "主会话" })).toBeInTheDocument();
     expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("真实任务")).toBeInTheDocument();
     expect(sdkTurn).toHaveBeenCalledWith({ action: "subscribe", taskId: "real-1", sessionId: "main" });
     expect(sdkTurn).not.toHaveBeenCalledWith(expect.objectContaining({ action: "start" }));
@@ -976,8 +976,8 @@ describe("Desktop production data", () => {
 
     const reasoning = await within(conversation).findByTestId("composer-reasoning");
     // Only the levels this model declares are offered, and the stored one is pressed.
-    await waitFor(() => expect(within(reasoning).getByRole("button", { name: "很高" })).toHaveAttribute("aria-pressed", "true"));
-    expect(within(reasoning).getAllByRole("button").map((button) => button.textContent)).toEqual(["中", "很高"]);
+    await waitFor(() => expect(within(reasoning).getByRole("radio", { name: "很高" })).toHaveAttribute("aria-checked", "true"));
+    expect(within(reasoning).getAllByRole("radio").map((button) => button.textContent)).toEqual(["中", "很高"]);
     expect(within(conversation).queryByText("推理（未接线）")).toBeNull();
     await waitFor(() => expect(within(conversation).getByTestId("composer-context")).toHaveTextContent("上下文 24.8k / 200k"));
     expect(taskOp).toHaveBeenCalledWith("real-1", "task/sessionReadout", { sessionId: "main" });

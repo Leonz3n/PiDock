@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import {
@@ -43,16 +43,62 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
   const [outcome, setOutcome] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
+  const cardRef = useRef<HTMLElement>(null);
+  const busyRef = useRef(false);
+  const decide = useCallback(async (approval: TaskApproval, decision: ApprovalDecision) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(approval.approvalId);
+    setFailure(null);
+    setOutcome(null);
+    const refused = approvalRefusal(approval);
+    if (refused !== null) { setBusy(null); busyRef.current = false; setFailure(refused); return; }
+    const error = await onResolve(approval, decision);
+    setBusy(null);
+    busyRef.current = false;
+    if (error !== null) { setFailure(error); return; }
+    setOutcome(
+      decision === "approved"
+        ? `已批准「${approvalToolLabel(approval.tool)}」：Host 重新校验后最多执行一次。`
+        : `已拒绝「${approvalToolLabel(approval.tool)}」，未执行。${reason.trim() ? `本页记录的拒绝原因：${reason.trim()}` : ""}`,
+    );
+    setReason("");
+  }, [onResolve, reason]);
+
+  useEffect(() => {
+    const pending = read.phase === "read" ? read.approvals.find(approval => approval.status === "pending" && !approval.foreign) : undefined;
+    if (!pending) return;
+    const keyboard = (event: KeyboardEvent) => {
+      if (event.repeat || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+      if (event.target instanceof Element && event.target.closest('[data-testid="desktop-tool-dock"]')) return;
+      const card = cardRef.current;
+      if (!card || card.closest("[hidden], [inert]") || document.querySelector('[aria-modal="true"]')) return;
+      // Responsive tool docks hide the message surface through CSS. Check at
+      // dispatch time so resizing cannot leave a previously visible handler armed.
+      for (let surface: HTMLElement | null = card; surface; surface = surface.parentElement) {
+        const style = getComputedStyle(surface);
+        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return;
+      }
+      if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey))) {
+        event.preventDefault();
+        event.stopPropagation();
+        void decide(pending, event.key === "Escape" ? "rejected" : "approved");
+      }
+    };
+    window.addEventListener("keydown", keyboard, true);
+    return () => window.removeEventListener("keydown", keyboard, true);
+  }, [read, decide]);
+
   if (read.phase === "reading") {
     return (
-      <section data-testid="desktop-approval-card" aria-label="工具审批" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 below-mid:px-3">
+      <section data-testid="desktop-approval-card" aria-label="工具审批" className="min-w-0 rounded-md border border-line bg-paper px-3 py-2">
         <p role="status" className="text-[11px] text-muted">正在读取 Host 的确认记录…</p>
       </section>
     );
   }
   if (read.phase === "failed") {
     return (
-      <section data-testid="desktop-approval-card" aria-label="工具审批" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 below-mid:px-3">
+      <section data-testid="desktop-approval-card" aria-label="工具审批" className="min-w-0 rounded-md border border-line bg-paper px-3 py-2">
         <p role="status" data-testid="desktop-approval-error" className="break-words border-l-2 border-[#dfc99f] pl-2 text-[11px] text-[#9a6032]">
           确认记录读取失败：{read.error || "Host 未说明原因"}。本页不显示未读到的确认，也不提供批准入口。
         </p>
@@ -63,45 +109,29 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
   const settled = read.approvals.filter((approval) => approval.status !== "pending" || approval.foreign);
   if (read.approvals.length === 0) {
     return (
-      <section data-testid="desktop-approval-card" aria-label="工具审批" className="shrink-0 border-b border-line bg-soft px-4 py-1.5 below-mid:px-3">
+      <section data-testid="desktop-approval-card" aria-label="工具审批" className="sr-only">
         <p role="status" data-testid="desktop-approval-empty" className="text-[11px] text-muted">本会话没有待确认的工具操作；Host 的记录为空，不是读取失败。</p>
       </section>
     );
   }
 
-  const decide = async (approval: TaskApproval, decision: ApprovalDecision) => {
-    if (busy) return;
-    setBusy(approval.approvalId);
-    setFailure(null);
-    setOutcome(null);
-    const refused = approvalRefusal(approval);
-    if (refused !== null) { setBusy(null); setFailure(refused); return; }
-    const error = await onResolve(approval, decision);
-    setBusy(null);
-    if (error !== null) { setFailure(error); return; }
-    setOutcome(
-      decision === "approved"
-        ? `已批准「${approvalToolLabel(approval.tool)}」：Host 重新校验后最多执行一次。`
-        : `已拒绝「${approvalToolLabel(approval.tool)}」，未执行。${reason.trim() ? `本页记录的拒绝原因：${reason.trim()}` : ""}`,
-    );
-    setReason("");
-  };
 
   return (
-    <section data-testid="desktop-approval-card" aria-label="工具审批" className="shrink-0 border-b border-line bg-soft px-4 py-2 below-mid:px-3">
+    <section ref={cardRef} data-testid="desktop-approval-card" aria-label="工具审批" className="flex min-w-0 flex-col gap-2">
       {pending.map((approval) => (
-        <div key={approval.approvalId} data-testid={`desktop-approval-${approval.approvalId}`} className="mb-1.5 rounded-[6px] border border-line bg-paper p-2 last:mb-0">
+        <div key={approval.approvalId} data-testid={`desktop-approval-${approval.approvalId}`} className="min-w-0 rounded-lg border border-attention bg-attention-soft px-3.5 py-3">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <strong className="text-[12px] text-ink">待批准：{approvalToolLabel(approval.tool)}</strong>
             <Badge variant="soft">{approval.tool}</Badge>
             <span data-testid="desktop-approval-session" className="text-[10px] text-muted">会话 · {approval.sessionId}</span>
-            <span data-testid="desktop-approval-version" className="ml-auto text-[10px] text-muted">载荷版本 · {approval.payloadVersion}</span>
           </div>
           <p data-testid="desktop-approval-target" className="mt-0.5 break-all text-[11px] text-ink">目标：{approval.target || "（Host 未记录目标）"}</p>
           {approval.operation !== null && (
-            <p data-testid="desktop-approval-operation" className="mt-0.5 break-all text-[11px] text-ink">操作：{approval.operation}</p>
+            <p data-testid="desktop-approval-operation" className="my-2 whitespace-pre-wrap rounded border border-line bg-paper px-2 py-1.5 font-mono text-[11px] break-all text-ink">实际执行参数：{approval.operation}</p>
           )}
           <p data-testid="desktop-approval-real-target" className="mt-0.5 break-all text-[11px] text-ink">{approvalRealTargetText(approval)}</p>
+          <details className="mt-1 text-[10px] text-muted"><summary className="cursor-pointer">安全边界与拒绝原因</summary>
+          <p data-testid="desktop-approval-version" className="break-all">载荷版本 · {approval.payloadVersion}</p>
           <p data-testid="desktop-approval-impact" className="mt-0.5 break-words text-[10px] leading-4 text-muted">{APPROVAL_IMPACT_TEXT}</p>
           <p data-testid="desktop-approval-shared" className="break-words text-[10px] leading-4 text-muted">{SHARED_ROOT_IMPACT_TEXT}</p>
           <p data-testid="desktop-approval-expiry" className="break-words text-[10px] leading-4 text-muted">{APPROVAL_EXPIRY_TEXT}</p>
@@ -115,7 +145,8 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
               className="mt-0.5 w-full rounded-[5px] border border-line bg-bg px-1.5 py-1 text-[11px] text-ink"
             />
           </label>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          </details>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Button type="button" size="sm" disabled={busy !== null} data-testid="desktop-approval-approve" onClick={() => void decide(approval, "approved")}>批准</Button>
             <Button type="button" size="sm" variant="outline" disabled={busy !== null} data-testid="desktop-approval-deny" onClick={() => void decide(approval, "rejected")}>拒绝</Button>
             <span className="text-[10px] text-muted">批准后 Host 重新校验目标与身份；同一确认不会被执行两次。</span>
@@ -123,10 +154,11 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
         </div>
       ))}
       {settled.length > 0 && (
-        <ul data-testid="desktop-approval-settled" className="mt-1 space-y-0.5">
+        <ul data-testid="desktop-approval-settled" className="mt-1 flex flex-col gap-0.5">
           {settled.map((approval) => (
             <li key={approval.approvalId} data-testid={`desktop-approval-settled-${approval.approvalId}`} className="break-words text-[10px] text-muted">
-              {approvalToolLabel(approval.tool)} · {approvalStatusText(approval)} · 会话 {approval.sessionId} · 载荷版本 {approval.payloadVersion}
+              {approvalToolLabel(approval.tool)} · {approvalStatusText(approval)} · 会话 {approval.sessionId}
+              <details className="inline-block pl-1 align-top"><summary className="cursor-pointer">载荷版本</summary><span className="break-all">{approval.payloadVersion}</span></details>
               {approval.foreign ? " · 其他会话的确认，本页不代确认" : ""}
             </li>
           ))}

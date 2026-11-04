@@ -80,22 +80,16 @@ afterEach(() => {
 });
 
 describe("Desktop shell column at the production minimum (#49)", () => {
-  it("wraps the task header and its toolbar so the toolbar cannot cover the title", () => {
+  it("keeps task tools available from one compact conversation action entry", () => {
     mountConversation();
-    const header = screen.getByTestId("desktop-conversation-header");
-    expect(tiers(header.className)).toContain("flex-wrap");
-    // The title must be allowed to shrink; the toolbar must be allowed to shrink
-    // with it instead of holding a fixed ~288px that overflows a 192/292px column.
-    expect(tiers(screen.getByTestId("desktop-conversation-title").className)).toContain("min-w-0");
+    expect(screen.queryByText("Task workspace")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("会话与工具操作")).toBeInTheDocument();
     const toolbar = screen.getByTestId("desktop-conversation-toolbar");
-    expect(tiers(toolbar.className)).toContain("flex-wrap");
-    expect(tiers(toolbar.className)).not.toContain("shrink-0");
-    // Every real control stays reachable in the compact form.
     for (const label of ["运行", "浏览器", "文件", "日志", "协议", "任务操作", "返回任务列表"]) {
       expect(within(toolbar).getByRole("button", { name: label })).toBeInTheDocument();
     }
     expect(within(toolbar).queryByRole("button", { name: "终端" })).not.toBeInTheDocument();
-    expect(screen.getByTestId("desktop-conversation-eyebrow")).toHaveTextContent("Task workspace");
+    // Actual width/intersection checks live in the U03 production Electron capture.
   });
 
   it("keeps the breadcrumb on one line and truncates only the real names", () => {

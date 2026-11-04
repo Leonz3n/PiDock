@@ -91,6 +91,7 @@ export function DesktopInventory() {
   const [factsActiveSession, setFactsActiveSession] = useState<{ taskId: string; sessionId: string | null } | null>(null);
   const reportActiveSession = useCallback((taskId: string, sessionId: string | null) => setFactsActiveSession({ taskId, sessionId }), []);
   /** [#139] The session the sidebar asked the open task page to show; `undefined` = the task's active session. */
+  const [conversationToolbar, setConversationToolbar] = useState<HTMLDivElement | null>(null);
   const [conversationOpen, setConversationOpen] = useState(false);
   const [sessionFocus, setSessionFocus] = useState<string | undefined>(undefined);
   /** 能力管理 and 本机设置 — the 系统 group's two local pages, each a real page (#24). */
@@ -517,7 +518,8 @@ export function DesktopInventory() {
     roots={ready?.inventory.roots ?? []}
     rootRetry={{ busy, pending: rootRetryPending, error: rootRetryError, run: () => void retryRoots() }}
     breadcrumb={breadcrumb}
-    headerActions={activeTask && !conversationOpen ? <>
+    headerFacts={activeTask && conversationOpen ? <DesktopTaskFacts compact taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge} onBack={() => setConversationOpen(false)} /> : undefined}
+    headerActions={activeTask && conversationOpen ? <div ref={setConversationToolbar} className="min-w-0" /> : activeTask && !conversationOpen ? <>
       <Button type="button" size="sm" variant="default" disabled={factsActiveSession?.taskId !== activeTask.id || factsActiveSession.sessionId === null} onClick={() => { if (factsActiveSession?.sessionId) { setSessionFocus(factsActiveSession.sessionId); setConversationOpen(true); } }}>进入活跃对话</Button>
       <Button type="button" size="sm" variant="outline" onClick={returnToWorkspace}>返回工作空间总览</Button>
     </> : !activeTask && !manage && !usageOpen && !schedulesOpen && !archiveOpen && !attentionOpen && !environmentOpen && selection.kind === "project" ? <>
@@ -562,9 +564,8 @@ export function DesktopInventory() {
   // Task facts and conversations are separate destinations; only an explicit
   // session choice mounts the SDK conversation. Disk identities stay Host-owned.
   if (activeTask) return shell(conversationOpen ? <div className="flex h-full min-h-0 flex-col">
-    <DesktopTaskFacts compact taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge} onBack={() => setConversationOpen(false)} />
     <div className="min-h-0 flex-1">
-      <DesktopConversation key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => setConversationOpen(false)} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
+      <DesktopConversation toolbarTarget={conversationToolbar} key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => setConversationOpen(false)} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
     </div>
   </div> : <DesktopTaskFacts headerInShell destinationActive={localPage === null} onActiveSession={reportActiveSession} taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge}
     onOpenSession={(sessionId) => { setSessionFocus(sessionId); setConversationOpen(true); }}

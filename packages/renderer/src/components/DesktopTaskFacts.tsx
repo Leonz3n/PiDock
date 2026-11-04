@@ -156,12 +156,12 @@ export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, de
     setSessionCount(result.list.sessions.length);
     if (result.list.activeSessionId) onOpenSession?.(result.list.activeSessionId);
   };
-  if (compact) return <section aria-label="会话工作区摘要" data-testid="desktop-session-facts" className="flex shrink-0 items-center gap-3 border-b border-line bg-paper px-4 py-2 text-[10px] text-muted">
-    <Button type="button" size="sm" variant="ghost" onClick={onBack}>返回任务事实</Button>
+  if (compact) return <section aria-label="会话工作区摘要" data-testid="desktop-session-facts" className="flex min-w-0 items-center gap-2 text-[10px] text-muted">
+    <Button type="button" size="sm" variant="ghost" onClick={onBack} aria-label="返回任务事实" title="返回任务事实"><span className="below-mid:hidden">返回任务事实</span><span className="hidden below-mid:inline">←</span></Button>
     <div className="min-w-0 flex-1">
       {loading && <span role="status">正在核验任务来源…</span>}
       {error && <span role="alert">{error}</span>}
-      {roots.map((root) => <p key={root.id} className="truncate font-mono" title={rootFact(root)}>{rootBadge(root)} · {rootFact(root)}{root.verification && root.verification.state !== "ready" ? ` · ${VERIFICATION_LABELS[root.verification.state]}：${root.verification.reason}` : ""}</p>)}
+      {roots.map((root) => <p key={root.id} className="truncate font-mono" title={rootFact(root)}>{rootBadge(root)} · {root.kind === "worktree" ? `${observedText(root.workingBranch, value => value, "分支未上报")} · 基线 ${root.baseCommit?.slice(0, 7) ?? "未记录"} · ${hostText(root.path, "路径未上报")}` : rootFact(root)}{root.verification && root.verification.state !== "ready" ? ` · ${VERIFICATION_LABELS[root.verification.state]}：${root.verification.reason}` : ""}</p>)}
       {!loading && !error && roots.length === 0 && <span>Host 未上报任何来源</span>}
     </div>
   </section>;

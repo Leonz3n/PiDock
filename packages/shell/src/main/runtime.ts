@@ -2009,7 +2009,7 @@ export function registerIpc(
     };
   };
   const subscriptions = new Map<number, Subscription>();
-  const pendingNavigation = new Map<number, { webContents: WebContents; listener: () => void }>();
+  const pendingNavigation = new Map<number, { taskId: string; webContents: WebContents; listener: () => void }>();
   const revisions = new Map<number, number>();
   function revoke(webContentsId: number): void {
     revisions.set(webContentsId, (revisions.get(webContentsId) ?? 0) + 1);
@@ -2089,7 +2089,7 @@ export function registerIpc(
           if (revisions.get(sender.webContentsId) === revision) revoke(sender.webContentsId);
         };
         event.sender.once("did-start-navigation", onNavigation);
-        pendingNavigation.set(sender.webContentsId, { webContents: event.sender, listener: onNavigation });
+        pendingNavigation.set(sender.webContentsId, { taskId, webContents: event.sender, listener: onNavigation });
         try {
         await tasks.routeTaskOp({ taskId, op: "task/sdkProjection", payload: { sessionId }, origin: { kind: "shell-ui", senderWebContentsId: sender.webContentsId } });
         registry.requireShellSender(event);
@@ -2774,7 +2774,10 @@ export function registerIpc(
       if (op === "task/resumeAppend" && !append) {
         return { ok: false as const, error: "真实任务准备恢复尚未接入" };
       }
-      if (pendingNavigation.has(sender.webContentsId) || subscriptions.get(sender.webContentsId)?.taskId !== taskId) revoke(sender.webContentsId);
+      // A same-task read can race the pending subscribe's projection. Preserve
+      // that task binding; a different task still revokes both pending and live authority.
+      const sdkTask = pendingNavigation.get(sender.webContentsId)?.taskId ?? subscriptions.get(sender.webContentsId)?.taskId;
+      if (sdkTask !== taskId) revoke(sender.webContentsId);
       // A persisted Provider selection is reinstalled on first contact with the
       // task, before any turn op can run against an unconfigured context. The
       // status route reports failures, so an install failure never turns an
