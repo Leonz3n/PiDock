@@ -1288,6 +1288,17 @@ export class ProjectTaskCreation {
           (record.dirLinks?.length ?? 0) !== intent.directories.length || intent.directories.some((dir) => !record.dirLinks?.some((entry) => entry.directoryId === dir.id && entry.linkName === dir.linkName && entry.sourcePath === dir.path))) {
         throw new Error("任务磁盘记录与创建意图不符");
       }
+      // Bind the verified task to the user's confirmed workspace BEFORE its first
+      // non-provision Host operation. A scheduled save bootstraps main-owned
+      // service identity; claiming afterward would stale that identity and make
+      // a later quit fail. A refused schedule remains pending and retryable.
+      this.store.assertTaskPath(intent.taskDir);
+      for (const source of [...intent.repos, ...intent.directories]) this.store.assertTaskPath(source.path);
+      await this.roots.register(intent.taskDir);
+      checkProject();
+      const association = this.projects.association(intent.taskId, this.roots);
+      if (association.state === "unassigned") await this.projects.claim(intent.taskId, intent.projectId, this.roots);
+      else if (association.state !== "assigned" || association.projectId !== intent.projectId) throw new Error("任务归属身份冲突，需要人工修复");
       // [Pencil T17] #152: the definition is saved through the Host's own
       // schedule path, so `scheduleDefinitionIssues` (rule/timezone/Provider/
       // model/credential/directory) is the single validation authority. A
@@ -1319,13 +1330,6 @@ export class ProjectTaskCreation {
           this.store.write(intent);
         }
       }
-      this.store.assertTaskPath(intent.taskDir);
-      for (const source of [...intent.repos, ...intent.directories]) this.store.assertTaskPath(source.path);
-      await this.roots.register(intent.taskDir);
-      checkProject();
-      const association = this.projects.association(intent.taskId, this.roots);
-      if (association.state === "unassigned") await this.projects.claim(intent.taskId, intent.projectId, this.roots);
-      else if (association.state !== "assigned" || association.projectId !== intent.projectId) throw new Error("任务归属身份冲突，需要人工修复");
       intent.state = "complete"; this.store.write(intent);
       return { taskId: intent.taskId, projectId: intent.projectId };
     }

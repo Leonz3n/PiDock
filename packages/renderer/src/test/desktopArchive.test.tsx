@@ -268,3 +268,37 @@ it("does not present a cleaned task's workspace as ready after restore", async (
   expect(region).toHaveTextContent("修复入口：从工作空间原始仓库重新准备该任务的工作副本");
   expect(region).not.toHaveTextContent("身份仍然匹配");
 });
+
+it("#162 focuses cancel, contains focus and returns to confirmation trigger on Escape", async () => {
+  const user = (await import("@testing-library/user-event")).default.setup();
+  const taskOp = cleanupBridge();
+  render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
+  await openHostPreview();
+  const trigger = screen.getByRole("button", { name: "确认清理" });
+  await user.click(trigger);
+  expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+  await user.tab({ shift: true });
+  expect(screen.getByRole("dialog", { name: "确认清理任务" })).toContainElement(document.activeElement as HTMLElement);
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(trigger).toHaveFocus();
+  expect(taskOp.mock.calls.some(([,op]) => op === "task/runCleanup")).toBe(false);
+});
+
+it("#162 keeps a busy confirmation inert until refusal, then recovers the preview", async () => {
+  const user = (await import("@testing-library/user-event")).default.setup();
+  let reply!: (value: unknown) => void;
+  const taskOp = bridge((taskId, op) => op === "task/runCleanup" ? new Promise(resolve => { reply = resolve; }) : op === "task/cleanupPreview" ? { ok: true, payload: { preview } } : { ok: true, payload: lifecycle(taskId, true) });
+  render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
+  await openHostPreview();
+  await user.click(screen.getByRole("button", { name: "确认清理" }));
+  await user.click(screen.getByRole("button", { name: "执行清理" }));
+  expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("dialog", { name: "确认清理任务" })).toBeInTheDocument();
+  reply({ ok: false, error: "identity-mismatch: 工作副本身份改变" });
+  expect(await screen.findByRole("alert")).toHaveTextContent("identity-mismatch");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("button", { name: "确认清理" })).toBeEnabled();
+  expect(taskOp.mock.calls.filter(([,op]) => op === "task/runCleanup")).toHaveLength(1);
+});

@@ -219,7 +219,7 @@ export function DesktopShell({
         </nav>
       </aside>}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {!management && <header data-testid="desktop-breadcrumb" className="flex h-[52px] shrink-0 items-center gap-2 border-b border-line bg-paper px-5 text-[12px]">
+        {!management && view.view !== "schedules" && <header data-testid="desktop-breadcrumb" className="flex h-[52px] shrink-0 items-center gap-2 border-b border-line bg-paper px-5 text-[12px]">
           <span className="min-w-0 truncate text-muted">{breadcrumb.project ?? "工作区"}</span>
           {breadcrumb.task && <><span className="text-muted">/</span><span className="min-w-0 truncate font-semibold">{breadcrumb.task}</span></>}
           {breadcrumb.page && <><span className="text-muted">/</span><span className="min-w-0 truncate">{breadcrumb.page}</span></>}

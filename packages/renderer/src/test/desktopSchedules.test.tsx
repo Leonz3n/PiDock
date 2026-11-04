@@ -31,10 +31,10 @@ it("lists Host schedules and runs across tasks with working filters and task nav
     ? { schedules: [schedule(taskId, taskId === "a")], templates: [] } : { runs: [run(taskId)] } } }));
   const onOpenTask = vi.fn();
   render(<DesktopSchedulesPage tasks={tasks} onOpenTask={onOpenTask} />);
-  await waitFor(() => expect(screen.getAllByText("0 9 * * *")).toHaveLength(2));
+  await waitFor(() => expect(screen.getAllByRole("button", { name: /^选择规则/ })).toHaveLength(2));
   expect(within(document.querySelector('[data-schedule-row="schedule-a"]')!).getByText("计划 a")).toBeInTheDocument();
   expect(screen.getAllByText("已完成").length).toBeGreaterThan(0);
-  fireEvent.click(screen.getByRole("button", { name: "已暂停" }));
+  fireEvent.click(screen.getByRole("radio", { name: "已暂停" }));
   expect(document.querySelector('[data-schedule-row="schedule-a"]')).toBeNull();
   expect(within(document.querySelector('[data-schedule-row="schedule-b"]')!).getByText("计划 b")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "查看任务" }));
@@ -50,8 +50,8 @@ it("names a blank schedule field instead of an empty rule, name or table cell", 
     ? { schedules: [{ ...schedule(taskId, true), name: "", ruleText: "", timezone: "", providerId: "", model: "" }], templates: [] }
     : { runs: [{ ...run(taskId), startedAt: "", reason: "" }] } } }));
   render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
-  await screen.findByText("Host 未上报规则");
-  const row = document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement;
+  await screen.findByRole("button", { name: "选择规则 Host 未上报定时任务名称" });
+  const row = screen.getByRole("region", { name: "定时任务详情" });
   expect(row).toHaveTextContent("Host 未上报规则");
   expect(row).toHaveTextContent("Host 未上报时区");
   expect(row).toHaveTextContent("Host 未上报定时任务名称");
@@ -61,11 +61,11 @@ it("names a blank schedule field instead of an empty rule, name or table cell", 
   // `??` used to miss a real `""`; the em dash is the named absence for this column.
   // The run table now also names an absent actual model, so "—" appears in
   // both the model and the detail column; at least one named absence is required.
-  expect(runRow.getAllByText("—").length).toBeGreaterThan(0);
+  expect(document.querySelector('[data-schedule-run="run-a"]')).toHaveTextContent("—");
   // The run table's 定时任务 cell names the same blank schedule name instead of
   // rendering a blank cell under a column header (the card above is not the only
   // render path of `parseSchedules.name`).
-  expect(runRow.getByText("Host 未上报定时任务名称")).toBeInTheDocument();
+  expect(runRow.getByText(/Host 未上报定时任务名称/)).toBeInTheDocument();
   // ...and a run whose schedule really is gone keeps its own wording, so the two
   // cases stay distinguishable instead of collapsing into one string.
   expect(runRow.queryByText("已删除的定时任务")).toBeNull();
@@ -75,15 +75,15 @@ it("shows partial failure without presenting a global empty result", async () =>
   bridge((taskId, op) => taskId === "a" ? { ok: false, error: "host-unavailable" } : { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } });
   render(<DesktopSchedulesPage tasks={tasks} onOpenTask={() => {}} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("任务 A：host-unavailable");
-  expect(screen.getByText("计划 b")).toBeInTheDocument();
-  expect(screen.getByText("已启用（部分）")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "选择规则 计划 b" })).toBeInTheDocument();
+  expect(screen.getByText("1 启用 · 0 暂停")).toBeInTheDocument();
 });
 
 it("retains schedules when only the execution history fails", async () => {
   bridge((taskId, op) => op === "task/scheduleList" ? { ok: true, payload: { schedules: [schedule(taskId, true)] } } : { ok: false, error: "history-unavailable" });
   render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("任务 A：执行记录 history-unavailable");
-  expect(screen.getByText("计划 a")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "选择规则 计划 a" })).toBeInTheDocument();
   expect(screen.getByText("成功读取的任务中没有执行记录。")).toBeInTheDocument();
 });
 
@@ -118,7 +118,7 @@ it("toggles a schedule through the Host and re-reads its answer instead of flipp
   const row = () => document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement;
   expect(within(row()).getByText("已暂停")).toBeInTheDocument();
   expect(listReads()).toBe(1);
-  fireEvent.click(within(row()).getByRole("button", { name: "启用 计划 a" }));
+  fireEvent.click(within(screen.getByRole("region", { name: "定时任务详情" })).getByRole("button", { name: "启用 计划 a" }));
   await waitFor(() => expect(within(row()).getByText("已启用")).toBeInTheDocument());
   expect(taskOp).toHaveBeenCalledWith("a", "task/scheduleSetEnabled", { scheduleId: "schedule-a", enabled: true });
   // The badge comes from the Host's next list answer, not from the click: the row
@@ -133,7 +133,7 @@ it("keeps the previous state and quotes the Host refusal when a pause is refused
   render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
   await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"')).not.toBeNull());
   const row = () => document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement;
-  fireEvent.click(within(row()).getByRole("button", { name: "暂停 计划 a" }));
+  fireEvent.click(within(screen.getByRole("region", { name: "定时任务详情" })).getByRole("button", { name: "暂停 计划 a" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("计划 a：unknown-schedule: 定时任务 schedule-a 不存在");
   // A refusal is not a new answer about the list: no re-read, no flipped badge.
   expect(taskOp.mock.calls.filter(([, op]) => op === "task/scheduleList")).toHaveLength(1);
@@ -153,7 +153,7 @@ it("runs a schedule now through the Host, then shows the run the Host recorded",
   render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
   await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"')).not.toBeNull());
   expect(screen.getByText("暂无执行记录。")).toBeInTheDocument();
-  fireEvent.click(within(document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement).getByRole("button", { name: "立即运行 计划 a" }));
+  fireEvent.click(within(screen.getByRole("region", { name: "定时任务详情" })).getByRole("button", { name: "立即运行 计划 a" }));
   await waitFor(() => expect(document.querySelector('[data-schedule-run="run-manual"]')).not.toBeNull());
   expect(within(document.querySelector('[data-schedule-run="run-manual"]') as HTMLElement).getByText("待确认")).toBeInTheDocument();
   expect(screen.queryByText("暂无执行记录。")).toBeNull();
@@ -166,7 +166,7 @@ it("shows the Host refusal when 立即运行 is refused and never claims a run",
     : { ok: true, payload: op === "task/scheduleList" ? { schedules: [schedule(taskId, true)] } : { runs: [] } });
   render(<DesktopSchedulesPage tasks={[tasks[0]!]} onOpenTask={() => {}} />);
   await waitFor(() => expect(document.querySelector('[data-schedule-row="schedule-a"')).not.toBeNull());
-  fireEvent.click(within(document.querySelector('[data-schedule-row="schedule-a"]') as HTMLElement).getByRole("button", { name: "立即运行 计划 a" }));
+  fireEvent.click(within(screen.getByRole("region", { name: "定时任务详情" })).getByRole("button", { name: "立即运行 计划 a" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("计划 a：archived: 已归档任务不能通过「立即运行」绕过恢复");
   expect(document.querySelector('[data-schedule-run]')).toBeNull();
   expect(screen.getByText("暂无执行记录。")).toBeInTheDocument();
@@ -234,7 +234,7 @@ it("saves exactly the edited config and closes only after the Host accepts", asy
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑定时任务" })).toBeNull());
   // The row shows the Host's next list answer, not the text that was typed.
-  await waitFor(() => expect(screen.getByText("每日站会")).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole("button", { name: "选择规则 每日站会" })).toBeInTheDocument());
   expect(taskOp.mock.calls.filter(([, op]) => op === "task/scheduleList")).toHaveLength(2);
   expect(taskOp.mock.calls.filter(([, op]) => op === "task/scheduleSave")).toHaveLength(1);
 });
@@ -307,7 +307,7 @@ it("shows an accepted run as 执行中 with its ACTUAL model and opens the origi
   await waitFor(() => expect(document.querySelector('[data-schedule-run="run-live"]')).not.toBeNull());
   const live = within(document.querySelector('[data-schedule-run="run-live"]') as HTMLElement);
   expect(live.getByText("执行中")).toBeInTheDocument();
-  expect(live.getByText("model-served")).toBeInTheDocument();
+  expect(live.getByText(/model-served/)).toBeInTheDocument();
   fireEvent.click(live.getByRole("button", { name: "继续对话" }));
   expect(onOpenSession).toHaveBeenCalledWith("a", "s-abcdef12");
   const failed = within(document.querySelector('[data-schedule-run="run-bad"]') as HTMLElement);

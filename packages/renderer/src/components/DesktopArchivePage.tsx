@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cleanupPreviewThroughShell, lifecycleStateThroughShell, runCleanupThroughShell, setTaskArchivedThroughShell } from "../data/shellBridge";
 import { resourceVerdictConclusion } from "../data/taskLifecycle";
 import type { CleanupSelection } from "../data/types";
 import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 
 type Task = { taskId: string; name: string; repoCount: number };
 /** One Host resource verdict as the archived row shows it: `ok === null` means the Host judged nothing. */
@@ -232,6 +233,8 @@ async function readArchived(tasks: readonly Task[]): Promise<{ rows: ArchivedTas
 }
 
 export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task[]; onRestored: () => void }) {
+  const confirmTrigger = useRef<HTMLElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
   const [result, setResult] = useState<{ rows: ArchivedTask[]; errors: string[] } | null>(null);
   const [revision, setRevision] = useState(0);
   const [restoring, setRestoring] = useState<string | null>(null);
@@ -298,14 +301,15 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
   const askCleanup = (task: ArchivedTask) => {
     const current = cleanup;
     if (!current || current.taskId !== task.taskId || !current.preview || current.running) return;
+    confirmTrigger.current = document.activeElement as HTMLElement;
     setConfirming({ taskId: task.taskId, text: confirmationText(task.name, current.preview) });
   };
   const runCleanup = async (task: ArchivedTask) => {
     const current = cleanup;
     if (!current || current.taskId !== task.taskId || !current.preview || current.running) return;
-    setConfirming(null);
     setCleanup({ ...current, running: true, error: undefined, result: undefined });
     const response = await runCleanupThroughShell({ taskId: task.taskId, selection: current.selection, label: "清理任务", repoScopes: current.repoScopes });
+    setConfirming(null);
     if (!response.ok) {
       setCleanup((latest) => latest?.taskId === task.taskId ? { ...latest, running: false, error: response.error ?? "Host 未上报拒绝原因" } : latest);
       return;
@@ -315,29 +319,28 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
     onRestored();
   };
   const confirmingTask = confirming === null ? null : result?.rows.find((task) => task.taskId === confirming.taskId) ?? null;
-  return <div data-testid="desktop-archive-page" className="px-[34px] py-[30px] below-narrow:px-5">
-    {confirming !== null && <div role="presentation" data-testid="archive-cleanup-confirm-backdrop" className="fixed inset-0 z-40 grid place-items-center bg-ink/40 p-4">
-      <div role="dialog" aria-modal="true" aria-label="确认清理任务" data-testid="archive-cleanup-confirm" className="w-full max-w-[560px] rounded-[10px] border border-line bg-paper p-5 shadow-xl">
-        <h2 className="text-[15px] font-semibold text-ink">确认清理</h2>
-        <p className="mt-2 whitespace-pre-wrap break-words text-xs text-muted">{confirming.text}</p>
-        <div className="mt-4 flex justify-end gap-2 border-t border-line pt-3">
-          <Button type="button" size="sm" variant="outline" onClick={() => setConfirming(null)}>取消</Button>
-          <Button type="button" size="sm" variant="destructive" disabled={confirmingTask === null || cleanup?.running === true} onClick={() => { if (confirmingTask !== null) void runCleanup(confirmingTask); }}>执行清理</Button>
-        </div>
-      </div>
-    </div>}
+  return <div data-testid="desktop-archive-page" className="min-w-0 px-6 py-5">
+    <Dialog open={confirming !== null} onOpenChange={(open) => { if (!open && !cleanup?.running) setConfirming(null); }}>
+      <DialogContent aria-labelledby={undefined} aria-label="确认清理任务" data-testid="archive-cleanup-confirm" onOpenAutoFocus={(event) => { event.preventDefault(); cancelRef.current?.focus(); }} onCloseAutoFocus={(event) => { event.preventDefault(); confirmTrigger.current?.focus(); }} onEscapeKeyDown={(event) => { if (cleanup?.running) event.preventDefault(); }} onInteractOutside={(event) => event.preventDefault()}>
+        <DialogHeader><DialogTitle>任务收尾：归档与受管资源清理确认</DialogTitle><DialogDescription>当前任务：{confirmingTask?.name ?? "正在核验任务"}</DialogDescription></DialogHeader>
+        <div className="rounded-lg bg-sunken p-3"><h3 className="font-semibold">安全清理检查项（受管生命周期保护）</h3><p className="mt-2 whitespace-pre-wrap break-words text-[11px] text-muted">{confirming?.text}</p>{cleanup?.preview?.repos?.map((row) => <p key={row.repoDir} className="mt-2 break-all text-[11px]">{row.repoDir} · 未提交：{row.uncommitted === null ? "未知（按未提交处理）" : row.uncommitted ? "有" : "无"} · 交付：{row.delivered === null ? "未知（不当作已交付）" : row.delivered ? "已交付" : "未交付"} · 范围：{{ keep: "保留", export: "导出", clean: "清理" }[row.scope]} · {row.detail}</p>)}<p className="mt-2 text-[11px]">原始仓库与普通目录保留；仅处理身份核验通过的本任务受管资源。</p></div>
+        <p className="text-[11px] text-muted">处理范围来自上一步逐仓库保留／导出／清理选择；取消可返回修改。归档后定时任务暂停，恢复不会自动重新触发。</p>
+        {cleanup?.running && <p role="status">正在清理…等待 Host 回执，请勿重复操作。</p>}
+        <DialogFooter><Button ref={cancelRef} type="button" size="sm" variant="outline" disabled={cleanup?.running} onClick={() => setConfirming(null)}>取消</Button><Button type="button" size="sm" variant="destructive" disabled={confirmingTask === null || cleanup?.running === true} onClick={() => { if (confirmingTask !== null) void runCleanup(confirmingTask); }}>{cleanup?.running ? "正在清理…" : "执行清理"}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
     <div className="flex items-start justify-between gap-3">
-      <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Archived Tasks</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">已归档</h1></div>
+      <div><h1 className="text-sm font-semibold text-ink">已归档</h1></div>
       <Button type="button" size="sm" variant="outline" onClick={() => setRevision((value) => value + 1)}>刷新</Button>
     </div>
     <p data-testid="desktop-archive-scope" className="mt-1.5 text-xs text-muted">归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止；恢复不会自动重新启动服务或定时任务。独立导出文件浏览与下载界面未接线；清理中的导出由 Host 写入预览所示的保留位置。</p>
-    {actionError && <p role="alert" className="mt-4 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">{actionError}</p>}
+    {actionError && <p role="alert" className="mt-4 border border-line bg-paper p-3 text-xs text-destructive">{actionError}</p>}
     {!result ? <p role="status" className="mt-6 text-xs text-muted">正在读取任务归档状态…</p> : <>
-      {result.errors.length > 0 && <div role="alert" className="mt-5 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">部分任务读取失败，列表可能不完整。<ul className="mt-1 list-inside list-disc">{result.errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
+      {result.errors.length > 0 && <div role="alert" className="mt-5 border border-line bg-paper p-3 text-xs text-destructive">部分任务读取失败，列表可能不完整。<ul className="mt-1 list-inside list-disc">{result.errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
       <div className="mt-6 divide-y divide-line border-y border-line">
         {result.rows.map((task) => <article key={task.taskId} data-archived-task={task.taskId} className="py-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0"><h2 className="break-words text-sm font-semibold">{task.name}</h2><p className="mt-1 text-xs text-muted">{task.repoCount} 个仓库 · 归档于 {task.archivedAt}</p></div>
+            <div className="min-w-0"><h2 className="break-words text-sm font-semibold">{task.name}</h2><p className="mt-1 break-words text-xs text-muted">{task.repoCount} 个仓库 · 归档于 {task.archivedAt}</p></div>
             <div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={restoring !== null || cleanup?.running === true} onClick={() => void restore(task.taskId)}>恢复</Button><Button size="sm" variant="outline" disabled={restoring !== null || cleanup?.running === true} onClick={() => openCleanup(task.taskId)}>{cleanup?.taskId === task.taskId ? "收起清理" : "清理…"}</Button></div>
           </div>
           <section aria-label={`${task.name}工作区就绪`} data-testid={`restore-readiness-${task.taskId}`} className="mt-3 text-xs">
@@ -346,7 +349,7 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
               ? <p className="mt-1 text-[11px] text-muted">Host 未上报工作区就绪状态，不视为就绪。</p>
               : task.restore.ready
                 ? <p className="mt-1 text-[11px] text-muted">Host 核验：{task.restore.rows.length} 个仓库工作副本身份仍然匹配。</p>
-                : <div className="mt-1 text-[11px] text-[#9a6032]">
+                : <div className="mt-1 text-[11px] text-attention">
                     <p>{task.restore.cleaned ? "该任务已清理：工作副本已按记录移除，恢复不等于工作区就绪。" : "工作区未就绪，恢复后需先修复。"}</p>
                     <ul className="mt-1 list-inside list-disc">{task.restore.rows.map((row) => <li key={row.repoDir}>{row.repoDir}：{row.state} · {row.reason}{row.repair ? `；修复入口：${row.repair}` : ""}</li>)}</ul>
                     {task.restore.warnings.map((warning) => <p key={warning} className="mt-1">{warning}</p>)}
@@ -360,7 +363,7 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
               ? <p className="mt-1 text-[11px] text-muted">Host 未上报资源判定，尚未计算：未判定的资源不能当作可清理。</p>
               : task.verdicts.length === 0
                 ? <p className="mt-1 text-[11px] text-muted">Host 上报 0 项资源判定，尚无可判定项：这不代表资源可清理。</p>
-                : <ul className="mt-1 list-inside list-disc text-[11px]">{task.verdicts.map((verdict, index) => <li key={`${verdict.subject}-${index}`} className={verdict.ok === false ? "text-[#9a6032]" : "text-muted"}>{verdict.subject}：{resourceVerdictConclusion(verdict)}</li>)}</ul>}
+                : <ul className="mt-1 list-inside list-disc text-[11px]">{task.verdicts.map((verdict, index) => <li key={`${verdict.subject}-${index}`} className={verdict.ok === false ? "text-attention" : "text-muted"}>{verdict.subject}：{resourceVerdictConclusion(verdict)}</li>)}</ul>}
           </section>
           {cleanup?.taskId === task.taskId && <section aria-label={`${task.name}清理预览`} className="mt-4 border border-line bg-paper p-3">
             <p className="text-xs font-semibold">先预览 Host 清理清单</p>
@@ -369,8 +372,8 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
               <h3 className="font-semibold">逐仓库检查（真实 Git 状态）</h3>
               {cleanup.preview.repos.length === 0
                 ? <p className="mt-1 text-[11px] text-muted">Host 上报 0 个仓库工作副本。</p>
-                : <ul className="mt-1 space-y-1.5">{cleanup.preview.repos.map((row) => <li key={row.repoDir} className="text-[11px]">
-                    <p className={row.blocked ? "text-[#9a6032]" : "text-muted"}>{row.repoDir}：{row.detail}</p>
+                : <ul className="mt-1 flex flex-col gap-1.5">{cleanup.preview.repos.map((row) => <li key={row.repoDir} className="break-words text-[11px]">
+                    <p className={row.blocked ? "text-attention" : "text-muted"}>{row.repoDir}：{row.detail}</p>
                     <div className="mt-1 flex flex-wrap gap-3">
                       {([["keep", "保留"], ["export", "导出"], ["clean", "清理"]] as const).map(([scope, label]) => <label key={scope} className="flex items-center gap-1">
                         <input
@@ -384,14 +387,14 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
                     </div>
                     <p className="text-muted">未提交：{row.uncommitted === null ? "未读取（按未提交处理）" : row.uncommitted ? "有" : "无"} · 交付：{row.delivered === null ? "未知（不当作已交付）" : row.delivered ? "已交付" : "未交付"}</p>
                   </li>)}</ul>}
-              {(cleanup.preview.repoWarnings ?? []).map((warning) => <p key={warning} className="mt-1 text-[11px] text-[#9a6032]">{warning}</p>)}
+              {(cleanup.preview.repoWarnings ?? []).map((warning) => <p key={warning} className="mt-1 text-[11px] text-attention">{warning}</p>)}
             </div>}
             <div className="mt-2 flex flex-wrap gap-3 text-xs">
               {([ ["exportSessions", "导出会话"], ["exportDrafts", "导出草稿"], ["exportUsage", "导出用量"] ] as const).map(([key, label]) => <label key={key} className="flex items-center gap-1.5"><input type="checkbox" checked={cleanup.selection[key]} disabled={cleanup.previewing || cleanup.running} onChange={(event) => changeSelection(key, event.target.checked)} />{label}</label>)}
             </div>
             <div className="mt-3 flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" disabled={cleanup.previewing || cleanup.running} onClick={() => void previewCleanup(task.taskId)}>{cleanup.previewing ? "正在生成清单…" : "生成清单"}</Button>{cleanup.preview && <Button type="button" size="sm" disabled={cleanup.previewing || cleanup.running} onClick={() => askCleanup(task)}>{cleanup.running ? "正在清理…" : "确认清理"}</Button>}</div>
-            {cleanup.error && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{cleanup.error}</p>}
-            {cleanup.preview && <div className="mt-3 space-y-2 text-xs">
+            {cleanup.error && <p role="alert" className="mt-3 border border-line bg-paper p-2 text-xs text-destructive">{cleanup.error}</p>}
+            {cleanup.preview && <div className="mt-3 flex flex-col gap-2 text-xs">
               <p>Host 记录清理标记：{cleanup.preview.recordsWillBeRemoved === undefined ? "Host 未上报" : cleanup.preview.recordsWillBeRemoved ? "将删除所选范围中的记录" : "未标记删除记录"}</p>
               <p>Host 导出选择：{cleanup.preview.selectionLabels === undefined ? "Host 未上报" : cleanup.preview.selectionLabels.length ? cleanup.preview.selectionLabels.join("、") : "Host 上报未选择导出"}</p>
               <p>Host 保留位置：{cleanup.preview.keepRoot ?? "Host 未上报"}</p>
@@ -405,7 +408,7 @@ export function DesktopArchivePage({ tasks, onRestored }: { tasks: readonly Task
               <p>实际导出：{cleanup.result.receipt?.exports === undefined ? "Host 未上报" : cleanup.result.receipt.exports.length ? cleanup.result.receipt.exports.join("、") : "Host 上报未选择导出"}</p>
               <p>保留位置：{cleanup.result.receipt?.keptPosition === undefined ? "Host 未上报" : cleanup.result.receipt.keptPosition ?? "Host 未提供保留位置"}</p>
               <p>失败项：{cleanup.result.recovery === undefined ? "Host 未上报" : cleanup.result.recovery.length ? "" : "Host 上报无失败项"}</p>
-              {cleanup.result.recovery?.map((entry, index) => <p key={`${entry.item ?? "unknown"}-${index}`} className="text-[#ad4545]">{entry.item ?? "Host 未上报失败项"}：{entry.reason ?? "Host 未上报失败原因"}</p>)}
+              {cleanup.result.recovery?.map((entry, index) => <p key={`${entry.item ?? "unknown"}-${index}`} className="text-destructive">{entry.item ?? "Host 未上报失败项"}：{entry.reason ?? "Host 未上报失败原因"}</p>)}
               <div className="mt-2"><p className="font-semibold">Host 清理项目结果</p>{cleanup.result.items === undefined ? <p>Host 未上报清理项目结果</p> : cleanup.result.items.length === 0 ? <p>Host 上报无清理项目结果</p> : <ul className="mt-1 list-inside list-disc">{cleanup.result.items.map((item, index) => <li key={`${item.resource ?? "unknown"}-${index}`}>{dispositionLabel(item.disposition)}：{item.resource ?? "Host 未上报资源"}：{item.detail ?? "Host 未上报详情"}</li>)}</ul>}</div>
             </div>}
           </section>}

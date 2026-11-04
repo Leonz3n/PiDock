@@ -99,6 +99,7 @@ export function DesktopInventory() {
   // [UI 对齐 S8e] #47: 项目总览 is the project page; the create/claim/transfer/
   // unlink management surface it links to is a separate view (原型 A 的「项目管理」).
   const [manage, setManage] = useState(false);
+  const [creationKind, setCreationKind] = useState<"normal" | "scheduled">("normal");
   const [creationEntry, setCreationEntry] = useState(0);
   // [UI 对齐 S8e] #47: Token 用量 reads the same real SDK JSONL projection the
   // conversation shows, one selected task at a time.
@@ -503,6 +504,7 @@ export function DesktopInventory() {
     projectsInitialized={data?.projectsInitialized ?? true}
     unassignedCount={lifecycleReady ? data?.associations.filter((row) => row.projectId === null).length ?? 0 : null}
     onNewTask={() => {
+      setCreationKind("normal");
       navigate(selection.kind === "project" ? { view: "project", projectId: selection.id } : { view: "unassigned" });
       setSessionFocus(undefined);
       setManage(true);
@@ -555,7 +557,7 @@ export function DesktopInventory() {
   if (environmentOpen) return shell(<DesktopEnvironmentPage projects={shellProjects} projectId={environmentProject?.id ?? null} taskCount={environmentProject ? shellTasks.filter((task) => task.projectId === environmentProject.id).length : 0} tasks={environmentProject ? activeTasks.filter((task) => task.projectId === environmentProject.id) : []} tasksPending={!lifecycleReady} onSelectProject={(id) => { pinned.current = true; setSelection({ kind: "project", id }); }} />);
   if (attentionOpen) return shell(<DesktopAttentionPage tasks={activeTasks} projects={shellProjects} lifecyclePending={!lifecycleReady} lifecycleErrors={lifecycleIndex?.errors ?? []} onOpenTask={(taskId) => navigate({ view: "task", taskId, sessionId: "main" })} />);
   if (archiveOpen) return shell(<DesktopArchivePage tasks={shellTasks} onRestored={() => { void load(); }} />);
-  if (schedulesOpen) return shell(<DesktopSchedulesPage tasks={shellTasks} onOpenTask={(taskId) => navigate({ view: "task", taskId })} onOpenSession={(taskId, sessionId) => navigate({ view: "task", taskId, sessionId })} />);
+  if (schedulesOpen) return shell(<DesktopSchedulesPage tasks={shellTasks} onCreate={() => { setCreationKind("scheduled"); navigate(selection.kind === "project" ? { view: "project", projectId: selection.id } : { view: "unassigned" }); setManage(true); setCreationEntry((value) => value + 1); }} onOpenTask={(taskId) => navigate({ view: "task", taskId })} onOpenSession={(taskId, sessionId) => navigate({ view: "task", taskId, sessionId })} />);
   if (usageOpen) return shell(<DesktopUsagePage
     tasks={shellTasks}
     taskId={usageTaskId}
@@ -636,7 +638,7 @@ export function DesktopInventory() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">工作空间与任务</h1>
         <div className="flex gap-2"><button className={button} type="button" disabled={busy || pendingCreate !== null} onClick={openCreateWorkspace}><Icon name="plus" />新建工作空间</button>
           <button className={button} type="button" disabled={busy} onClick={() => void importRoot()}><Icon name="folder" />找回任务根</button></div></div>
-      <DesktopTaskCreation key={creationEntry} openOnMount={creationEntry > 0} project={project} bridge={window.pidock ?? emptyBridge} onCreated={async (projectId, taskId) => {
+      <DesktopTaskCreation initialKind={creationKind} key={creationEntry} openOnMount={creationEntry > 0} project={project} bridge={window.pidock ?? emptyBridge} onCreated={async (projectId, taskId) => {
         if (!(await load())) throw new Error("任务已创建，但本机清单无法核验；请重试读取");
         // Land on the NEW task's facts view (S08), not the project overview.
         setSelection({ kind: "project", id: projectId });

@@ -11,6 +11,7 @@ import { ProjectTaskCreation, CreationIntentStore } from "./project-task-creatio
 import { previewTaskPaths } from "./task-provision.js";
 import { performCreationOperation } from "./project-task-ipc.js";
 import { TaskRootIndex } from "./task-root-index.js";
+import { ServiceCatalog, serviceCatalogAuthority } from "./service-catalog.js";
 import { saveTestDeliverySettings } from "./creation-delivery-settings.fixture.js";
 
 const homes: string[] = [];
@@ -734,6 +735,21 @@ describe("dedicated scheduled task creation (#152)", { timeout: GIT_CASE_TIMEOUT
     const schedules = env.instances.get(preview.taskId)?.listSchedules() ?? [];
     expect(schedules).toMatchObject([{ name: "每日巡检", ruleText: "每日 09:15", timezone: "Asia/Shanghai", permission: "default", enabled: true }]);
     expect(schedules[0]?.nextRunAt).toBeTruthy();
+  });
+
+  it("establishes the confirmed workspace before a scheduled Host binds its service ownership", async () => {
+    const env = await setup();
+    const catalog = new ServiceCatalog(env.profile, serviceCatalogAuthority(env.roots, env.projects));
+    let boundProject: string | null | undefined;
+    const host = { routeTaskOp: async (request: Parameters<typeof env.host.routeTaskOp>[0]) => {
+      if (request.op === "task/scheduleSave") boundProject = catalog.ownerSnapshot(request.taskId, "test", {}).projectId;
+      return env.host.routeTaskOp(request);
+    } };
+    const creation = new ProjectTaskCreation(env.storage, env.projects, env.roots, host, env.root);
+    const intent = await creation.prepare({ ...env.request, kind: "scheduled", schedule });
+    await creation.commit(intent.id);
+    expect(boundProject).toBe(env.project.id);
+    expect(catalog.ownerSnapshot(intent.taskId, "test", {}).projectId).toBe(boundProject);
   });
 
   it("refuses a scheduled creation without a definition, and a normal one carrying a rule", async () => {

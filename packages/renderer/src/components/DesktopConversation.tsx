@@ -10,6 +10,7 @@ import { Icon } from "./Icon";
 import { loadDesktopProjects, type DesktopProjects } from "../data/desktopProjects";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
@@ -442,6 +443,7 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
   const executionReadAttempt = useRef(0);
   const approvalReadAttempt = useRef(0);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
+  const [archiveMode, setArchiveMode] = useState<"archive-only" | "archive-and-cleanup">("archive-only");
   const [archivePrompt, setArchivePrompt] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
@@ -470,17 +472,6 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
       setToolDockCollapsed(false);
     }
   };
-  useEffect(() => {
-    if (archivePrompt) archiveCancelRef.current?.focus();
-  }, [archivePrompt]);
-  useEffect(() => {
-    if (!archivePrompt) return;
-    const dismiss = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !archiveBusy) setArchivePrompt(false);
-    };
-    window.addEventListener("keydown", dismiss);
-    return () => window.removeEventListener("keydown", dismiss);
-  }, [archivePrompt, archiveBusy]);
   // The delivery sheet is a modal surface of its own; Escape closes it without
   // reaching the archive prompt (the two are never open together).
   useEffect(() => {
@@ -1458,21 +1449,19 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
         </div>
       </form>
     </div></div>
-    {archivePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
-      <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
-        <h2 className="text-base font-semibold">归档当前任务</h2>
-        <p className="mt-3 text-xs leading-6 text-muted">归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止。未执行确认会失效、定时任务暂停，代码和历史保留。恢复后服务与定时任务不会自动启动，清理需要单独处理。</p>
-        <p className="mt-2 text-[11px] leading-5 text-muted">仅归档保留副本：保留每个仓库的工作副本，不删除任何文件。归档并清理：先归档，再到已归档页逐个仓库检查未提交与未交付修改（未知交付状态不当作已交付），选择保留／导出／清理后才会移除身份核验通过的本任务工作副本。</p>
-        {blocked && !archiveError && <p role="status" className="mt-3 text-xs text-muted">会话尚未连接、正在执行或请求状态未核验；请先完成核验或停止执行。</p>}
-        {archiveError && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{archiveError}</p>}
-        <div className="mt-5 flex justify-end gap-2">
-          {invalidated && <Button type="button" variant="outline" onClick={onArchived}>查看归档状态</Button>}
-          <Button ref={archiveCancelRef} type="button" variant="outline" disabled={archiveBusy} onClick={() => setArchivePrompt(false)}>取消</Button>
-          <Button type="button" variant="outline" disabled={archiveBusy || blocked} onClick={() => void archive("archive-and-cleanup")}>{archiveBusy ? "归档中…" : "归档并清理…"}</Button>
-        <Button type="button" disabled={archiveBusy || blocked} onClick={() => void archive()}>{archiveBusy ? "归档中…" : "确认归档"}</Button>
-        </div>
-      </div>
-    </div>}
+    <Dialog open={archivePrompt} onOpenChange={(open) => { if (!archiveBusy) setArchivePrompt(open); }}>
+      <DialogContent aria-labelledby={undefined} aria-label="归档当前任务" onOpenAutoFocus={(event) => { event.preventDefault(); archiveCancelRef.current?.focus(); }} onEscapeKeyDown={(event) => { if (archiveBusy) event.preventDefault(); }} onInteractOutside={(event) => event.preventDefault()}>
+        <DialogHeader><DialogTitle>任务收尾：归档与受管资源清理确认</DialogTitle><DialogDescription>当前任务：{name}</DialogDescription></DialogHeader>
+        <div className="rounded-lg bg-sunken p-3 text-[11px] leading-5"><strong>安全清理检查项（受管生命周期保护）</strong><p>归档只停止正在执行的 Agent 回合；已在运行的服务与终端不会被它停止。未执行确认会失效、定时任务暂停，代码和历史保留。恢复后服务与定时任务不会自动启动，清理需要单独处理。</p><p>归档并清理：先归档，再到已归档页逐个仓库检查未提交与未交付修改（未知交付状态不当作已交付），选择保留／导出／清理后才会移除身份核验通过的本任务工作副本。</p></div>
+        <fieldset className="flex flex-col gap-2" disabled={archiveBusy}><legend className="mb-3 font-semibold">选择处理方式：</legend>
+          <label className="flex items-start gap-2 rounded-lg border border-line p-3"><input type="radio" name="archive-mode" checked={archiveMode === "archive-only"} onChange={() => setArchiveMode("archive-only")} /><span><strong>仅归档任务（保留独立 worktree 副本与目录）</strong><span className="mt-1 block text-[11px] text-muted">仅归档保留副本：保留每个仓库的工作副本，不删除任何文件。任务移至「已归档」，之后可恢复并继续会话。</span></span></label>
+          <label className="flex items-start gap-2 rounded-lg border border-destructive bg-danger-soft p-3"><input type="radio" name="archive-mode" checked={archiveMode === "archive-and-cleanup"} onChange={() => setArchiveMode("archive-and-cleanup")} /><span><strong className="text-destructive">归档并清理独立 worktree（先核验安全范围）</strong><span className="mt-1 block text-[11px] text-muted">先归档；下一步逐仓库预览并确认。原始仓库、普通目录保留，不自动提交、推送或删除。</span></span></label>
+        </fieldset>
+        {blocked && !archiveError && <p role="status" className="text-xs text-muted">会话尚未连接、正在执行或请求状态未核验；请先完成核验或停止执行。</p>}
+        {archiveError && <p role="alert" className="break-words text-xs text-destructive">{archiveError}</p>}
+        <DialogFooter><span className="mr-auto text-[11px] text-muted">恢复不会自动重新触发定时任务</span>{invalidated && <Button type="button" variant="outline" onClick={onArchived}>查看归档状态</Button>}<Button ref={archiveCancelRef} type="button" variant="outline" disabled={archiveBusy} onClick={() => setArchivePrompt(false)}>取消</Button><Button type="button" variant={archiveMode === "archive-and-cleanup" ? "destructive" : "default"} disabled={archiveBusy || blocked} onClick={() => void archive(archiveMode)}>{archiveBusy ? "归档中…" : archiveMode === "archive-only" ? "确认归档" : "归档并清理…"}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
     {/* [Pencil T13] ticket 148 S07 `CbsS5` / S10 `d0dQe`: the delivery sheet the
         `审阅与交付` menu entry opens. It is the same `DesktopDeliverySheet` the
         web task page's modal mounts, so the real Host ops are the only source. */}

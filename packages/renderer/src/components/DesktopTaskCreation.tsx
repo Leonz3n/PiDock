@@ -18,9 +18,10 @@ const MODE_HINTS: Record<WorkspaceModeView, string> = {
   "plain-dirs": "仅普通目录：共享原文件，不涉及 Git 仓库；写入影响原文件。",
 };
 
-export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = false }: {
+export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = false, initialKind = "normal" }: {
   project?: DesktopProject;
   openOnMount?: boolean;
+  initialKind?: "normal" | "scheduled";
   bridge: PidockBridge;
   onCreated: (projectId: string, taskId: string) => Promise<void>;
 }) {
@@ -36,7 +37,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
   // [Pencil T17]: a scheduled creation is its OWN task kind. The definition
   // below travels with the creation intent and is saved by the Host's schedule
   // path (it still validates rule/timezone/provider/model/credential/directory).
-  const [taskKind, setTaskKind] = useState<"normal" | "scheduled">("normal");
+  const [taskKind, setTaskKind] = useState<"normal" | "scheduled">(initialKind);
   const [scheduleRule, setScheduleRule] = useState("每日 09:15");
   const [scheduleTimezone, setScheduleTimezone] = useState("Asia/Shanghai");
   const [schedulePrompt, setSchedulePrompt] = useState("");

@@ -4,6 +4,8 @@ import { parseProviderStatus, providerCall } from "../data/providerProfile";
 import { hostText } from "../data/workspaceFiles";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "./ui/dialog";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
 
 type Task = { taskId: string; name: string };
 type Permission = "read" | "default" | "auto";
@@ -68,9 +70,10 @@ async function readSchedules(tasks: readonly Task[]): Promise<Result> {
   return { schedules: settled.flatMap((row) => row.schedules), runs: settled.flatMap((row) => row.runs).sort((a, b) => b.startedAt.localeCompare(a.startedAt)), errors: settled.map((row) => row.error).filter(Boolean) };
 }
 
-export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession }: { tasks: readonly Task[]; onOpenTask: (taskId: string) => void; onOpenSession?: (taskId: string, sessionId: string) => void }) {
+export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession, onCreate }: { tasks: readonly Task[]; onOpenTask: (taskId: string) => void; onOpenSession?: (taskId: string, sessionId: string) => void; onCreate?: () => void }) {
   const [result, setResult] = useState<Result | null>(null);
   const [scheduler, setScheduler] = useState<SchedulerState | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "active" | "paused">("all");
   const [revision, setRevision] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
@@ -166,7 +169,7 @@ export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession }: { tas
   const schedules = result?.schedules ?? [];
   const shown = schedules.filter((row) => filter === "all" || row.enabled === (filter === "active"));
   const taskNames = new Map(tasks.map((task) => [task.taskId, task.name]));
-  const scheduleNames = new Map(schedules.map((row) => [row.scheduleId, row.name]));
+  const scheduleNames = new Map(schedules.map((row) => [`${row.taskId}:${row.scheduleId}`, row.name]));
   /**
    * Both row actions are Host decisions, never local edits: an accepted call is
    * followed by a full re-read (the badge and the run table come from the Host's
@@ -188,50 +191,55 @@ export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession }: { tas
       setBusy(null);
     }
   };
-  return <div data-testid="desktop-schedules-page" className="px-[34px] py-[30px] below-narrow:px-5">
-    <div className="flex items-start justify-between gap-3">
-      <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Scheduled Tasks</p><h1 className="mt-1.5 text-[26px] font-semibold text-ink">定时任务</h1></div>
-      <Button type="button" variant="outline" size="sm" onClick={() => setRevision((value) => value + 1)}>刷新</Button>
+  const chosen = shown.find((row) => `${row.taskId}:${row.scheduleId}` === selected) ?? shown[0];
+  const runs = result?.runs.filter((run) => (chosen && run.taskId === chosen.taskId && run.scheduleId === chosen.scheduleId) || !scheduleNames.has(`${run.taskId}:${run.scheduleId}`)) ?? [];
+  return <div data-testid="desktop-schedules-page" className="min-w-0">
+    <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-2 border-b border-line px-6 py-2">
+      <div className="flex flex-wrap items-center gap-3"><h1 className="text-sm font-semibold">定时任务</h1><span className="below-mid:hidden"><Badge variant="soft">应用运行期间调度中 · 关窗后后台托盘继续 · 休眠不补跑</Badge></span></div>
+      <div className="flex gap-2"><Button type="button" variant="ghost" size="sm" onClick={() => setRevision((value) => value + 1)}>刷新</Button>{onCreate && <Button type="button" size="sm" onClick={onCreate}>＋ 新建定时规则</Button>}</div>
     </div>
-    <p className="mt-1.5 text-xs text-muted">每项配置属于一个真实任务；执行记录来自任务 Host。启用、暂停、立即运行与编辑由 Host 决定并回执；新建定时任务在项目工作空间选择「定时任务」类型创建专属任务。</p>
-    {actionError && <p role="alert" data-testid="desktop-schedule-action-error" className="mt-2 break-words text-xs text-[#ad4545]">{actionError}</p>}
-    {scheduler && (scheduler.phase !== "active" || scheduler.lastQuitUnconfirmed !== undefined) && <div role="status" data-testid="desktop-scheduler-state" className="mt-4 border border-line bg-paper p-3 text-xs text-muted">
-      <strong className="text-ink">{{ active: "调度运行中", asleep: "系统休眠：不会执行或补跑，唤醒后按未来时间重新计划", quitting: "应用正在退出：不再执行定时触发" }[scheduler.phase]}</strong>
-      {scheduler.lastQuitUnconfirmed && <p className="mt-1" data-testid="desktop-scheduler-quit-unconfirmed">上次退出未确认（{scheduler.lastQuitUnconfirmed.at}）：{scheduler.lastQuitUnconfirmed.hosts.length ? scheduler.lastQuitUnconfirmed.hosts.join("、") : "退出报告未指明任务"} 未确认停止；请检查是否仍有进程在运行。</p>}
+    {actionError && <p role="alert" data-testid="desktop-schedule-action-error" className="m-4 break-words text-xs text-destructive">{actionError}</p>}
+    {scheduler && (scheduler.phase !== "active" || scheduler.lastQuitUnconfirmed !== undefined) && <div role="status" data-testid="desktop-scheduler-state" className="m-4 rounded border border-line p-3 text-xs text-muted">
+      <strong>{{ active: "调度运行中", asleep: "系统休眠：不会执行或补跑，唤醒后按未来时间重新计划", quitting: "应用正在退出：不再执行定时触发" }[scheduler.phase]}</strong>
+      {scheduler.lastQuitUnconfirmed && <p data-testid="desktop-scheduler-quit-unconfirmed">上次退出未确认（{scheduler.lastQuitUnconfirmed.at}）：{scheduler.lastQuitUnconfirmed.hosts.join("、") || "退出报告未指明任务"} 未确认停止；请检查是否仍有进程在运行。</p>}
     </div>}
-    {!result ? <p role="status" className="mt-6 text-xs text-muted">正在读取任务的定时配置…</p> : <>
-      {result.errors.length > 0 && <div role="alert" className="mt-5 border border-[#e0b4b4] bg-[#fdf3f3] p-3 text-xs text-[#ad4545]">部分数据读取失败，以下仅展示成功读取的配置与记录。<ul className="mt-1 list-inside list-disc">{result.errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
-      <div className="mt-6 grid grid-cols-3 gap-3 below-mid:grid-cols-1">
-        <div className="rounded-[7px] border border-line bg-paper p-4"><p className="text-xs text-muted">已启用{result.errors.length ? "（部分）" : ""}</p><strong className="text-xl">{schedules.filter((row) => row.enabled).length}</strong></div>
-        <div className="rounded-[7px] border border-line bg-paper p-4"><p className="text-xs text-muted">已暂停{result.errors.length ? "（部分）" : ""}</p><strong className="text-xl">{schedules.filter((row) => !row.enabled).length}</strong></div>
-        <div className="rounded-[7px] border border-line bg-paper p-4"><p className="text-xs text-muted">最近执行</p><strong className="text-sm">{result.runs[0] ? runLabels[result.runs[0].result] : "暂无"}</strong></div>
-      </div>
-      <div className="mt-6 flex gap-1" role="group" aria-label="定时任务筛选">{([ ["all", "全部"], ["active", "已启用"], ["paused", "已暂停"] ] as const).map(([key, label]) => <Button key={key} size="sm" variant={filter === key ? "secondary" : "ghost"} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</Button>)}</div>
-      <div className="mt-3 divide-y divide-line border-y border-line">
-        {shown.map((row) => <article key={`${row.taskId}:${row.scheduleId}`} className="grid grid-cols-[minmax(130px,0.8fr)_minmax(0,2fr)_auto] items-center gap-4 py-4 below-mid:grid-cols-1" data-schedule-row={row.scheduleId}>
-          <div className="min-w-0"><strong className="block break-words text-xs">{hostText(row.ruleText, "Host 未上报规则")}</strong><span className="text-[11px] text-muted">{hostText(row.timezone, "Host 未上报时区")}</span></div>
-          <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{hostText(row.name, "Host 未上报定时任务名称")}</strong><Badge variant="soft">{row.repairIssue ? "配置待修复" : row.enabled ? "已启用" : "已暂停"}</Badge></div><p className="mt-1 text-xs text-muted">{taskNames.get(row.taskId) ?? row.taskId} · {hostText(row.providerId, "Host 未上报 Provider")} / {hostText(row.model, "Host 未上报模型")}</p><p className="mt-1 line-clamp-2 break-words text-xs text-muted">{row.repairIssue || row.prompt}</p></div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button size="sm" variant="outline" disabled={busy !== null} aria-label={`${row.enabled ? "暂停" : "启用"} ${hostText(row.name, "Host 未上报定时任务名称")}`} onClick={() => void act(row, "task/scheduleSetEnabled", { enabled: !row.enabled })}>{row.enabled ? "暂停" : "启用"}</Button>
-            <Button size="sm" variant="outline" disabled={busy !== null} aria-label={`立即运行 ${hostText(row.name, "Host 未上报定时任务名称")}`} onClick={() => void act(row, "task/scheduleRunNow", { label: "定时任务页" })}>立即运行</Button>
-            <Button size="sm" variant="outline" disabled={busy !== null} aria-label={`编辑 ${hostText(row.name, "Host 未上报定时任务名称")}`} onClick={() => edit(row)}>编辑</Button>
-            <Button size="sm" variant="outline" onClick={() => onOpenTask(row.taskId)}>查看任务</Button>
+    {!result ? <p role="status" className="p-6 text-xs text-muted">正在读取任务的定时配置…</p> : <>
+      {result.errors.length > 0 && <div role="alert" className="m-4 rounded border border-line p-3 text-xs text-destructive">部分数据读取失败，以下仅展示成功读取的配置与记录。<ul>{result.errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
+      <div className="grid min-w-0 grid-cols-[360px_minmax(0,1fr)] items-start gap-5 px-6 py-5 below-mid:grid-cols-1" data-testid="schedule-master-detail">
+        <section aria-label="定时任务规则" className="flex min-w-0 flex-col gap-2">
+          <div className="flex items-center justify-between gap-2"><h2 className="text-xs font-semibold">定时任务规则 ({schedules.length})</h2><span className="text-[11px] text-muted">{schedules.filter((r) => r.enabled).length} 启用 · {schedules.filter((r) => !r.enabled).length} 暂停</span></div>
+          <ToggleGroup type="single" value={filter} onValueChange={(value) => { if (value === "all" || value === "active" || value === "paused") setFilter(value); }} aria-label="定时任务筛选">{([["all", "全部"], ["active", "已启用"], ["paused", "已暂停"]] as const).map(([key,label]) => <ToggleGroupItem size="sm" value={key} key={key}>{label}</ToggleGroupItem>)}</ToggleGroup>
+          {shown.map((row) => <button type="button" key={`${row.taskId}:${row.scheduleId}`} data-schedule-row={row.scheduleId} aria-label={`选择规则 ${hostText(row.name, "Host 未上报定时任务名称")}`} aria-pressed={chosen === row} onClick={() => setSelected(`${row.taskId}:${row.scheduleId}`)} className="flex min-w-0 flex-col gap-1 rounded-lg border border-line bg-paper p-3 text-left text-xs aria-pressed:border-primary focus-visible:outline-2 focus-visible:outline-primary">
+            <span className="flex w-full items-start justify-between gap-2"><strong className="min-w-0 break-words">{hostText(row.name, "Host 未上报定时任务名称")}</strong><Badge variant="soft">{row.repairIssue ? "配置待修复" : row.enabled ? "已启用" : "已暂停"}</Badge></span>
+            <span className="break-all text-[11px] text-muted">{hostText(row.ruleText, "Host 未上报规则")} · {hostText(row.timezone, "Host 未上报时区")}</span>
+            <span className="break-words text-[11px] text-muted">目标：{taskNames.get(row.taskId) ?? row.taskId}</span>
+          </button>)}
+          {shown.length === 0 && <p className="py-7 text-xs text-muted">{result.errors.length ? "成功读取的任务中没有符合筛选的定时配置。" : "当前筛选下没有定时任务。"}</p>}
+        </section>
+        <section aria-label="定时任务详情" className="min-w-0">
+          {chosen && <div className="rounded-lg border border-line bg-paper p-4" data-testid="schedule-detail">
+            <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h2 className="break-words text-sm font-semibold">{hostText(chosen.name, "Host 未上报定时任务名称")}</h2><p className="mt-1 break-all text-[11px] text-muted">规则: {hostText(chosen.ruleText, "Host 未上报规则")} · 时区 {hostText(chosen.timezone, "Host 未上报时区")}</p></div>
+              <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy !== null} aria-label={`立即运行 ${chosen.name}`} onClick={() => void act(chosen, "task/scheduleRunNow", { label: "定时任务页" })}>立即运行</Button><Button size="sm" variant="outline" disabled={busy !== null} aria-label={`编辑 ${chosen.name}`} onClick={() => edit(chosen)}>编辑</Button><Button size="sm" variant="outline" disabled={busy !== null} aria-label={`${chosen.enabled ? "暂停" : "启用"} ${chosen.name}`} onClick={() => void act(chosen, "task/scheduleSetEnabled", { enabled: !chosen.enabled })}>{chosen.enabled ? "暂停" : "启用"}</Button><Button size="sm" variant="ghost" onClick={() => onOpenTask(chosen.taskId)}>查看任务</Button></div>
+            </div>
+            <div className="mt-3 rounded bg-sunken p-3 text-xs"><p className="whitespace-pre-wrap break-words">提示词: {chosen.prompt || "Host 未上报提示词"}</p><p className="mt-2 break-words text-[11px] text-muted">绑定模型: {hostText(chosen.providerId, "Host 未上报 Provider")} / {hostText(chosen.model, "Host 未上报模型")} · 固定任务工作区 · 每次独立会话 · {permissionLabels[chosen.permission]}</p>{chosen.repairIssue && <p role="alert" className="mt-2 break-words text-destructive">配置待修复：{chosen.repairIssue}</p>}</div>
+          </div>}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2"><h2 className="text-xs font-semibold">定时执行记录（每次触发生成独立会话，历史可继续对话）</h2><span className="text-[11px] text-muted">同一任务已有执行未结束时跳过，不补跑</span></div>
+          <div className="mt-2 overflow-hidden rounded-lg border border-line text-xs">
+            <div className="bg-sunken px-3 py-2 text-[11px] text-muted">触发时间 · 会话 · 实际模型 · 执行结果</div>
+            {runs.map((run) => <article key={`${run.taskId}:${run.runId}`} data-schedule-run={run.runId} className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-line bg-paper px-3 py-2">
+              <div className="min-w-0 flex-1 break-words"><span className="font-mono text-[11px]">{hostText(run.startedAt, "Host 未上报开始时间")}</span> · {scheduleNames.has(`${run.taskId}:${run.scheduleId}`) ? hostText(scheduleNames.get(`${run.taskId}:${run.scheduleId}`), "Host 未上报定时任务名称") : "已删除的定时任务"} · <strong>{runLabels[run.result]}</strong><p className="mt-1 break-all text-[11px] text-muted">{run.sessionId ? `会话 ${run.sessionId}` : "未创建独立会话"} · {run.actualModel !== undefined ? hostText(run.actualModel, "Host 未上报模型") : run.model !== undefined ? `${hostText(run.model, "Host 未上报模型")}（未实际运行）` : "—"}</p>{(run.reason || run.failureCode) && <p className="mt-1 break-words text-[11px]">{run.failureCode && <span className="text-destructive">{run.failureCode}：</span>}{hostText(run.reason, "—")}</p>}</div>
+              {run.sessionId && onOpenSession && <Button size="sm" variant="outline" onClick={() => onOpenSession(run.taskId, run.sessionId!)}>继续对话</Button>}
+            </article>)}
+            {runs.length === 0 && <p className="p-4 text-xs text-muted">{result.errors.length ? "成功读取的任务中没有执行记录。" : "暂无执行记录。"}</p>}
           </div>
-        </article>)}
-        {shown.length === 0 && <p className="py-7 text-center text-xs text-muted">{result.errors.length ? "成功读取的任务中没有符合筛选的定时配置。" : "当前筛选下没有定时任务。"}</p>}
+        </section>
       </div>
-      <div className="mt-7 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">执行记录</h2><span className="text-xs text-muted">{result.runs.length} 条{result.errors.length ? "（部分）" : ""}</span></div>
-      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[720px] text-left text-xs"><thead className="border-b border-line text-muted"><tr><th className="py-2 font-medium">开始时间</th><th className="font-medium">定时任务</th><th className="font-medium">状态</th><th className="font-medium">实际模型</th><th className="font-medium">会话 / 结果 / 失败原因</th></tr></thead><tbody>{result.runs.map((run) => <tr key={`${run.taskId}:${run.runId}`} className="border-b border-line" data-schedule-run={run.runId}><td className="py-2">{hostText(run.startedAt, "Host 未上报开始时间")}</td>{/* `parseSchedules` reads `name` with `text = typeof === "string"`, so a blank
-              name is a reachable value; `??` only catches a MISSING schedule, so
-              the blank one is named like the card's own heading instead of
-              rendering an empty 定时任务 cell. */}<td>{scheduleNames.get(run.scheduleId) === undefined ? "已删除的定时任务" : hostText(scheduleNames.get(run.scheduleId), "Host 未上报定时任务名称")}</td><td>{runLabels[run.result]}</td>{/* The ACTUAL model the SDK reported; a run that never started has none and
-              shows the configured model only when the Host recorded it. */}<td>{run.actualModel !== undefined ? hostText(run.actualModel, "Host 未上报模型") : run.model !== undefined ? <span className="text-muted">{hostText(run.model, "Host 未上报模型")}（未实际运行）</span> : "—"}</td><td className="break-words">{run.sessionId !== undefined && onOpenSession ? <Button size="sm" variant="ghost" className="mr-2" onClick={() => onOpenSession(run.taskId, run.sessionId as string)}>继续对话</Button> : run.sessionId !== undefined ? <code className="mr-2 font-mono text-[11px]">{run.sessionId}</code> : null}{run.failureCode !== undefined ? <span className="text-[#ad4545]">{run.failureCode}：</span> : null}{hostText(run.reason, "—")}</td></tr>)}</tbody></table>{result.runs.length === 0 && <p className="py-4 text-xs text-muted">{result.errors.length ? "成功读取的任务中没有执行记录。" : "暂无执行记录。"}</p>}</div>
     </>}
-    {editing && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
-      <div role="dialog" aria-modal="true" aria-label="编辑定时任务" className="max-h-[90vh] w-full max-w-[560px] overflow-y-auto rounded-[7px] border border-line bg-paper p-5 shadow-lg">
-        <h2 className="text-base font-semibold">编辑定时任务</h2>
-        <p className="mt-2 text-xs text-muted">归属任务：{taskNames.get(editing.taskId) ?? editing.taskId}（编排不改归属）。规则、时区与 Provider 由 Host 校验；保存成功后以 Host 的下一份清单为准。</p>
-        {profilesError && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">Provider 列表读取失败：{profilesError}。不改用其它 Provider：保存仍用该定时任务已存的 Provider / 模型。</p>}
+    {editing && <Dialog open onOpenChange={(open) => { if (!open && !pending) setEditing(null); }}>
+      <DialogContent aria-labelledby={undefined} aria-label="编辑定时任务" className="max-w-[560px]" onInteractOutside={(event) => event.preventDefault()} onEscapeKeyDown={(event) => { if (pending) event.preventDefault(); }}>
+        <DialogTitle>编辑定时任务</DialogTitle>
+        <DialogDescription>归属任务：{taskNames.get(editing.taskId) ?? editing.taskId}（编排不改归属）。规则、时区与 Provider 由 Host 校验；保存成功后以 Host 的下一份清单为准。</DialogDescription>
+        {profilesError && <p role="alert" className="mt-3 border border-line bg-paper p-2 text-xs text-destructive">Provider 列表读取失败：{profilesError}。不改用其它 Provider：保存仍用该定时任务已存的 Provider / 模型。</p>}
         <div className="mt-4 grid gap-3">
           <label className="grid gap-1 text-xs">名称<input aria-label="名称" className="min-h-8 rounded-[4px] border border-line bg-paper px-2" value={editing.name} onChange={(event) => patch({ name: event.target.value })} /></label>
           <label className="grid gap-1 text-xs">Provider / 模型<select aria-label="Provider / 模型" className="min-h-8 rounded-[4px] border border-line bg-paper px-2" value={`${editing.providerId}\u0000${editing.model}`} onChange={(event) => { const [providerId = "", model = ""] = event.target.value.split("\u0000"); patch({ providerId, model }); }}>
@@ -244,14 +252,14 @@ export function DesktopSchedulesPage({ tasks, onOpenTask, onOpenSession }: { tas
           <label className="grid gap-1 text-xs">提示词<textarea aria-label="提示词" rows={5} className="rounded-[4px] border border-line bg-paper px-2 py-1" value={editing.prompt} onChange={(event) => patch({ prompt: event.target.value })} /><span className="text-[11px] text-muted">结果如何使用写在提示词里；不接受额外的发送 / 通知配置字段。</span></label>
         </div>
         {preview?.kind === "ok" && <div className="mt-3 text-xs"><p data-testid="desktop-schedule-preview">{preview.description}</p><p className="text-muted">{preview.next === null ? "Host 未给出下次触发时间" : `下次触发 ${preview.next}`}</p></div>}
-        {preview?.kind === "refused" && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-xs text-[#ad4545]">{preview.message}</p>}
-        {editorError && <p role="alert" className="mt-3 border border-[#e0b4b4] bg-[#fdf3f3] p-2 break-words text-xs text-[#ad4545]">{editorError}</p>}
-        <div className="mt-5 flex justify-end gap-2">
+        {preview?.kind === "refused" && <p role="alert" className="mt-3 border border-line bg-paper p-2 text-xs text-destructive">{preview.message}</p>}
+        {editorError && <p role="alert" className="mt-3 border border-line bg-paper p-2 break-words text-xs text-destructive">{editorError}</p>}
+        <DialogFooter>
           <Button type="button" variant="outline" disabled={pending !== null} onClick={() => setEditing(null)}>取消</Button>
           <Button type="button" variant="outline" disabled={pending !== null} onClick={() => void runPreview()}>{pending === "preview" ? "校验中…" : "校验并预览"}</Button>
           <Button type="button" disabled={pending !== null} onClick={() => void save()}>{pending === "save" ? "保存中…" : "保存"}</Button>
-        </div>
-      </div>
-    </div>}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>}
   </div>;
 }

@@ -963,6 +963,7 @@ describe("Desktop SDK conversation", () => {
     const dialog = screen.getByRole("dialog", { name: "归档当前任务" });
     expect(dialog).toHaveTextContent("仅归档保留副本：保留每个仓库的工作副本，不删除任何文件");
     expect(dialog).toHaveTextContent("未知交付状态不当作已交付");
+    fireEvent.click(screen.getByRole("radio", { name: /归档并清理独立 worktree/ }));
     fireEvent.click(screen.getByRole("button", { name: "归档并清理…" }));
     await waitFor(() => expect(onArchived).toHaveBeenCalledOnce());
     expect(taskOp).toHaveBeenCalledWith("task-a", "task/archive", { mode: "archive-and-cleanup" });
@@ -999,7 +1000,7 @@ describe("Desktop SDK conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("task-locked");
     expect(screen.getByRole("button", { name: "查看归档状态" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发送", hidden: true })).toBeDisabled();
   });
 
   it("subscribes before sending, refuses unconfigured provider without a fabricated reply and retains draft", async () => {
