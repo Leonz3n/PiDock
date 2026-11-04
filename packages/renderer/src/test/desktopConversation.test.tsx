@@ -1339,6 +1339,7 @@ it.each(["Cancel", "Escape"])("archive %s returns keyboard focus to task actions
   const f = setup(); mount(f);
   await screen.findByText(/尚未开始/);
   const user = userEvent.setup();
+  await user.click(screen.getByLabelText("会话与工具操作"));
   const trigger = screen.getByRole("button", { name: "任务操作" });
   await user.click(trigger);
   await user.click(screen.getByRole("menuitem", { name: "归档当前任务" }));
@@ -1359,6 +1360,7 @@ it("archive pending write resists Escape and Cancel then allows dismissal after 
   mount(f);
   await screen.findByText(/尚未开始/);
   const user = userEvent.setup();
+  await user.click(screen.getByLabelText("会话与工具操作"));
   const trigger = screen.getByRole("button", { name: "任务操作" });
   await user.click(trigger);
   await user.click(screen.getByRole("menuitem", { name: "归档当前任务" }));

@@ -692,6 +692,8 @@ async function run() {
         diffReply,
       );
     }
+    await evaluate("document.querySelector('summary[aria-label=会话与工具操作]').click()");
+    await until("document.querySelector('details.conversation-actions').open", "visible conversation toolbar");
     for (const dismissal of ["Cancel", "Escape"]) {
       await click("任务操作");
       await evaluate("[...document.querySelectorAll('[role=menuitem]')].find(e=>e.textContent.includes('归档当前任务')).click()");
