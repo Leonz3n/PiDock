@@ -163,7 +163,7 @@ async function run() {
     await evaluate(`window.pidock.preferencesOp({op:'appearance/save', appearance:'${theme}'})`);
     wc.reload();
     await until(`document.documentElement?.dataset.theme === '${theme}' && document.querySelector('[data-testid=desktop-project-overview]')`, "workspace theme");
-    await until("document.body.innerText.includes('路径可用')", "workspace sources verified");
+    await until("document.body.innerText.includes('路径可用') && document.querySelectorAll('[data-task-nav]').length === 4 && document.querySelector('[data-testid=overview-task-count-inline]')?.textContent === '4'", "workspace sources and lifecycle verified");
     await capture(`${theme}-workspace`);
     for (const task of tasks) {
       await sidebarClick(task.name);
