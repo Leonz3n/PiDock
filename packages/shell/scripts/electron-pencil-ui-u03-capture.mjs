@@ -325,15 +325,16 @@ async function run() {
           await evaluate("document.querySelector('summary[aria-label=\"会话与工具操作\"]').closest('details').open=true;true");
           await click(dock);
           await evaluate("document.querySelector('summary[aria-label=\"会话与工具操作\"]').closest('details').open=false;true");
+          check(`${theme}-${decision}-${dock}: selected dock is visible`, await evaluate(`document.querySelector('[data-testid=desktop-tool-dock] [role=tab][aria-selected=true]')?.textContent.trim() === ${JSON.stringify(dock)}`));
           check(`${theme}-${decision}-${dock}: approval hidden`, await evaluate("document.querySelector('[data-testid=desktop-approval-card]').getClientRects().length === 0"));
           check(`${theme}-${decision}-${dock}: composer input/send/stop remain reachable`, await evaluate("['textarea[aria-label=消息]', 'button[aria-label=发送]'].every(s=>{const r=document.querySelector(s).getBoundingClientRect();return r.width>0&&r.height>0&&r.bottom<=innerHeight}) && [...document.querySelectorAll('button')].some(b=>b.textContent.includes('停止')&&b.getClientRects().length>0)"));
-          await evaluate("document.querySelector('[data-testid=desktop-tool-dock] [role=tab]').focus();true");
+          await evaluate("document.querySelector('[data-testid=desktop-tool-dock] [role=tab][aria-selected=true]').focus();true");
           await key("Enter",4); await key("Escape"); await wait(200);
           check(`${theme}-${decision}-${dock}: hidden shortcuts make zero decisions`, calls.filter(row => ["task/approve", "task/reject"].includes(row.op)).length === beforeDockDecisions);
           await capture(`${theme}-${decision}-${dock}-hidden`, true);
           views.window.setContentSize(1440,900); await wait(300);
           check(`${theme}-${decision}-${dock}: widening reveals approval`, await evaluate("document.querySelector('[data-testid=desktop-approval-card]').getClientRects().length > 0"));
-          await evaluate("document.querySelector('[data-testid=desktop-tool-dock] [role=tab]').focus();true");
+          await evaluate("document.querySelector('[data-testid=desktop-tool-dock] [role=tab][aria-selected=true]').focus();true");
           await key("Enter",4); await key("Escape"); await wait(100);
           check(`${theme}-${decision}-${dock}: focused desktop dock owns keys`, calls.filter(row => ["task/approve", "task/reject"].includes(row.op)).length === beforeDockDecisions);
           views.window.setContentSize(width,height); await wait(300);
