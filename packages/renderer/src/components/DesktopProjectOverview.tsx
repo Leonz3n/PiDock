@@ -134,7 +134,7 @@ export function DesktopProjectOverview({
           </div>
           <div className="min-w-0">
             <span className="block truncate font-mono text-[11px] text-accent">{hostText(task.branch, "Host 未上报分支")}</span>
-            <span className="block truncate text-[10px] text-muted">{task.repoCount > 0 ? `${task.repoCount} 个仓库` : "无仓库来源"}</span>
+            <span className="block truncate text-[10px] text-muted">{task.repoCount > 0 ? `${task.repoCount} 个独立仓库` : "无独立仓库记录 · 来源见任务事实"}</span>
           </div>
           <span className="min-w-0 truncate text-muted below-narrow:hidden">{hostText(task.updatedAt.slice(0, 10), "Host 未上报更新时间")}</span>
           <span className={`min-w-0 truncate font-semibold below-narrow:hidden ${status.tone}`}>{status.text}</span>
