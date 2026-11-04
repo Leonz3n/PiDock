@@ -80,7 +80,7 @@ async function run() {
   execFileSync("git", ["clone", "-q", "--bare", source, remote]);
   git(["remote", "add", "origin", remote]);
   execFileSync("git", ["clone", "-q", source, secondSource]);
-  const workspace = await projects.create({ name: "PiDock 核心开发", description: "U04 真实生产工作空间分层验收", repositories: [{ name: "pidock", path: source }], directories: [{ name: "common-configs", path: directory }], environment: [{ key: "NODE_ENV", value: "development" }], branchTemplate: "feature/{taskId}" });
+  await projects.create({ name: "PiDock 核心开发", description: "U04 真实生产工作空间分层验收", repositories: [{ name: "pidock", path: source }], directories: [{ name: "common-configs", path: directory }], environment: [{ key: "NODE_ENV", value: "development" }], branchTemplate: "feature/{taskId}" });
 
   const taskVariables = new TaskVariableStore(profile);
   const taskEnvironment = (id) => {
