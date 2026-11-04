@@ -110,7 +110,7 @@ it("keeps historical failures visible when their rule no longer exists", async (
     />,
   );
   expect(await screen.findByText(/已删除的定时任务/)).toBeInTheDocument();
-  expect(screen.getByText(/credential-missing/)).toHaveTextContent(
+  expect(screen.getByText(/credential-missing/).parentElement).toHaveTextContent(
     "没有可用凭据",
   );
   expect(screen.queryByRole("button", { name: "继续对话" })).toBeNull();
