@@ -282,6 +282,11 @@ async function run() {
       const primary=mode==='worktree'?'固定基线并预览路径':mode==='existing-git'?'读取原检出并预览':'预览路径';
       await click(primary);
       await until("document.querySelector('[role=dialog]')?.innerText.includes('确认创建 / 恢复')",'real prepared intent');
+      check(`${theme} ${mode}: preview retains dialog focus`, await evaluate("document.querySelector('[role=dialog]').contains(document.activeElement)"));
+      views.window.show(); app.focus({steal:true}); views.window.focus(); wc.focus();
+      await until("document.hasFocus()", 'active document before preview focus probe');
+      await evaluate("document.querySelector('button[aria-label=新建任务]').focus()");
+      check(`${theme} ${mode}: preview constrains background focus`, await evaluate("document.querySelector('[role=dialog]').contains(document.activeElement)"));
       const pending=creation.current();
       check(`${mode}: Host persisted pending intent`,pending?.workspaceMode===mode,pending);
       await capture(`${theme}-${mode}-prepared`,true);
