@@ -26,7 +26,7 @@ import { Button } from "./ui/button";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
 import { Separator } from "./ui/separator";
 
-const field = "min-w-0 w-full border border-line bg-bg px-2 py-1 text-xs disabled:opacity-70";
+const field = "min-w-0 w-full border border-line bg-bg px-2 py-1 text-xs disabled:bg-bg disabled:text-muted disabled:opacity-100";
 
 /**
  * [Pencil T14] #149 设置 — its OWN nav destination (S11 `Pkb7d` light / `L28xKD`
@@ -58,11 +58,11 @@ const field = "min-w-0 w-full border border-line bg-bg px-2 py-1 text-xs disable
 
 type Pane = "appearance" | "keybindings" | "language" | "general";
 
-const NAV: { key: Pane; label: string; icon: "grid" | "key" | "globe" | "settings" }[] = [
-  { key: "appearance", label: "外观", icon: "grid" },
-  { key: "keybindings", label: "快捷键", icon: "key" },
-  { key: "language", label: "语言", icon: "globe" },
-  { key: "general", label: "通用", icon: "settings" },
+const NAV: { key: Pane; label: string; icon: "sun-moon" | "keyboard" | "languages" | "settings-2" }[] = [
+  { key: "appearance", label: "外观", icon: "sun-moon" },
+  { key: "keybindings", label: "快捷键", icon: "keyboard" },
+  { key: "language", label: "语言", icon: "languages" },
+  { key: "general", label: "通用", icon: "settings-2" },
 ];
 
 const SECTION_TITLE = "text-[10px] font-bold uppercase tracking-[1.4px] text-muted";
@@ -113,7 +113,7 @@ export function DesktopSettingsPage({
         <kbd className="ml-auto shrink-0 text-[10px] text-muted">Esc</kbd>
       </button> : null}
       <div className="flex items-center gap-2 px-1 py-2">
-        <Icon name="settings-2" />
+        <Icon name="sliders" />
         <span className="text-[14px] font-semibold text-ink">设置</span>
       </div>
       <p className={`${SECTION_TITLE} px-1 pt-1`}>应用偏好</p>
