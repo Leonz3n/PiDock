@@ -92,7 +92,7 @@ export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, he
   const [mode, setMode] = useState<WorkspaceModeView | null>(null);
   /**
    * [#139] How many sessions this task actually has, read from the Host's own
-   * index. `null` while outstanding, and a failed read is named rather than
+   * index, including archived history. `null` while outstanding, and a failed read is named rather than
    * printed as "one session" (the sentence this line used to carry unconditionally).
    */
   const [sessions, setSessions] = useState<SessionList | null>(null);
@@ -105,7 +105,7 @@ export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, he
     onActiveSession?.(taskId, null);
     void readTaskSessions(taskId).then((result) => {
       if (!live) return;
-      if (result.ok) { onActiveSession?.(taskId, result.list.activeSessionId); setSessions(result.list); setSessionCount(result.list.sessions.filter((session) => !session.archived).length); return; }
+      if (result.ok) { onActiveSession?.(taskId, result.list.activeSessionId); setSessions(result.list); setSessionCount(result.list.sessions.length); return; }
       setSessionError(result.error);
     });
     return () => { live = false; };
@@ -136,7 +136,7 @@ export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, he
     if (!result.ok) { setSessionError(result.error); return; }
     onActiveSession?.(taskId, result.list.activeSessionId);
     setSessions(result.list);
-    setSessionCount(result.list.sessions.filter((session) => !session.archived).length);
+    setSessionCount(result.list.sessions.length);
     if (result.list.activeSessionId) onOpenSession?.(result.list.activeSessionId);
   };
   if (compact) return <section aria-label="会话工作区摘要" data-testid="desktop-session-facts" className="flex shrink-0 items-center gap-3 border-b border-line bg-paper px-4 py-2 text-[10px] text-muted">

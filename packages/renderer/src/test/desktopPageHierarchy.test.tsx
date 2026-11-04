@@ -127,3 +127,18 @@ it("returning from a directly selected task opens its owning workspace", async (
   fireEvent.click(screen.getByRole("button", { name: "返回工作空间总览" }));
   expect(await screen.findByTestId("overview-title")).toHaveTextContent(other.name);
 });
+
+it("task session history counts archived sessions as well as active sessions", async () => {
+  const api = bridge();
+  const original = api.taskOp!;
+  const session = { id: "main", name: "主会话", createdAt: "2026-01-01", updatedAt: "2026-01-02", archived: false, permission: "default", binding: null };
+  api.taskOp = vi.fn(async (taskId, op, payload) => op === "task/sessionList"
+    ? { ok: true, payload: { activeSessionId: "main", sessions: [session, { ...session, id: "old", name: "归档历史", archived: true }], provider: null } }
+    : original(taskId, op, payload));
+  window.pidock = api;
+  render(<App />);
+  await screen.findByTestId("desktop-project-overview");
+  fireEvent.click(await sidebar().findByRole("button", { name: "真实任务" }));
+  await waitFor(() => expect(screen.getByTestId("task-facts-sessions")).toHaveTextContent("会话 2 个"));
+  expect(screen.getByRole("button", { name: "进入对话 · 归档历史" })).toBeVisible();
+});
