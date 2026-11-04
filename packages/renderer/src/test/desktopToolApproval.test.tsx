@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopConversation } from "../components/DesktopConversation";
 import type { PidockBridge } from "../data/shellBridge";
@@ -110,7 +110,9 @@ describe("ticket 140 会话内审批卡", () => {
   it("does not approve hidden conversation tools while a management page is active", async () => {
     const fixture = setup({approvals:()=>({ok:true,payload:{approvals:[approvalRow()]}})});
     mount(true);
-    await screen.findByTestId("desktop-approval-approve");
+    expect(await screen.findByTestId("desktop-approval-approve")).toBeEnabled();
+    // findBy can observe the card before its passive shortcut effect is flushed.
+    await act(async () => {});
     fireEvent.keyDown(window,{key:"Enter",metaKey:true});
     expect(fixture.calls().filter(row=>row.op === "task/approve")).toHaveLength(0);
   });
@@ -119,7 +121,9 @@ describe("ticket 140 会话内审批卡", () => {
     let status = "pending";
     const fixture = setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow({ status })] } }), resolve: () => { status = key === "Enter" ? "approved" : "rejected"; return { ok: true, payload: {} }; } });
     const view = mount();
-    await screen.findByTestId("desktop-approval-approve");
+    expect(await screen.findByTestId("desktop-approval-approve")).toBeEnabled();
+    // findBy can observe the card before its passive shortcut effect is flushed.
+    await act(async () => {});
     const surface = view.container.firstElementChild as HTMLElement;
     surface.style.display = "none";
     fireEvent.keyDown(window, { key, metaKey: key === "Enter" });
@@ -136,9 +140,11 @@ describe("ticket 140 会话内审批卡", () => {
   it("keeps keyboard decisions with the conversation when a tool dock owns focus", async () => {
     const fixture = setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow()] } }) });
     mount();
-    await screen.findByTestId("desktop-approval-approve");
-    fireEvent.click(screen.getByRole("button", { name: "文件", exact: true }));
-    const tab = await screen.findByRole("tab", { name: "文件", exact: true });
+    expect(await screen.findByTestId("desktop-approval-approve")).toBeEnabled();
+    // findBy can observe the card before its passive shortcut effect is flushed.
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "文件" }));
+    const tab = await screen.findByRole("tab", { name: "文件" });
     tab.focus();
     fireEvent.keyDown(tab, { key: "Enter", metaKey: true });
     fireEvent.keyDown(tab, { key: "Escape" });
@@ -153,7 +159,9 @@ describe("ticket 140 会话内审批卡", () => {
     let status = "pending";
     const fixture = setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow({status})] } }), resolve: () => { status = "approved"; return {ok:true,payload:{}}; } });
     mount();
-    await screen.findByTestId("desktop-approval-approve");
+    expect(await screen.findByTestId("desktop-approval-approve")).toBeEnabled();
+    // findBy can observe the card before its passive shortcut effect is flushed.
+    await act(async () => {});
     fireEvent.keyDown(window, {key:"Enter",metaKey:true,isComposing:true});
     expect(fixture.calls().filter(row=>row.op === "task/approve")).toHaveLength(0);
     fireEvent.keyDown(screen.getByLabelText("消息"), {key:"Enter",metaKey:true});
