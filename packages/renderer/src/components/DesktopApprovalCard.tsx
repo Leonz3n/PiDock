@@ -43,6 +43,7 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
   const [outcome, setOutcome] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
+  const cardRef = useRef<HTMLElement>(null);
   const busyRef = useRef(false);
   const decide = useCallback(async (approval: TaskApproval, decision: ApprovalDecision) => {
     if (busyRef.current) return;
@@ -69,6 +70,7 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
     if (!pending) return;
     const keyboard = (event: KeyboardEvent) => {
       if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+      if (cardRef.current?.closest("[hidden], [inert]") || document.querySelector('[aria-modal="true"]')) return;
       if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey))) {
         event.preventDefault();
         event.stopPropagation();
@@ -107,7 +109,7 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
 
 
   return (
-    <section data-testid="desktop-approval-card" aria-label="工具审批" className="flex min-w-0 flex-col gap-2">
+    <section ref={cardRef} data-testid="desktop-approval-card" aria-label="工具审批" className="flex min-w-0 flex-col gap-2">
       {pending.map((approval) => (
         <div key={approval.approvalId} data-testid={`desktop-approval-${approval.approvalId}`} className="min-w-0 rounded-lg border border-attention bg-attention-soft px-3.5 py-3">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">

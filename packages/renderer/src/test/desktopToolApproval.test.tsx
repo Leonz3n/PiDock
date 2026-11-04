@@ -88,9 +88,9 @@ function setup(options: {
   return { taskOp, calls };
 }
 
-function mount() {
+function mount(hidden = false) {
   return render(
-    <DesktopConversation
+    <div hidden={hidden}><DesktopConversation
       taskId={TASK_ID}
       name="Task"
       branch="task/main"
@@ -100,13 +100,21 @@ function mount() {
       onBack={vi.fn()}
       onOpenProviders={vi.fn()}
       onArchived={vi.fn()}
-    />,
+    /></div>,
   );
 }
 
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("ticket 140 会话内审批卡", () => {
+  it("does not approve hidden conversation tools while a management page is active", async () => {
+    const fixture = setup({approvals:()=>({ok:true,payload:{approvals:[approvalRow()]}})});
+    mount(true);
+    await screen.findByTestId("desktop-approval-approve");
+    fireEvent.keyDown(window,{key:"Enter",metaKey:true});
+    expect(fixture.calls().filter(row=>row.op === "task/approve")).toHaveLength(0);
+  });
+
   it("supports approval shortcuts once and ignores IME confirmation keys", async () => {
     let status = "pending";
     const fixture = setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow({status})] } }), resolve: () => { status = "approved"; return {ok:true,payload:{}}; } });

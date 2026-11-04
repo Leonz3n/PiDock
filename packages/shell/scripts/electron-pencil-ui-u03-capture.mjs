@@ -307,6 +307,15 @@ async function run() {
       check(`${theme}-${decision}: displayed execution parameters are Host final payload`, await evaluate(`document.querySelector('[data-testid=desktop-approval-operation]')?.textContent.includes(${JSON.stringify(pending.operation)})`),pending);
       await evaluate("document.querySelector('[data-testid=desktop-approval-card]').scrollIntoView({block:'end'});true");
       await capture(`${theme}-${decision}-pending`);
+      if (decision === "approve") {
+        const beforeDecisions = calls.filter(row=>["task/approve","task/reject"].includes(row.op)).length;
+        await sidebarClick("设置");
+        await until("document.querySelector('[data-testid=desktop-settings-page]')", "management while approval pending");
+        await key("Enter",4);
+        check(`${theme}: hidden approval ignores management shortcut`, calls.filter(row=>["task/approve","task/reject"].includes(row.op)).length===beforeDecisions);
+        await key("Escape");
+        await until("document.querySelector('textarea[aria-label=消息]')", "return to pending approval");
+      }
       await evaluate("document.querySelector('textarea[aria-label=消息]').focus();true");
       await key(decision === "approve" ? "Enter" : "Escape", decision === "approve" ? 4 : 0);
       await key(decision === "approve" ? "Enter" : "Escape", decision === "approve" ? 4 : 0);
