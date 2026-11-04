@@ -101,9 +101,6 @@ describe("Desktop shell column at the production minimum (#49)", () => {
   it("keeps the breadcrumb on one line and truncates only the real names", () => {
     mountShell({ project: "Adder", task: "对账单详情·任务A" });
     const breadcrumb = screen.getByTestId("desktop-breadcrumb");
-    // The literal segments must not shrink/wrap: CJK text wrapped one character
-    // per line at the 192px minimum breadcrumb width, which is the reported defect.
-    expect(tiers(within(breadcrumb).getByText("工作区").className)).toEqual(expect.arrayContaining(["shrink-0", "whitespace-nowrap"]));
     for (const name of ["Adder", "对账单详情·任务A"]) {
       expect(tiers(within(breadcrumb).getByText(name).className)).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
     }

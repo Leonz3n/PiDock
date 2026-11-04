@@ -18,15 +18,16 @@ const MODE_HINTS: Record<WorkspaceModeView, string> = {
   "plain-dirs": "仅普通目录：共享原文件，不涉及 Git 仓库；写入影响原文件。",
 };
 
-export function DesktopTaskCreation({ project, bridge, onCreated }: {
+export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = false }: {
   project?: DesktopProject;
+  openOnMount?: boolean;
   bridge: PidockBridge;
   onCreated: (projectId: string, taskId: string) => Promise<void>;
 }) {
-  const [open, setOpen] = useState(false);
-  const [formProjectId, setFormProjectId] = useState<string | null>(null);
+  const [open, setOpen] = useState(openOnMount);
+  const [formProjectId, setFormProjectId] = useState<string | null>(openOnMount ? project?.id ?? null : null);
   const [intent, setIntent] = useState<CreationIntentView | null>(null);
-  const [mode, setMode] = useState<WorkspaceModeView>("worktree");
+  const [mode, setMode] = useState<WorkspaceModeView>(openOnMount && !project?.repositories.length ? "plain-dirs" : "worktree");
   const [name, setName] = useState("");
   const [repos, setRepos] = useState<Record<string, { selected: boolean; remote: string; branch: string }>>({});
   const [directories, setDirectories] = useState<string[]>([]);

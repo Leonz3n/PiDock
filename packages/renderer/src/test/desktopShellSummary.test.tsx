@@ -2,11 +2,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { App } from "../App";
 import { memoryHost } from "../data/memoryHost";
 import { desktopSummarySegments } from "../data/desktopShellSummary";
-import { DesktopShell } from "../components/DesktopShell";
 import type { PidockBridge } from "../data/shellBridge";
 
 /**
@@ -62,7 +61,6 @@ async function openRealTask() {
   await screen.findByTestId("desktop-conversation");
 }
 
-const strip = () => screen.getByTestId("desktop-summary");
 
 afterEach(() => {
   cleanup();
@@ -70,163 +68,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("[UI 对齐 S8a] production bottom summary bar", () => {
-  it("reads the current task, the verified task count and the real task roots on the desktop route", async () => {
-    window.pidock = bridge(verifiedLifecycle);
-    render(<StrictMode><App /></StrictMode>);
-    await openRealTask();
-
-    // The bar is on the production shell, not the demo `Shell`.
-    expect(screen.getByTestId("desktop-shell")).toBeInTheDocument();
-    expect(screen.queryByTestId("shell-sidebar")).toBeNull();
-    expect(within(strip()).getByText("真实任务")).toBeInTheDocument();
-    await waitFor(() => expect(within(strip()).getByText("进行中的任务 1")).toBeInTheDocument());
-    expect(within(strip()).getByText("任务根 1/1 就绪")).toBeInTheDocument();
-  });
-
-  it("names the Project the shell opens on, without a task and without inventing one", async () => {
-    window.pidock = bridge(verifiedLifecycle);
-    render(<StrictMode><App /></StrictMode>);
-    await screen.findByTestId("desktop-project-overview");
-
-    // Prototype A opens on the first Project; the strip names it by its real
-    // name. It is not a task name and no task is fabricated to fill the slot.
-    await waitFor(() => expect(within(strip()).getByText(project.name)).toBeInTheDocument());
-    expect(within(strip()).getByText("进行中的任务 1")).toBeInTheDocument();
-    expect(within(strip()).queryByText("真实任务")).toBeNull();
-  });
-
-  it("renders no segment for a readout the shell does not have — no fabricated 0 服务", async () => {
-    window.pidock = bridge(verifiedLifecycle);
-    render(<StrictMode><App /></StrictMode>);
-    await openRealTask();
-
-    // Prototype A's other two state elements are unreadable from the shell: the
-    // task's services live in its own tool dock (`task/serviceRunRecords`), the
-    // browser owner in the page main owns. Neither may be replaced by a value.
-    // The one count the shell does read is a verified number, not a zero-filler.
-    await waitFor(() => expect(strip().textContent ?? "").toContain("进行中的任务 1"));
-    const text = strip().textContent ?? "";
-    expect(text).toMatch(/真实任务/);
-    expect(text).not.toMatch(/服务/);
-    expect(text).not.toMatch(/浏览器|未打开|接管/);
-    expect(text).not.toMatch(/\d+\s*服务/);
-    expect(text).not.toContain("—");
-    // …and the demo bar's own fallback wording (`ShellSummaryBar` says 未选择工作区
-    // when its store holds no task) is not production state either.
-    expect(text).not.toContain("未选择工作区");
-  });
-
-  it("reads an unverified lifecycle as 未核验 instead of a zero count", async () => {
-    window.pidock = bridge(() => ({ ok: false, error: "任务归档状态读取失败" }));
-    render(<StrictMode><App /></StrictMode>);
-    await screen.findByTestId("desktop-project-overview");
-
-    await waitFor(() => expect(within(strip()).getByText("进行中的任务 · 未核验")).toBeInTheDocument());
-    // The name is a real readout, so it stays; only the unverifiable count is
-    // withheld. A `0` here would claim every task is archived.
-    expect(within(strip()).getByText(project.name)).toBeInTheDocument();
-    expect(within(strip()).queryByText(/进行中的任务 0/)).toBeNull();
-    // The sidebar states the same condition; a disagreement here is a defect.
-    await waitFor(() => expect(within(screen.getByTestId("desktop-sidebar")).getByText("未核验")).toBeInTheDocument());
-  });
-
-  it("renders the bar on the real route without touching the demo fixture", async () => {
+describe("Pencil workspace chrome", () => {
+  it("removes the obsolete summary and workspace card while retaining the real task and no demo reads", async () => {
     const demoRead = vi.spyOn(memoryHost, "getWorkspace");
-    const demoCreate = vi.spyOn(memoryHost, "createTask");
-    const demoSend = vi.spyOn(memoryHost, "sendMessage");
     window.pidock = bridge(verifiedLifecycle);
     render(<StrictMode><App /></StrictMode>);
     await openRealTask();
-    await waitFor(() => expect(within(strip()).getByText("进行中的任务 1")).toBeInTheDocument());
-
-    // The demo bar itself is not mounted on this route either.
-    expect(screen.queryByTestId("shell-summary")).toBeNull();
+    expect(screen.queryByTestId("desktop-summary")).toBeNull();
+    expect(screen.queryByTestId("desktop-workspace-card")).toBeNull();
+    expect(within(screen.getByTestId("desktop-sidebar")).getByRole("button", { name: "真实任务" })).toBeVisible();
     expect(demoRead).not.toHaveBeenCalled();
-    expect(demoCreate).not.toHaveBeenCalled();
-    expect(demoSend).not.toHaveBeenCalled();
-    expect(strip().textContent).not.toMatch(/Atlas|演示/);
-  });
-
-  it("keeps the strip's own sources out of the demo fixture graph", () => {
-    // The demo bar reads `stores/host`; the production strip must not reach it,
-    // directly or through the shell it renders in.
-    const files = ["data/desktopShellSummary.ts", "components/DesktopShell.tsx"];
-    const offenders = files.flatMap((file) => {
-      const source = readFileSync(join(RENDERER_SRC, file), "utf8");
-      return [/from\s+["'`][^"'`]*stores\/host["'`]/, /from\s+["'`][^"'`]*data\/memoryHost["'`]/, /from\s+["'`][^"'`]*ShellSummaryBar["'`]/]
-        .filter((pattern) => pattern.test(source))
-        .map((pattern) => `${file}: ${pattern}`);
-    });
-    expect(offenders).toEqual([]);
-  });
-
-  it("hides the state segments at the mid tier and lets the name truncate instead of widening the column", () => {
-    render(
-      <DesktopShell
-        view={{ view: "task", taskId: TASK_ID }}
-        onNavigate={vi.fn()}
-        projects={[{ id: project.id, name: project.name, description: project.description, taskCount: tasks.length }]}
-        projectsInitialized
-        unassignedCount={0}
-        tasks={tasks.map((task) => ({ ...task, projectId: project.id }))}
-        allTaskCount={tasks.length}
-        lifecyclePending={false}
-        lifecycleErrors={[]}
-        roots={roots}
-        rootRetry={{ busy: false, pending: false, error: null, run: vi.fn() }}
-        breadcrumb={{ project: project.name, task: "对账单详情·任务A" }}
-      >
-        <p>内容</p>
-      </DesktopShell>,
-    );
-
-    const bar = strip();
-    const tiers = (className: string) => className.split(/\s+/);
-    // The prototype drops its whole state line at 960 (`style.css`:
-    // `.switcher .state{display:none}`); jsdom has no layout engine, so the
-    // contract that produced that tier is asserted here and the geometry itself
-    // stays a named boundary (real-Electron capture).
-    expect(tiers(within(bar).getByText("对账单详情·任务A").className)).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
-    for (const label of ["进行中的任务 1", "任务根 1/1 就绪"]) {
-      expect(tiers(within(bar).getByText(label).className)).toContain("below-mid:hidden");
-    }
-    // A long name must not widen the strip past its column, and the strip must
-    // not hold a fixed width (`shrink-0`) while its column shrinks.
-    expect(tiers(bar.className)).toEqual(expect.arrayContaining(["min-w-0", "max-w-full", "overflow-hidden", "whitespace-nowrap"]));
-    expect(tiers(bar.className)).not.toContain("shrink-0");
-    // This view has a `scope` segment, so the pill itself stays at the mid tier.
-    expect(tiers(bar.className)).not.toContain("below-mid:hidden");
-  });
-
-  it("keeps no empty pill at the mid tier on a view that names neither a task nor a Project", () => {
-    render(
-      <DesktopShell
-        view={{ view: "usage" }}
-        onNavigate={vi.fn()}
-        projects={[{ id: project.id, name: project.name, description: project.description, taskCount: tasks.length }]}
-        projectsInitialized
-        unassignedCount={0}
-        tasks={tasks.map((task) => ({ ...task, projectId: project.id }))}
-        allTaskCount={tasks.length}
-        lifecyclePending={false}
-        lifecycleErrors={[]}
-        roots={roots}
-        rootRetry={{ busy: false, pending: false, error: null, run: vi.fn() }}
-        breadcrumb={{ project: project.name }}
-      >
-        <p>内容</p>
-      </DesktopShell>,
-    );
-
-    // 用量/已归档/需要处理 name neither a task nor a Project, so the strip produces
-    // no `scope` segment and its remaining segments are `below-mid:hidden`. At 960
-    // the section then painted only its own border and background as an empty
-    // ~22×14px pill (S8a review P2), so the pill hides with them while the wide
-    // tier keeps showing the segment it really read.
-    const bar = strip();
-    expect(bar.className.split(/\s+/)).toContain("below-mid:hidden");
-    expect(within(bar).getByText("进行中的任务 1")).toBeInTheDocument();
   });
 });
 

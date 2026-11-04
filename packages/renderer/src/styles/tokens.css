@@ -160,3 +160,33 @@
 :root[data-theme="dark"] .border-\[\#dfe3eb\] {
   border-color: var(--color-line);
 }
+
+/* S01/S06 workspace chrome; the compact rail can reveal the same real tree. */
+.shell-nav-row { height: 30px; justify-content: flex-start; gap: 7px; padding: 0 6px; font-size: 11px; color: var(--color-muted); }
+@media (max-width: 960px) {
+  .workspace-sidebar { width: 48px; padding-inline: 8px; }
+  .workspace-sidebar .shell-nav-label, .workspace-sidebar .shell-tree { display: none; }
+  .workspace-sidebar .shell-brand, .workspace-sidebar .shell-new-task, .workspace-sidebar .shell-nav-row { justify-content: center; padding-inline: 0; }
+  .workspace-sidebar .shell-rail-toggle { display: flex; }
+  .workspace-sidebar[data-expanded="true"] { width: 260px; }
+  .workspace-sidebar[data-expanded="true"] .shell-nav-label { display: flex; }
+  .workspace-sidebar[data-expanded="true"] .shell-tree { display: block; }
+  .workspace-sidebar[data-expanded="true"] .shell-brand, .workspace-sidebar[data-expanded="true"] .shell-new-task, .workspace-sidebar[data-expanded="true"] .shell-nav-row { justify-content: flex-start; }
+}
+
+@media (max-width: 960px) {
+  .workspace-sidebar .shell-brand { order: 0; height: 42px; }
+  .workspace-sidebar .shell-rail-toggle { order: 1; }
+  .workspace-sidebar .shell-new-task { order: 2; height: 28px; }
+  .workspace-sidebar .shell-task-picker { display: flex; order: 3; }
+  .workspace-sidebar nav { order: 4; }
+  .workspace-sidebar:not([data-expanded="true"]) [data-nav-group="system"] { flex: 1; border: 0; padding-top: 0; gap: 8px; }
+  .workspace-sidebar:not([data-expanded="true"]) [data-nav-destination="schedules"] { order: -1; margin-bottom: auto; }
+  .workspace-sidebar:not([data-expanded="true"]) [data-nav-destination="more"],
+  .workspace-sidebar:not([data-expanded="true"]) [data-nav-destination="archive"] { display: none; }
+  [data-testid="desktop-breadcrumb"] { height: 42px; padding-inline: 14px; }
+}
+@media (max-width: 960px) {
+  .workspace-sidebar > label { order: 3; }
+  .workspace-sidebar[data-expanded="true"] .shell-task-picker { display: none; }
+}

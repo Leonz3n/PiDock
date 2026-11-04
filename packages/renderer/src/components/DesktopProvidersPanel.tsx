@@ -278,10 +278,10 @@ export function DesktopProvidersPanel({
   />;
 
   return <div data-testid="providers-panel" className="min-w-0">
-    <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
       <div className="min-w-0">
         <p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Providers</p>
-        <h1 className="mt-1.5 text-[24px] font-semibold text-ink">模型供应商</h1>
+        <h2 className="mt-1.5 text-[24px] font-semibold text-ink">模型供应商</h2>
         <p className="mt-1.5 max-w-[62ch] text-xs leading-6 text-muted">
           这里保存的每份配置都会写入 Pi 自己的 <code className={mono}>models.json</code>（<code className={mono}>pidock-&lt;id&gt;</code>），
           密钥只进入本机加密存储，界面永远不会回显。
@@ -291,7 +291,7 @@ export function DesktopProvidersPanel({
         <span data-testid="providers-state" className="text-[11px] text-muted">{status ? PROVIDER_STATE_TEXT[status.state] : "读取中…"}</span>
         <Button type="button" onClick={openCreate}><span aria-hidden>＋</span>添加供应商</Button>
       </div>
-    </header>
+    </div>
 
     {error ? <p role="alert" className="mt-3 border border-[#c98a86] bg-[#fdf2f1] px-3 py-2 text-xs text-[#8d3b36]">{error}</p> : null}
     {notice ? <p role="status" className="mt-3 border border-line bg-soft px-3 py-2 text-xs text-muted">{notice}</p> : null}
@@ -433,16 +433,16 @@ function ProviderForm({
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSubmit(); }
   };
   return <form ref={formRef} data-testid="provider-form" data-form-open="true" onSubmit={submit} onKeyDown={keys} className="min-w-0">
-    <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
       <div className="min-w-0">
         <button type="button" onClick={onCancel} className="text-[11px] text-muted hover:text-ink">← 返回供应商列表 · Esc</button>
-        <h1 className="mt-1.5 text-[22px] font-semibold text-ink">
+        <h2 className="mt-1.5 text-[22px] font-semibold text-ink">
           {draft.id === undefined ? "添加供应商" : `编辑供应商：${draft.name}`}
           <span className="ml-2 text-[11px] font-normal text-muted">保存后写入 models.json</span>
-        </h1>
+        </h2>
       </div>
       <p className="text-[11px] text-muted">⌘↵ 保存</p>
-    </header>
+    </div>
 
     {presetKey === null ? <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border border-line bg-soft px-3 py-2">
       <p className="text-xs text-muted">手动填写：接口格式、Base URL 与模型都由你决定，PiDock 不会从域名推断协议。</p>

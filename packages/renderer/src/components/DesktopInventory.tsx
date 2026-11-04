@@ -94,6 +94,7 @@ export function DesktopInventory() {
   // [UI 对齐 S8e] #47: 项目总览 is the project page; the create/claim/transfer/
   // unlink management surface it links to is a separate view (原型 A 的「项目管理」).
   const [manage, setManage] = useState(false);
+  const [creationEntry, setCreationEntry] = useState(0);
   // [UI 对齐 S8e] #47: Token 用量 reads the same real SDK JSONL projection the
   // conversation shows, one selected task at a time.
   const [usageTaskId, setUsageTaskId] = useState<string | null>(null);
@@ -377,8 +378,8 @@ export function DesktopInventory() {
       setView((current) => current.kind === "error" ? current : { kind: "error", error: "项目注册表恢复失败" });
     } finally { setBusy(false); }
   };
-  // The shell wraps every view so the sidebar, breadcrumb and task-root status stay
-  // visible while working, exactly like prototype A.
+  // Workspace content stays mounted while a dedicated management window replaces
+  // the navigation; returning preserves its task, session, draft and scroll.
   const ready = view.kind === "ready" ? view.data : undefined;
   const shellTasks = useMemo(() => (ready?.inventory.tasks ?? []).map((task) => ({
     ...task,
@@ -412,7 +413,7 @@ export function DesktopInventory() {
     : localPage
       ? { view: localPage }
       : activeTask
-        ? { view: "task", taskId: activeTask.id }
+        ? { view: "task", taskId: activeTask.id, sessionId: sessionFocus }
         : selection.kind === "project" && selectedProject
           ? { view: "project", projectId: selectedProject.id }
           : { view: "unassigned" };
@@ -490,6 +491,9 @@ export function DesktopInventory() {
     projects={shellProjects}
     projectsInitialized={data?.projectsInitialized ?? true}
     unassignedCount={lifecycleReady ? data?.associations.filter((row) => row.projectId === null).length ?? 0 : null}
+    onNewTask={() => { setActiveTask(null); setSessionFocus(undefined); setManage(true); setCreationEntry((value) => value + 1); setActionError(null); }}
+    management={localPage === "capabilities" ? <DesktopCapabilitiesPage taskId={activeTask?.id ?? null} taskName={activeTask?.name ?? null} onBack={() => setLocalPage(null)} />
+      : localPage === "settings" ? <DesktopSettingsPage taskName={activeTask?.name ?? null} onBack={() => setLocalPage(null)} /> : undefined}
     onNewWorkspace={openCreateWorkspace}
     tasks={activeTasks}
     allTaskCount={shellTasks.length}
@@ -532,19 +536,6 @@ export function DesktopInventory() {
     tasks={shellTasks}
     taskId={usageTaskId}
     onSelectTask={(taskId) => { setActiveTask(null); setUsageTaskId(taskId); }}
-  />);
-  // [PiDock T03] #138: 能力管理 is the single Provider entry. It keeps the task
-  // it was opened from as its 选用 context, and Esc returns to that task.
-  if (localPage === "capabilities") return shell(<DesktopCapabilitiesPage
-    taskId={activeTask?.id ?? null}
-    taskName={activeTask?.name ?? null}
-    onBack={() => navigate(activeTask ? { view: "task", taskId: activeTask.id } : { view: "unassigned" })}
-  />);
-  // [Pencil T14] #149 设置 is its own full-window destination (S11): the task it
-  // was opened from stays selected, and both the back entry and Esc return to it.
-  if (localPage === "settings") return shell(<DesktopSettingsPage
-    taskName={activeTask?.name ?? null}
-    onBack={() => navigate(activeTask ? { view: "task", taskId: activeTask.id } : { view: "unassigned" })}
   />);
   // [Pencil T02] #137 / S08: a task opens on its workspace facts (one row per
   // source, mode badge, per-source verification) with the existing conversation
@@ -620,7 +611,7 @@ export function DesktopInventory() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h1 className="text-lg font-semibold">工作空间与任务</h1>
         <div className="flex gap-2"><button className={button} type="button" disabled={busy || pendingCreate !== null} onClick={openCreateWorkspace}><Icon name="plus" />新建工作空间</button>
           <button className={button} type="button" disabled={busy} onClick={() => void importRoot()}><Icon name="folder" />找回任务根</button></div></div>
-      <DesktopTaskCreation project={project} bridge={window.pidock ?? emptyBridge} onCreated={async (projectId, taskId) => {
+      <DesktopTaskCreation key={creationEntry} openOnMount={creationEntry > 0} project={project} bridge={window.pidock ?? emptyBridge} onCreated={async (projectId, taskId) => {
         if (!(await load())) throw new Error("任务已创建，但本机清单无法核验；请重试读取");
         // Land on the NEW task's facts view (S08), not the project overview.
         setSelection({ kind: "project", id: projectId });

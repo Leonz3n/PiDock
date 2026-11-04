@@ -102,35 +102,35 @@ export function DesktopSettingsPage({
   const preference = useAppearanceStore((state) => state.preference);
   const resolved = useAppearanceStore((state) => state.resolved);
 
-  return <div data-testid="desktop-settings-page" className="flex min-h-0 w-full flex-1">
-    <nav aria-label="设置" className="flex w-[240px] shrink-0 flex-col border-r border-line bg-sidebar px-3 py-4 below-narrow:w-full below-narrow:border-b below-narrow:border-r-0">
-      {onBack ? <button type="button" onClick={close}
+  return <div data-testid="desktop-settings-page" className="management-window flex h-screen min-h-0 w-full text-ink">
+    <nav aria-label="设置" className="flex w-[240px] shrink-0 flex-col border-r border-line bg-sidebar px-3 py-4 ">
+      {onBack ? <button type="button" aria-label="返回任务工作区" onClick={close}
         className="mb-3 flex items-center gap-1.5 rounded-[6px] border border-line bg-paper px-2.5 py-1.5 text-left text-[11px] text-muted hover:text-ink">
         <span aria-hidden>←</span>
         <span className="min-w-0 truncate">返回任务工作区{taskName ? ` · ${taskName}` : ""}</span>
         <kbd className="ml-auto shrink-0 text-[10px] text-muted">Esc</kbd>
       </button> : null}
       <div className="flex items-center gap-2 px-1 py-2">
-        <Icon name="settings" />
-        <span className="text-[19px] font-semibold tracking-[-0.6px] text-ink">设置</span>
+        <Icon name="settings-2" />
+        <span className="text-[14px] font-semibold text-ink">设置</span>
       </div>
       <p className={`${SECTION_TITLE} px-1 pt-1`}>应用偏好</p>
-      <ul className="mt-2 space-y-1">{NAV.map((item) => <li key={item.key}>
+      <ul className="mt-1 flex flex-col gap-1">{NAV.map((item) => <li key={item.key}>
         <button type="button" aria-current={pane === item.key ? "page" : undefined} onClick={() => setPane(item.key)}
-          className={`flex w-full items-center gap-2 rounded-[7px] px-2.5 py-2 text-left text-[12px] ${pane === item.key ? "border border-accent bg-soft font-medium text-ink" : "border border-transparent text-muted hover:bg-paper hover:text-ink"}`}>
+          className={`flex w-full items-center gap-2 h-[30px] rounded-[7px] px-2.5 text-left text-[12px] ${pane === item.key ? "border border-accent bg-soft font-medium text-ink" : "border border-transparent text-muted hover:bg-paper hover:text-ink"}`}>
           <Icon name={item.icon} />
           <span>{item.label}</span>
         </button>
       </li>)}</ul>
-      <div className="mt-auto border-t border-line pt-3 text-[10px] leading-5 text-muted">
+      <div className="mt-auto rounded-md bg-bg p-2 text-[10px] leading-4 text-muted">
         <p className="font-medium text-ink">PiDock · 桌面外观</p>
         <p data-testid="settings-preference-card">当前偏好：{appearancePreferenceLabel(preference)}</p>
         <p>返回时保留当前任务</p>
       </div>
     </nav>
-    <div className="min-w-0 flex-1 overflow-auto bg-paper">
-      <header className="flex min-h-[52px] flex-wrap items-center justify-between gap-2 border-b border-line px-10 below-narrow:px-5">
-        <h1 className="text-[24px] font-semibold text-ink">{[...NAV].find((item) => item.key === pane)?.label ?? "设置"}</h1>
+    <div className="min-w-0 flex-1 overflow-auto bg-bg">
+      <header data-testid="management-header" className="flex h-[52px] shrink-0 items-center justify-between gap-2 border-b border-line bg-paper px-10 below-narrow:px-5">
+        <h1 className="text-[14px] font-semibold text-ink">{[...NAV].find((item) => item.key === pane)?.label ?? "设置"}</h1>
         <p className="text-[11px] text-muted">{pane === "appearance"
           ? `${appearancePreferenceLabel(preference)} · 当前为${appearanceModeLabel(resolved)}`
           : pane === "keybindings" ? "Pi 原生快捷键（有界投影）"
@@ -289,7 +289,7 @@ function KeybindingsPane() {
     <div className="mt-5 border-t border-line pt-4">
       <h3 className="text-[13px] font-semibold text-ink">PiDock 自己的快捷键</h3>
       <p className="mt-2 max-w-[720px] text-[11px] leading-5 text-muted">下面这两项由 PiDock 的界面代码处理，不受 Pi 的 keybindings.json 影响，也不能在这里改写。</p>
-      <ul aria-label="PiDock 快捷键" className="mt-2 space-y-1 text-[11px]">
+      <ul aria-label="PiDock 快捷键" className="mt-1 flex flex-col gap-1 text-[11px]">
         {PIDOCK_SHORTCUTS.map((item) => <li key={item.keys} className="flex flex-wrap items-baseline gap-2">
           <kbd className="rounded-[4px] border border-line bg-soft px-1.5 py-0.5 font-mono text-[10px] text-ink">{item.keys}</kbd>
           <span className="text-muted">{item.label}</span>

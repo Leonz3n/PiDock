@@ -367,13 +367,10 @@ describe("#149 return keeps context + compact layout", () => {
     expect(onBack).toHaveBeenCalledTimes(2);
   });
 
-  it("stays readable at the 720×560 minimum: stacked nav, scrolling content, no clipped previews", () => {
+  it("keeps the dedicated navigation and scrolling appearance controls available", () => {
     render(<DesktopSettingsPage taskName="真实任务" onBack={() => {}} />);
     const nav = screen.getByRole("navigation", { name: "设置" });
-    // Below 850px the 240px column becomes a full-width block and the content
-    // scrolls instead of squeezing (the S06 tier).
-    expect(nav.className).toContain("below-narrow:w-full");
-    expect(nav.className).toContain("below-narrow:border-r-0");
+    expect(within(nav).getByRole("button", { name: "外观" })).toBeVisible();
     expect(screen.getByTestId("desktop-settings-page").querySelector(".overflow-auto")).not.toBeNull();
     const list = screen.getByRole("radiogroup", { name: "外观偏好" });
     expect(list.className).toContain("below-narrow:grid-cols-1");

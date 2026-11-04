@@ -144,15 +144,15 @@ export function DesktopMcpPanel({ onCount }: { onCount?: (count: number | null) 
   }
 
   return <section data-testid="capabilities-mcp" className="min-w-0">
-    <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
       <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Agent Capabilities</p>
-        <h1 className="mt-1.5 text-[24px] font-semibold text-ink">MCP Servers</h1>
+        <h2 className="mt-1.5 text-[24px] font-semibold text-ink">MCP Servers</h2>
         <p className="mt-1 text-[11px] text-muted">Pi 原生 <span className="font-mono">mcp.json</span> · stdio 与 Streamable HTTP · 工具按暴露模式加载</p></div>
       <div className="flex items-center gap-2">
         <Badge variant="soft">{status === null ? "—" : `${status.servers.length} 个 Server`}</Badge>
         <Button type="button" size="sm" disabled={busy !== ""} onClick={() => { setDraft({ ...EMPTY_MCP_DRAFT }); setDraftError(""); setTested(null); setError(""); }}>新增 Server</Button>
       </div>
-    </header>
+    </div>
 
     {error && <p role="alert" data-testid="mcp-error" className="mt-3 border border-line bg-soft px-3 py-2 text-xs text-[#ad4545]">{error}</p>}
     {notice && !error && <p role="status" className="mt-3 border border-line bg-soft px-3 py-2 text-xs text-muted">{notice}</p>}
@@ -243,12 +243,12 @@ function McpForm({ draft, setDraft, draftError, tested, busy, onTest, onSave, on
 }) {
   const update = (patch: Partial<McpDraft>) => setDraft({ ...draft, ...patch });
   return <section data-testid="capabilities-mcp-form" className="min-w-0">
-    <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
       <div><p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">MCP Server</p>
-        <h1 className="mt-1 text-[22px] font-semibold text-ink">{draft.name === null ? "新增 Server" : "编辑 Server"}</h1>
+        <h2 className="mt-1 text-[22px] font-semibold text-ink">{draft.name === null ? "新增 Server" : "编辑 Server"}</h2>
         <p className="mt-0.5 text-[11px] text-muted">{draft.name === null ? "由 PiDock 生成 pidock-mcp-&lt;uuid&gt; 名称并写入 mcp.json" : `PiDock 管理的 Server：${draft.name}`}</p></div>
       <Button type="button" size="sm" variant="ghost" onClick={onCancel}>返回列表</Button>
-    </header>
+    </div>
     <form onSubmit={onSave} className="mt-3 grid max-w-[760px] grid-cols-2 gap-x-3 gap-y-2.5 below-narrow:grid-cols-1">
       <div className="col-span-2"><label className={label} htmlFor="mcp-label">名称标签</label>
         <input id="mcp-label" className={field} value={draft.description} maxLength={200} placeholder="例如：本地文档工具（只用于列表显示）" onChange={(event) => update({ description: event.target.value })} /></div>

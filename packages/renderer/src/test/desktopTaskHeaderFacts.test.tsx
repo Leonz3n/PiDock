@@ -89,7 +89,7 @@ describe("#24 task workspace header facts", () => {
     expect(header.textContent).not.toContain("undefined");
   });
 
-  it("shows the same branch and repository count the sidebar card shows", async () => {
+  it("keeps the task in the compact tree and its branch and repository facts in the conversation", async () => {
     await openWorkspace([{ taskId: TASK_ID, name: "真实任务", branch: "task/shared-branch", repoCount: 2, updatedAt: "2026-09-22" }]);
     const card = document.querySelector(`[data-task-nav="${TASK_ID}"]`) as HTMLElement;
     const branch = screen.getByTestId("desktop-conversation-branch").textContent;
@@ -98,8 +98,7 @@ describe("#24 task workspace header facts", () => {
     // One inventory row feeds both surfaces, so neither may print its own value.
     expect(branch).toBe("task/shared-branch");
     expect(repos).toBe("2 仓库");
-    expect(card.textContent).toContain(branch);
-    expect(card.textContent).toContain(repos);
+    expect(card).toHaveAccessibleName("真实任务");
   });
 
   it("renders the header without issuing another listTasks read", async () => {

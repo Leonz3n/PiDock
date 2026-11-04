@@ -39,6 +39,39 @@ const bridge = (settings: { projectPresent?: boolean; assigned?: boolean; fail?:
 afterEach(() => { cleanup(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("Desktop production data", () => {
+  it("opens real task creation directly from the navigation new-task action", async () => {
+    window.pidock = { ...bridge(), createTask: vi.fn(async () => ({ ok: true, payload: { intent: null } })) } as unknown as PidockBridge;
+    render(<App />);
+    await screen.findByTestId("desktop-project-overview");
+    fireEvent.click(sidebar().getByRole("button", { name: "新建任务" }));
+    expect(await screen.findByRole("dialog", { name: "新建任务" })).toBeVisible();
+  });
+
+  it("replaces workspace chrome with full-window management and Esc restores the same conversation and draft", async () => {
+    const shell = bridge({ assigned: true });
+    const sdkTurn = vi.fn(async (request: Record<string, unknown>) => ({ ok: true, payload: request.action === "subscribe" ?
+      { taskId: "real-1", sessionId: "main", snapshot: { source: "sdk-jsonl", sessionId: "main", messages: [], pending: false, interrupted: false }, turn: null } : { unsubscribed: true } }));
+    window.pidock = { ...shell, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
+    render(<App />);
+    await screen.findByTestId("desktop-sidebar");
+    fireEvent.click(await sidebar().findByRole("button", { name: "真实任务" }));
+    const message = await screen.findByRole("textbox", { name: "消息" });
+    fireEvent.change(message, { target: { value: "保留未发送草稿" } });
+    for (const page of ["能力管理", "设置"]) {
+      fireEvent.click(sidebar().getByRole("button", { name: page }));
+      expect(screen.queryByTestId("desktop-sidebar")).toBeNull();
+      expect(screen.queryByTestId("desktop-breadcrumb")).toBeNull();
+      expect(screen.queryByTestId("desktop-summary")).toBeNull();
+      expect(screen.getByRole("navigation", { name: page })).toBeVisible();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(await screen.findByRole("textbox", { name: "消息" })).toBe(message);
+      expect(message).toHaveValue("保留未发送草稿");
+    }
+    expect(sdkTurn.mock.calls.filter(([request]) => request.action === "subscribe")).toHaveLength(1);
+    expect(sdkTurn.mock.calls.some(([request]) => request.action === "start")).toBe(false);
+    expect(shell.taskOp).not.toHaveBeenCalledWith("real-1", "task/sessionCreate", expect.anything());
+  });
+
   it("shows a named unindexed-root diagnostic and keeps the existing root-import action reachable", async () => {
     const rootBridge = bridge();
     const diagnosticRoots = [{ label: "默认任务根", state: "ready" as const }, { label: "已登记任务根 1", state: "ready" as const,
@@ -246,7 +279,7 @@ describe("Desktop production data", () => {
     expect(screen.getByText("已登记任务根 2：任务根目录已移走或链接已更改，请检查原位置")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重试读取已登记任务根 2" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重试读取已登记任务根 1" })).toBeNull();
-    expect(screen.getByTestId("desktop-breadcrumb")).toHaveTextContent("1 个任务根不可用");
+    expect(screen.getByText("已登记任务根 2：任务根目录已移走或链接已更改，请检查原位置")).toBeVisible();
     // The failed root contributed no fabricated row: only the two real disk-backed tasks exist.
     expect(sidebar.queryByText(/Atlas|演示/)).toBeNull();
     expect(demoRead).not.toHaveBeenCalled();
@@ -296,9 +329,10 @@ describe("Desktop production data", () => {
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await screen.findByTestId("desktop-settings-page");
     releaseRead?.();
+    expect(screen.getByTestId("desktop-settings-page")).toBeVisible();
+    expect(screen.getByTestId("desktop-project-overview")).not.toBeVisible();
+    fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.getByRole("button", { name: "重试读取默认任务根" })).toBeEnabled());
-    expect(screen.getByTestId("desktop-settings-page")).toBeInTheDocument();
-    expect(screen.queryByTestId("desktop-project-overview")).toBeNull();
   });
 
   it("routes 能力管理 and 设置 to their real pages instead of a 未接线 placeholder", async () => {
@@ -307,23 +341,21 @@ describe("Desktop production data", () => {
     expect(await screen.findByTestId("desktop-project-overview")).toBeInTheDocument();
 
     const capabilities = within(screen.getByTestId("desktop-sidebar")).getByRole("button", { name: "能力管理" });
-    // Both tiers keep the entry usable: the wide sidebar shows the label, the
-    // 64px rail hides it visually (`sr-only`) and keeps the accessible name.
-    expect(within(capabilities).getByText("能力管理").className.split(/\s+/)).toContain("below-mid:sr-only");
-    expect(capabilities.className.split(/\s+/)).toContain("below-mid:justify-center");
+    expect(capabilities).toHaveAccessibleName("能力管理");
     fireEvent.click(capabilities);
     expect(await screen.findByTestId("desktop-capabilities-page")).toBeInTheDocument();
-    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("能力管理")).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-breadcrumb")).toBeNull();
     // #24: the S8 placeholder page (`能力管理 · 未接线`) was unreachable and is
     // gone; its wording must never come back in place of the real page.
     expect(screen.queryByTestId("desktop-unwired")).toBeNull();
     expect(screen.queryByRole("heading", { name: "能力管理 · 未接线" })).toBeNull();
     expect(screen.queryByText(/此入口保留，接入后在此页展示真实状态/)).toBeNull();
 
+    fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     expect(await screen.findByTestId("desktop-settings-page")).toBeInTheDocument();
     expect(screen.queryByTestId("desktop-capabilities-page")).toBeNull();
-    expect(within(screen.getByTestId("desktop-breadcrumb")).getByText("设置")).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-breadcrumb")).toBeNull();
     expect(screen.queryByTestId("desktop-unwired")).toBeNull();
     expect(screen.queryByRole("heading", { name: "本机设置 · 未接线" })).toBeNull();
   });
@@ -353,11 +385,13 @@ describe("Desktop production data", () => {
       ? { ok: true, payload: { initialized: true, projects: [project] } }
       : { ok: true, payload: { roots, tasks: [] } }), taskOp };
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
     fireEvent.click(await screen.findByRole("button", { name: "Token 用量" }));
     expect(await screen.findByTestId("usage-needs-task")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "能力管理" }));
     expect(await screen.findByTestId("providers-panel")).toBeInTheDocument();
     expect(screen.queryByTestId("desktop-usage-page")).toBeNull();
+    if (screen.queryByTestId("desktop-capabilities-page")) fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "定时任务" }));
     expect(await screen.findByTestId("desktop-schedules-page")).toBeInTheDocument();
     expect(screen.queryByTestId("providers-panel")).toBeNull();
@@ -833,6 +867,7 @@ describe("Desktop production data", () => {
     window.pidock = { ...shell, taskOp, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
     const demoRead = vi.spyOn(memoryHost, "getWorkspace");
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
     fireEvent.click(await screen.findByRole("button", { name: "需要处理" }));
     fireEvent.click(await screen.findByRole("button", { name: "查看 main 会话" }));
     const conversation = await screen.findByTestId("desktop-conversation");
@@ -853,6 +888,7 @@ describe("Desktop production data", () => {
     const taskOp = vi.fn(async (taskId: string, op: string) => op === "task/attention" ? { ok: true, payload: { taskName: "真实任务", items: [{ id: "failed:legacy", kind: "failed", executionId: "legacy", taskId, sessionId: "legacy-session", detail: "原会话失败", at: "2026-10-07T09:00:00Z", read: false }] } } : shell.taskOp!(taskId, op, {}));
     window.pidock = { ...shell, taskOp, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
     fireEvent.click(await screen.findByRole("button", { name: "需要处理" }));
     const destination = await screen.findByRole("button", { name: "原会话定位未接线" });
     expect(destination).toBeDisabled();
@@ -876,6 +912,7 @@ describe("Desktop production data", () => {
       : shell.projectOp!(request);
     window.pidock = { ...shell, listTasks, projectOp, taskOp, sdkTurn, onSdkTurnEvent: vi.fn(() => vi.fn()) };
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "更多" }));
     fireEvent.click(await screen.findByRole("button", { name: "需要处理" }));
     const destination = await screen.findByRole("button", { name: "查看 main 会话" });
     changed = true;

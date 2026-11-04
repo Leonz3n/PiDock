@@ -115,7 +115,7 @@ export function DesktopSkills({ bridge }: { bridge?: PidockBridge }) {
 
   return (
     <section data-testid="skills-pane" className="skills-pane grid gap-3 rounded-[8px] border border-line bg-paper px-[15px] py-[13px]">
-      <header className="flex flex-wrap items-end justify-between gap-2">
+      <div className="flex flex-wrap items-end justify-between gap-2">
         <div>
           <h3 className="text-[12px] font-[550] text-ink">本地 Skills 来源</h3>
           <p className="text-[10px] text-muted">扫描真实磁盘目录；技能说明与来源路径来自 Pi 的加载结果，不是示例数据。</p>
@@ -125,7 +125,7 @@ export function DesktopSkills({ bridge }: { bridge?: PidockBridge }) {
             ? `${counts.sources} 个来源 · ${counts.enabled} 启用 · ${counts.broken} 异常 · ${counts.skills} 个技能 · ${counts.invalid} 无效${counts.duplicates > 0 ? ` · ${counts.duplicates} 重名` : ""}`
             : "读取中…"}
         </span>
-      </header>
+      </div>
 
       <form
         className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 below-stack:grid-cols-1"

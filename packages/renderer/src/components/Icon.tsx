@@ -12,6 +12,12 @@
  */
 
 export const ICON_PATHS = {
+  panel: "M3 3h18v18H3Z M9 3v18 M13 8l4 4-4 4",
+  anchor: "M12 22V8 M5 12H2a10 10 0 0 0 20 0h-3 M8 12h8 M15 5a3 3 0 1 0-6 0a3 3 0 1 0 6 0",
+  blocks: "M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2 M15 2h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1",
+  "settings-2": "M14 17H5 M19 7h-9 M20 17a3 3 0 1 0-6 0a3 3 0 1 0 6 0 M10 7a3 3 0 1 0-6 0a3 3 0 1 0 6 0",
+  search: "M21 21l-5-5 M18 10a8 8 0 1 0-16 0a8 8 0 1 0 16 0",
+  message: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z",
   grid: "M3 3h6v6H3z M15 3h6v6h-6z M3 15h6v6H3z M15 15h6v6h-6z",
   settings: "M4 7h16 M4 17h16 M8 4v6 M16 14v6",
   chart: "M4 20V4 M4 20h17 M9 16V9 M14 16V5 M19 16v-5",
