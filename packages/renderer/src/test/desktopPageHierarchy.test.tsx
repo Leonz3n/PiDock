@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { cleanup, render, screen, fireEvent, within, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, fireEvent, within, waitFor } from "@testing-library/react";
 import { App } from "../App";
 import type { PidockBridge } from "../data/shellBridge";
 
@@ -143,4 +143,144 @@ it("task session history counts archived sessions as well as active sessions", a
   fireEvent.click(screen.getByRole("button", { name: "进入对话 · 归档历史" }));
   expect(await screen.findByRole("textbox", { name: "消息" })).toHaveAttribute("readonly");
   expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+});
+
+it("late New Session result cannot move the currently selected second task into the first task's session", async () => {
+  const api = bridge();
+  const original = api.taskOp!;
+  let release: (() => void) | undefined;
+  const second = { ...tasks[0], taskId: "real-2", name: "第二个真实任务" };
+  api.listTasks = vi.fn(async () => ({ ok: true, payload: { tasks: [...tasks, second], roots } }));
+  const projectOp = api.projectOp!;
+  api.projectOp = vi.fn(async request => request.op === "associations" ? { ok: true, payload: { roots, tasks: ["real-1", "real-2"].map(taskId => ({taskId, projectId: project.id, state: "assigned"})) } } : projectOp(request));
+  const newSession = { id: "created-for-first", name: "第一任务的新会话", createdAt: "2026-01-01", updatedAt: "2026-01-02", archived: false, permission: "default", binding: null };
+  api.taskOp = vi.fn(async (taskId, op, payload) => {
+    if (op === "task/sessionCreate") {
+      await new Promise<void>(resolve => { release = resolve; });
+      return { ok: true, payload: { activeSessionId: newSession.id, sessions: [newSession], provider: null } };
+    }
+    return original(taskId, op, payload);
+  });
+  window.pidock = api;
+  render(<App />);
+  await screen.findByTestId("desktop-project-overview");
+  fireEvent.click(await sidebar().findByRole("button", {name: "真实任务"}));
+  const create = await screen.findByRole("button", {name: "在当前任务工作区中新建会话（全新上下文）"});
+  await waitFor(() => expect(create).toBeEnabled());
+  fireEvent.click(create);
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  fireEvent.click(sidebar().getByRole("button", {name: second.name}));
+  await waitFor(() => expect(screen.getByTestId("desktop-breadcrumb")).toHaveTextContent(second.name));
+  expect(screen.getByTestId("desktop-task-facts")).toBeVisible();
+  // Complete the public IPC promise and flush the resulting React updates.
+  await act(async () => { release?.(); });
+  expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
+  expect(screen.getByTestId("desktop-task-facts")).toBeVisible();
+});
+
+it.each([
+  ["task", "success"], ["task", "failure"],
+  ["workspace", "success"], ["workspace", "failure"],
+  ["conversation", "success"], ["conversation", "failure"],
+  ["return-before-completion", "success"], ["return-before-completion", "failure"],
+] as const)("pending creation leaving for %s ignores stale %s and rereads its original task on return", async (destination, outcome) => {
+  const api = bridge();
+  const original = api.taskOp!;
+  const second = { ...tasks[0], taskId: "real-2", name: "第二个真实任务" };
+  api.listTasks = vi.fn(async () => ({ ok: true, payload: { tasks: [...tasks, second], roots } }));
+  const projectOp = api.projectOp!;
+  api.projectOp = vi.fn(async request => request.op === "associations"
+    ? { ok: true, payload: { roots, tasks: ["real-1", "real-2"].map(taskId => ({ taskId, projectId: project.id, state: "assigned" })) } }
+    : projectOp(request));
+  const created = { id: "created-for-first", name: "第一任务的新会话", createdAt: "2026-01-01", updatedAt: "2026-01-02", archived: false, permission: "default", binding: null };
+  let release: (() => void) | undefined;
+  let completed = false;
+  api.taskOp = vi.fn(async (taskId, op, payload) => {
+    if (op === "task/sessionCreate") {
+      await new Promise<void>(resolve => { release = resolve; });
+      completed = true;
+      if (outcome === "failure") throw new Error("第一任务创建失败");
+    }
+    const result = await original(taskId, op === "task/sessionCreate" ? "task/sessionList" : op, payload);
+    if ((op === "task/sessionList" || op === "task/sessionCreate") && taskId === "real-1" && completed && outcome === "success") {
+      return { ok: true, payload: { activeSessionId: created.id, sessions: [{ ...created, id: "main", name: "主会话" }, created], provider: null } };
+    }
+    return result;
+  });
+  window.pidock = api;
+  render(<App />);
+  await screen.findByTestId("desktop-project-overview");
+  fireEvent.click(await sidebar().findByRole("button", { name: "真实任务" }));
+  const createName = "在当前任务工作区中新建会话（全新上下文）";
+  await waitFor(() => expect(screen.getByRole("button", { name: createName })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: createName }));
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  expect(screen.getByRole("button", { name: createName })).toBeDisabled();
+  if (destination === "conversation") {
+    fireEvent.click(screen.getByRole("button", { name: "进入对话 · 主会话" }));
+    await screen.findByTestId("desktop-conversation");
+  } else if (destination === "workspace" || destination === "return-before-completion") {
+    fireEvent.click(sidebar().getByRole("button", { name: project.name }));
+    await screen.findByTestId("desktop-project-overview");
+    if (destination === "return-before-completion") {
+      fireEvent.click(sidebar().getByRole("button", { name: "真实任务" }));
+      await screen.findByTestId("desktop-task-facts");
+      await waitFor(() => expect(screen.getByRole("button", { name: createName })).toBeEnabled());
+    }
+  } else {
+    fireEvent.click(sidebar().getByRole("button", { name: second.name }));
+    await waitFor(() => expect(screen.getByTestId("desktop-breadcrumb")).toHaveTextContent(second.name));
+    await waitFor(() => expect(screen.getByRole("button", { name: createName })).toBeEnabled());
+  }
+  await act(async () => { release?.(); });
+  expect(screen.queryByText(/第一任务创建失败/)).not.toBeInTheDocument();
+  if (destination === "conversation") {
+    expect(screen.getByTestId("desktop-conversation")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "主会话" })).toHaveAttribute("aria-selected", "true");
+  } else if (destination === "workspace") {
+    expect(screen.getByTestId("desktop-project-overview")).toBeVisible();
+    expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
+  } else {
+    expect(screen.getByTestId("desktop-task-facts")).toBeVisible();
+    expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
+    expect(screen.getByTestId("task-facts-sessions")).toHaveTextContent("会话 1 个");
+    expect(screen.getByRole("button", { name: createName })).toBeEnabled();
+  }
+  fireEvent.click(sidebar().getByRole("button", { name: project.name }));
+  await screen.findByTestId("desktop-project-overview");
+  fireEvent.click(sidebar().getByRole("button", { name: "真实任务" }));
+  await screen.findByTestId("desktop-task-facts");
+  await waitFor(() => expect(screen.getByTestId("task-facts-sessions")).toHaveTextContent(outcome === "success" ? "会话 2 个" : "会话 1 个"));
+  expect(screen.getByRole("button", { name: createName })).toBeEnabled();
+  expect(screen.queryByText(/第一任务创建失败/)).not.toBeInTheDocument();
+  if (outcome === "success") expect(screen.getByRole("button", { name: "进入对话 · 第一任务的新会话" })).toBeVisible();
+});
+
+it("creation completion while settings covers facts cannot change the preserved return destination", async () => {
+  const api = bridge();
+  const original = api.taskOp!;
+  let release: (() => void) | undefined;
+  const session = { id: "new", name: "新会话", createdAt: "2026-01-01", updatedAt: "2026-01-02", archived: false, permission: "default", binding: null };
+  api.taskOp = vi.fn(async (taskId, op, payload) => {
+    if (op === "task/sessionCreate") {
+      await new Promise<void>(resolve => { release = resolve; });
+      return { ok: true, payload: { activeSessionId: session.id, sessions: [session], provider: null } };
+    }
+    return original(taskId, op, payload);
+  });
+  window.pidock = api;
+  render(<App />);
+  await screen.findByTestId("desktop-project-overview");
+  fireEvent.click(await sidebar().findByRole("button", { name: "真实任务" }));
+  const createName = "在当前任务工作区中新建会话（全新上下文）";
+  await waitFor(() => expect(screen.getByRole("button", { name: createName })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: createName }));
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  fireEvent.click(sidebar().getByRole("button", { name: "设置" }));
+  await screen.findByTestId("desktop-settings-page");
+  await act(async () => { release?.(); });
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(await screen.findByTestId("desktop-task-facts")).toBeVisible();
+  expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: createName })).toBeEnabled();
 });

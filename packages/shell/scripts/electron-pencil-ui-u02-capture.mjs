@@ -16,7 +16,7 @@ const [width, height] = arg("--size", "1440x900").split("x").map(Number);
 const scenario = arg("--scenario", "full");
 const repo = resolve(import.meta.dirname, "../../..");
 const reusedRoot = arg("--reuse-root", "");
-const output = join(repo, "docs/evidence/pencil-ui-u02", ...(reusedRoot ? ["restart"] : []), ...(scenario !== "full" ? [scenario] : []));
+const output = join(repo, "docs/evidence/pencil-ui-u02", ...(reusedRoot ? ["restart"] : []), ...(scenario === "creation-navigation" ? ["fix2", "electron"] : scenario !== "full" ? [scenario] : []));
 const root = reusedRoot || mkdtempSync(join(tmpdir(), "pidock-ui-u02-"));
 const profile = join(root, "profile");
 const taskRoot = join(root, "tasks");
@@ -90,7 +90,21 @@ async function run() {
     return { child, client: new HostClient(child) };
   }, (id) => index.resolve(id), undefined, index, taskEnvironment);
   const route = registry.routeTaskOp.bind(registry);
-  registry.routeTaskOp = (request) => { calls.push({ op: request.op, taskId: request.taskId, payload: request.payload }); return route(request); };
+  let holdCreation = false;
+  /** @type {(() => void) | null} */
+  let releaseCreation;
+  let landedCreation;
+  registry.routeTaskOp = async (request) => {
+    calls.push({ op: request.op, taskId: request.taskId, payload: request.payload });
+    const result = await route(request);
+    // Delay only delivery of a genuine completed Host write, never its data.
+    if (holdCreation && request.op === "task/sessionCreate") {
+      holdCreation = false;
+      landedCreation = result;
+      await new Promise(resolve => { releaseCreation = () => resolve(undefined); });
+    }
+    return result;
+  };
   const providerProfiles = new ProviderProfileStore(profile);
   const providers = new ProviderWiring(providerProfiles, async (taskId, provider, senderWebContentsId) => {
     await registry.routeTaskOp({ taskId, op: "task/sdkProvider", payload: provider === null ? { provider: null } : { provider: { config: providerProfiles.config(provider.profileId), credential: provider.credential } }, origin: { kind: "shell-ui", senderWebContentsId } });
@@ -172,6 +186,62 @@ async function run() {
     await until("document.body.innerText.includes('路径可用') && document.querySelectorAll('[data-task-nav]').length === 4 && document.querySelector('[data-testid=overview-task-count-inline]')?.textContent === '4'", "workspace sources and lifecycle verified");
     await capture(`${theme}-workspace`);
     if (scenario === "workspace") continue;
+    if (scenario === "creation-navigation") {
+      for (const destination of ["task", "workspace", "conversation", "return-before-completion", "settings"]) {
+        await sidebarClick(first.name);
+        await until("document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('个')", "origin session list");
+        const before = await registry.routeTaskOp({ taskId: first.taskId, op: "task/sessionList", payload: {}, origin });
+        const beforeSessions = /** @type {Array<{id:string}>} */ (before.payload.sessions);
+        const count = beforeSessions.length;
+        landedCreation = null; releaseCreation = null; holdCreation = true;
+        await click("在当前任务工作区中新建会话（全新上下文）");
+        for (let attempt = 0; attempt < 200 && !releaseCreation; attempt++) await wait(50);
+        const committed = /** @type {{payload:{activeSessionId:string,sessions:Array<{id:string}>}}} */ (/** @type {unknown} */ (landedCreation));
+        check(`${theme}/${destination}: real Host committed while renderer awaits IPC`, Boolean(releaseCreation) && Boolean(committed?.payload?.activeSessionId), committed);
+        const createdId = committed.payload.activeSessionId;
+        check(`${theme}/${destination}: new Host identity belongs to originating task`, committed.payload.sessions.length === count + 1 && !beforeSessions.some(session => session.id === createdId), createdId);
+        if (destination === "task") {
+          await sidebarClick(tasks[1].name);
+          await until(`document.querySelector('[data-testid=desktop-breadcrumb]')?.innerText.includes(${JSON.stringify(tasks[1].name)}) && document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('1 个')`, "second task facts");
+          check(`${theme}: second task does not inherit creating state`, await evaluate("[...document.querySelectorAll('[data-testid=desktop-task-facts] button')].some(el => el.textContent.includes('在当前任务工作区中新建会话') && !el.disabled)"));
+        } else if (destination === "workspace" || destination === "return-before-completion") {
+          await sidebarClick(workspace.name);
+          await until("document.querySelector('[data-testid=desktop-project-overview]')", "workspace while IPC held");
+          if (destination === "return-before-completion") {
+            await sidebarClick(first.name);
+            await until(`document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('${count + 1} 个')`, "return rereads committed Host identity before delivery");
+          }
+        } else if (destination === "conversation") {
+          await click("进入对话 · 边界复核会话");
+          await until("document.querySelector('[data-testid=desktop-conversation]')", "chosen conversation while IPC held");
+        } else {
+          await sidebarClick("设置");
+          await until("document.querySelector('[data-testid=desktop-settings-page]')", "settings covers preserved facts");
+        }
+        (/** @type {() => void} */ (/** @type {unknown} */ (releaseCreation)))();
+        await wait(350);
+        if (destination === "settings") {
+          check(`${theme}: pending completion retains settings destination`, await evaluate("Boolean(document.querySelector('[data-testid=desktop-settings-page]'))"));
+          await evaluate("window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
+          await until("!document.querySelector('[data-testid=desktop-settings-page]')", "Escape returns to original facts");
+        }
+        const expected = destination === "workspace" ? "desktop-project-overview" : destination === "conversation" ? "desktop-conversation" : "desktop-task-facts";
+        check(`${theme}/${destination}: stale success cannot change chosen destination`, await evaluate(`Boolean(document.querySelector('[data-testid=${expected}]'))`));
+        if (destination === "task") {
+          check(`${theme}: second task keeps its own session count and list`, await evaluate("document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('1 个') && !document.querySelector('[data-testid=desktop-task-facts]')?.innerText.includes('新会话')"));
+        }
+        if (destination === "conversation") check(`${theme}: explicitly chosen conversation identity retained`, await evaluate("[...document.querySelectorAll('[role=tab]')].some(el => el.getAttribute('aria-selected') === 'true' && el.textContent.includes('边界复核会话'))"));
+        await capture(`${theme}-${destination}-late-success`);
+        await sidebarClick(workspace.name);
+        await sidebarClick(first.name);
+        await until(`document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('${count + 1} 个')`, "origin session list reread");
+        const after = await registry.routeTaskOp({ taskId: first.taskId, op: "task/sessionList", payload: {}, origin });
+        check(`${theme}/${destination}: Host session preserved under original task`, Array.isArray(after.payload.sessions) && after.payload.sessions.some(session => session.id === createdId) && after.payload.sessions.length === count + 1, after);
+        check(`${theme}/${destination}: returning to original facts restores enabled Create`, await evaluate("[...document.querySelectorAll('[data-testid=desktop-task-facts] button')].some(el => el.textContent.includes('在当前任务工作区中新建会话') && !el.disabled)"));
+      }
+      await capture(`${theme}-origin-returned-facts`);
+      continue;
+    }
     if (scenario === "archived") {
       await sidebarClick(first.name);
       await until("document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('2 个') && document.querySelector('[data-testid=desktop-task-facts]')?.innerText.includes('已归档')", "archived history count");
@@ -230,7 +300,12 @@ async function run() {
     await until("document.querySelector('[data-testid=desktop-project-overview]')", "reload");
     check(`${theme}: reload retains disk workspace identity`, await evaluate(`document.body.innerText.includes(${JSON.stringify(workspace.name)})`));
   }
-  if (scenario === "workspace" || scenario === "archived") {
+  if (scenario === "creation-navigation") {
+    check("task records never migrated by asynchronous navigation", tasks.every((task,index) => readFileSync(join(taskRoot, task.taskId, "task.json"),"utf8") === recordsBefore[index]));
+    check("correction sends no model request or tool execution", !calls.some(call=> /sdkSend|sendMessage|execute|toolReplay/.test(call.op)));
+    check("no renderer console errors", consoleErrors.length === 0, consoleErrors);
+  }
+  if (scenario === "workspace" || scenario === "archived" || scenario === "creation-navigation") {
     const shutdown = await shutdownTestRegistry(registry, { origin, label: "U02 workspace refinement complete" });
     check("Host shutdown confirmed", shutdown.length === 0, shutdown);
     finish(0); return;

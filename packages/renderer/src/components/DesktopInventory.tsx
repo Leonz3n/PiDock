@@ -566,7 +566,7 @@ export function DesktopInventory() {
     <div className="min-h-0 flex-1">
       <DesktopConversation key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => setConversationOpen(false)} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
     </div>
-  </div> : <DesktopTaskFacts headerInShell onActiveSession={reportActiveSession} taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge}
+  </div> : <DesktopTaskFacts headerInShell destinationActive={localPage === null} onActiveSession={reportActiveSession} taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge}
     onOpenSession={(sessionId) => { setSessionFocus(sessionId); setConversationOpen(true); }}
     onBack={returnToWorkspace}
     onRepair={() => { if (activeProject) openEditWorkspace(activeProject.id); }} />);

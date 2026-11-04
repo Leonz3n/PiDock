@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { DesktopTaskVariables } from "./DesktopVariables";
 import { SHARED_DIR_MANAGED_PROTECTION } from "../data/sharedDirProtection";
@@ -74,7 +74,8 @@ function rootFact(root: WorkspaceRootView): string {
   return `本地真实路径: ${hostText(root.sourcePath ?? root.path, "Host 未上报路径")} · 非隔离副本，共享原文件`;
 }
 
-export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, headerInShell = false, onActiveSession, onOpenSession, onBack, onRepair }: {
+export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, destinationActive = true, headerInShell = false, onActiveSession, onOpenSession, onBack, onRepair }: {
+  destinationActive?: boolean;
   compact?: boolean;
   headerInShell?: boolean;
   onActiveSession?: (taskId: string, sessionId: string | null) => void;
@@ -99,7 +100,17 @@ export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, he
   const [creating, setCreating] = useState(false);
   const [sessionCount, setSessionCount] = useState<number | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  // A creation is authorized for one mounted facts destination only. The Host
+  // may finish after navigation; its result must not publish into a new page.
+  const creationDestination = useRef<{ live: boolean } | null>(null);
   useEffect(() => {
+    const destination = { live: !compact && destinationActive };
+    creationDestination.current = destination;
+    setCreating(false);
+    return () => { destination.live = false; };
+  }, [taskId, compact, destinationActive]);
+  useEffect(() => {
+    if (!destinationActive) return;
     let live = true;
     setSessions(null); setSessionCount(null); setSessionError(null);
     onActiveSession?.(taskId, null);
@@ -109,7 +120,7 @@ export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, he
       setSessionError(result.error);
     });
     return () => { live = false; };
-  }, [taskId, onActiveSession]);
+  }, [taskId, onActiveSession, destinationActive]);
 
   useEffect(() => {
     let live = true;
@@ -129,9 +140,11 @@ export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, he
   }, [bridge, taskId, verificationRevision]);
 
   const newSession = async () => {
-    if (creating) return;
+    const destination = creationDestination.current;
+    if (creating || !destination?.live) return;
     setCreating(true); setSessionError(null);
     const result = await createSession(taskId);
+    if (!destination.live || creationDestination.current !== destination) return;
     setCreating(false);
     if (!result.ok) { setSessionError(result.error); return; }
     onActiveSession?.(taskId, result.list.activeSessionId);
