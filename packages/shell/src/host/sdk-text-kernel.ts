@@ -28,6 +28,13 @@ function isMcpToolName(name: string): boolean {
   return /^mcp__[A-Za-z0-9][A-Za-z0-9_-]{0,127}__[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(name);
 }
 
+// The SDK initializes absent provider telemetry to all-zero counters, including
+// failed requests. That default is not a measured zero-token context.
+function reportedTokenUsage(value: { input: number; output: number; cacheRead: number; cacheWrite: number }) {
+  const { input, output, cacheRead, cacheWrite } = value;
+  return input + output + cacheRead + cacheWrite > 0 ? { input, output, cacheRead, cacheWrite } : null;
+}
+
 type SdkTextEventData =
   | { type: "delta"; text: string }
   | { type: "tool_preview"; callId: string; tool: string; text: string }
@@ -476,13 +483,15 @@ export class PiSdkTextKernel {
     let contextUsed: number | null = null;
     for (const entry of assistants) {
       if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-      const reported = entry.message.usage;
+      const reported = reportedTokenUsage(entry.message.usage);
+      if (reported === null) { contextUsed = null; continue; }
       usage ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       usage.input += reported.input;
       usage.output += reported.output;
       usage.cacheRead += reported.cacheRead;
       usage.cacheWrite += reported.cacheWrite;
-      contextUsed = reported.input + reported.cacheRead + reported.cacheWrite;
+      const inputTokens = reported.input + reported.cacheRead + reported.cacheWrite;
+      contextUsed = inputTokens > 0 ? inputTokens : null;
     }
     const last = assistants.at(-1);
     const model = last?.type === "message" && last.message.role === "assistant"
@@ -502,7 +511,7 @@ export class PiSdkTextKernel {
       if (entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "assistant")) throw new Error("sdk-projection-invalid");
       const message = entry.message;
       const text = (typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("")).slice(0, 16_384);
-      const usage = message.role === "assistant" ? { input: message.usage.input, output: message.usage.output, cacheRead: message.usage.cacheRead, cacheWrite: message.usage.cacheWrite } : null;
+      const usage = message.role === "assistant" ? reportedTokenUsage(message.usage) : null;
       return { role: message.role, text, usage };
     });
     return { source: "sdk-jsonl", sessionId, messages, interrupted: messages.at(-1)?.role === "user" };
@@ -564,8 +573,7 @@ export class PiSdkTextKernel {
       } else if (event.type === "message_end" && event.message.role === "assistant") {
         textResult = event.message.content.filter((part) => part.type === "text").map((part) => part.text).join("");
         responseError = event.message.errorMessage ?? (event.message.stopReason === "length" ? "sdk-output-truncated" : undefined);
-        const { input, output, cacheRead, cacheWrite } = event.message.usage;
-        emit({ type: "message_end", text: textResult, usage: { input, output, cacheRead, cacheWrite }, ...(responseError ? { error: responseError } : {}) });
+        emit({ type: "message_end", text: textResult, usage: reportedTokenUsage(event.message.usage), ...(responseError ? { error: responseError } : {}) });
       } else if (event.type === "agent_settled") {
         settled = true;
         cancelled = event.aborted;

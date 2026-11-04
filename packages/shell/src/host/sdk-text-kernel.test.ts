@@ -53,7 +53,7 @@ const usage = { input: 4, output: 2, cacheRead: 1, cacheWrite: 0, totalTokens: 7
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
 async function kernel(dir: string, onPrompt?: (texts: string[]) => string, selectedModel: Model<"pidock-local-test"> = model,
-  extraModels: Model<"pidock-local-test">[] = []) {
+  extraModels: Model<"pidock-local-test">[] = [], reportedUsage = usage) {
   const runtime = await ModelRuntime.create({ authPath: join(dir, ".private-auth.json"), modelsPath: join(dir, ".private-models.json"), refreshOnCreate: false });
   const seen: string[][] = [];
   const provider: Provider<"pidock-local-test"> = {
@@ -67,7 +67,7 @@ async function kernel(dir: string, onPrompt?: (texts: string[]) => string, selec
       const stream = createAssistantMessageEventStream();
       const response = onPrompt?.(messages) ?? "hello";
       const partial: AssistantMessage = { role: "assistant", api: _model.api, provider: _model.provider, model: _model.id,
-        content: [], usage, stopReason: "pending", timestamp: Date.now() };
+        content: [], usage: reportedUsage, stopReason: "pending", timestamp: Date.now() };
       queueMicrotask(() => {
         stream.push({ type: "start", partial });
         if (response === "wait") {
@@ -951,6 +951,16 @@ it("switches one session's model, keeps its history and refuses while a turn run
   await running;
   await expect(busy.instance.bindSession("main", { modelId: "not-declared" })).rejects.toThrow("sdk-model-unknown");
   await busy.instance.dispose();
+});
+
+it.each(["error", "answer"])("keeps SDK zero defaults unknown when %s reports no usage", async (response) => {
+  const dir = task(`task-unreported-${response}`);
+  const fake = await kernel(dir, () => response, model, [], {...usage,input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0});
+  const result = await fake.instance.prompt("main", "a nonempty prompt");
+  expect(fake.instance.digest("main")).toMatchObject({turns:1,contextUsed:null,usage:null});
+  expect(fake.instance.projection("main").messages.find(row=>row.role === "assistant")?.usage).toBeNull();
+  expect(result.events.find(event=>event.type === "message_end")).toMatchObject({usage:null});
+  await fake.instance.dispose();
 });
 
 it("reads context occupancy and cumulative usage from the session's own transcript (unknown is never 0)", async () => {

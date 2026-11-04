@@ -287,6 +287,8 @@ async function run() {
     await complete();
     await until("document.querySelector('[aria-label=\"SDK 对话历史\"] h2')", "Markdown heading");
     check(`${theme}: Markdown code rendered`,await evaluate("!!document.querySelector('[aria-label=\"SDK 对话历史\"] pre code')"));
+    await evaluate("document.querySelector('[aria-label=\"SDK 对话历史\"] pre').scrollIntoView({block:'center'});true");
+    await capture(`${theme}-code`);
     await evaluate("document.querySelector('[data-testid=desktop-conversation-scroll]').scrollTop=0;true");
     await wait(150);
     const beforeWheel=await evaluate("document.querySelector('[data-testid=desktop-conversation-scroll]').scrollTop");
@@ -331,6 +333,8 @@ async function run() {
     check(`${theme}: rejected command has no effect`,!existsSync(denied));
     await send(`[ERROR] ${theme} provider unavailable`);
     await until("document.querySelector('[data-testid=desktop-composer-container]')?.innerText.includes('未完成')", "named provider error");
+    await until("document.querySelector('[data-testid=composer-context]')?.textContent.includes('未报告')", "unreported failed-request context stays unknown");
+    check(`${theme}: unknown context never becomes zero`, !await evaluate("document.querySelector('[data-testid=composer-context]')?.textContent.includes('0.0k')"));
     await capture(`${theme}-error`);
     await input(`draft-${theme} 中文`);
     await sidebarClick("设置");
