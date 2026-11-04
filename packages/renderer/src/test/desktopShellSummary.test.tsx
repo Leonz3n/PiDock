@@ -76,7 +76,7 @@ describe("Pencil workspace chrome", () => {
     await openRealTask();
     expect(screen.queryByTestId("desktop-summary")).toBeNull();
     expect(screen.queryByTestId("desktop-workspace-card")).toBeNull();
-    expect(within(screen.getByTestId("desktop-sidebar")).getByRole("button", { name: "真实任务" })).toBeVisible();
+    expect(await within(screen.getByTestId("desktop-sidebar")).findByRole("button", { name: "真实任务" })).toBeVisible();
     expect(demoRead).not.toHaveBeenCalled();
   });
 });
