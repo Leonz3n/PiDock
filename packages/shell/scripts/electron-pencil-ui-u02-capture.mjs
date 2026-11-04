@@ -16,7 +16,7 @@ const [width, height] = arg("--size", "1440x900").split("x").map(Number);
 const scenario = arg("--scenario", "full");
 const repo = resolve(import.meta.dirname, "../../..");
 const reusedRoot = arg("--reuse-root", "");
-const output = join(repo, "docs/evidence/pencil-ui-u02", ...(reusedRoot ? ["restart"] : []), ...(scenario === "creation-navigation" ? ["fix2", "electron"] : scenario !== "full" ? [scenario] : []));
+const output = arg("--output", null) ? resolve(repo, arg("--output", "")) : join(repo, "docs/evidence/pencil-ui-u02", ...(reusedRoot ? ["restart"] : []), ...(scenario === "creation-navigation" ? ["fix2", "electron"] : scenario !== "full" ? [scenario] : []));
 const root = reusedRoot || mkdtempSync(join(tmpdir(), "pidock-ui-u02-"));
 const profile = join(root, "profile");
 const taskRoot = join(root, "tasks");

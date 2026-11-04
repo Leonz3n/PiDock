@@ -1,5 +1,6 @@
 // #161: built production Electron, real preload/IPC/Host/registry/disk; isolated fixtures only.
 // Run after pnpm --filter @pidock/shell build. Each viewport is a fresh real window.
+import { assertPencilLayout } from "./pencil-layout-gate.mjs";
 import { app, nativeTheme, utilityProcess } from "electron";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -191,6 +192,7 @@ async function run() {
       await click('设置'); await until("document.querySelector('[data-appearance-option=light]')",'settings');
       await choose(theme);
       await evaluate("document.querySelector('.settings-content').scrollTop=0");
+      await assertPencilLayout(wc, "management", assertions);
       await capture(`${theme}-appearance`,true);
       nativeTheme.themeSource=theme==='light'?'dark':'light'; await wait(250);
       check(`${theme}: explicit preference ignores OS changes`,await evaluate(`document.documentElement.dataset.theme==='${theme}'`));

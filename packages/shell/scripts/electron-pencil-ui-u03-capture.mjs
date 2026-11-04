@@ -1,5 +1,6 @@
 // #157: built production Electron, real preload/IPC/Host/registry/disk; isolated fixtures only.
 // Run after pnpm --filter @pidock/shell build. Each viewport is a fresh real window.
+import { assertPencilLayout } from "./pencil-layout-gate.mjs";
 import { createServer } from "node:http";
 import { app, utilityProcess } from "electron";
 import { execFileSync } from "node:child_process";
@@ -258,6 +259,7 @@ async function run() {
       check("fresh process never replays draft", received.length === 0,received);
     }
     if (reusedRoot) { await capture(`${theme}-restarted`); continue; }
+    await assertPencilLayout(wc, "conversation", assertions);
     await capture(`${theme}-empty`);
     await evaluate("document.querySelector('[data-testid=composer-model]').click();true");
     check(`${theme}: model display name and ID are separate`, await evaluate(`document.querySelector('[role=menu] [data-model-name]')?.textContent !== ${JSON.stringify(MODEL)} && document.querySelector('[role=menu]')?.textContent.includes(${JSON.stringify(MODEL)})`));
