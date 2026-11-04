@@ -11,9 +11,11 @@ it("filters real workspace/task/session names and opens the matching session thr
     projects={[{ id: "workspace-one", name: "核心开发", description: "", taskCount: 1 }]} projectsInitialized unassignedCount={0}
     tasks={[task]} allTaskCount={1} lifecyclePending={false} lifecycleErrors={[]} roots={[]}
     rootRetry={{ busy: false, pending: false, error: null, run: vi.fn() }} breadcrumb={{ project: "核心开发" }}>内容</DesktopShell>);
+  expect(screen.getByText("Host 未核验")).toBeVisible();
   const sidebar = within(screen.getByTestId("desktop-sidebar"));
   fireEvent.change(sidebar.getByRole("searchbox", { name: "过滤任务与会话" }), { target: { value: "边界复查" } });
   fireEvent.click(await sidebar.findByRole("button", { name: "边界复查" }));
+  expect(screen.getByText("Host 就绪")).toBeVisible();
   expect(onNavigate).toHaveBeenLastCalledWith({ view: "task", taskId: "task-one", sessionId: "main" });
   fireEvent.change(sidebar.getByRole("searchbox"), { target: { value: "不存在的结果" } });
   expect(sidebar.queryByRole("button", { name: "修复分页" })).toBeNull();
@@ -27,6 +29,7 @@ it("names a failed session read and retries through the same Host boundary witho
     tasks={[task]} allTaskCount={1} lifecyclePending={false} lifecycleErrors={[]} roots={[]}
     rootRetry={{ busy: false, pending: false, error: null, run: vi.fn() }} breadcrumb={{ project: "核心开发" }}>内容</DesktopShell>);
   expect(await screen.findByText(/会话列表读取失败：.*会话索引暂时不可读/)).toBeVisible();
+  expect(screen.getByText("Host 未核验")).toBeVisible();
   expect(document.querySelectorAll("[data-session-nav]")).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "重试读取修复分页的会话" }));
   expect(await screen.findByText("暂无会话")).toBeVisible();

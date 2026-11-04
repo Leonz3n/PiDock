@@ -168,7 +168,7 @@ export function DesktopShell({
       {!management && <aside data-testid="desktop-sidebar" data-expanded={railExpanded} className="workspace-sidebar flex min-h-0 w-[260px] shrink-0 flex-col border-r border-line bg-sidebar px-3">
         <div className="shell-brand flex h-[52px] shrink-0 items-center gap-2">
           <span aria-hidden className="grid size-6 shrink-0 place-items-center rounded-md bg-accent text-primary-foreground"><Icon name="anchor" /></span><div className="shell-nav-label min-w-0"><strong className="block text-[14px] leading-4">PiDock</strong><span className="block text-[10px] text-muted">桌面 Agent 工作台</span></div>
-          <span className="shell-nav-label ml-auto text-[10px] text-muted">Host 就绪</span>
+          <span className="shell-nav-label ml-auto text-[10px] text-muted">{tasks.some((task) => typeof sessions[task.taskId] === "object") ? "Host 就绪" : "Host 未核验"}</span>
         </div>
         <Button type="button" variant="outline" aria-label="新建任务" title="新建任务" onClick={onNewTask} disabled={!onNewTask} className="shell-new-task mb-2 h-8 justify-start gap-2"><Icon name="plus" /><span className="shell-nav-label">新建任务</span></Button>
         <button type="button" className="shell-rail-toggle mb-2 hidden h-8 items-center justify-center rounded-md text-muted hover:bg-paper" aria-label={railExpanded ? "收起导航" : "展开导航"} aria-expanded={railExpanded} onClick={() => setRailExpanded((value) => !value)}><Icon name="panel" /></button>
