@@ -293,7 +293,7 @@ export function DesktopProvidersPanel({
       <h2 className="text-[18px] font-semibold text-ink">Pi 供应商列表 <span className="text-[11px] font-normal text-muted">（共 {status?.profiles.length ?? "—"} 个配置项）</span></h2>
       <div className="flex items-center gap-3">
         <input type="search" aria-label="搜索供应商 / 模型名称" placeholder="搜索供应商 / 模型名称…" className="capability-input w-[240px] below-narrow:w-[180px]" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <Button type="button" onClick={openCreate}><span aria-hidden>＋</span>添加供应商</Button>
+        <Button type="button" variant="default" onClick={openCreate}><span aria-hidden>＋</span>添加供应商</Button>
       </div>
       <span data-testid="providers-state" className="sr-only">{status ? PROVIDER_STATE_TEXT[status.state] : error ? "读取失败" : "读取中…"}</span>
     </div>
@@ -301,11 +301,9 @@ export function DesktopProvidersPanel({
     {error ? <p role="alert" className="mt-3 border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p> : null}
     {notice ? <p role="status" className="mt-3 text-[11px] text-muted">{notice}</p> : null}
 
-    {taskId === null ? <p data-testid="providers-task-required" className="mt-3 text-[11px] text-muted">
-      尚未打开任务：打开任务后可选用模型；配置保存至本机，密钥不回显。
-    </p> : <p className="mt-3 text-[11px] text-muted">当前任务：{taskName ?? taskId} · 选用只影响这个任务的会话</p>}
 
-    <section className="mt-5" aria-label="已添加">
+
+    <section className="mt-4" aria-label="已添加">
       <h2 className="text-xs font-semibold text-muted">已添加 · {status?.profiles.length ?? "—"}</h2>
       {status === null
         ? <p className="mt-2 text-xs text-muted">{error ? "配置不可用，请检查文件后重试。" : "正在读取本机 Provider 配置…"}</p>
@@ -409,6 +407,9 @@ export function DesktopProvidersPanel({
           <Button type="button" onClick={() => applyPreset(preset)}>激活</Button>
         </li>)}</ul>
     </section>
+    {taskId === null ? <p data-testid="providers-task-required" className="mt-3 text-[11px] text-muted">
+      尚未打开任务：打开任务后可选用模型；配置保存至本机，密钥不回显。
+    </p> : <p className="mt-3 text-[11px] text-muted">当前任务：{taskName ?? taskId} · 选用只影响这个任务的会话</p>}
   </div></>;
 }
 

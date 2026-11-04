@@ -172,7 +172,10 @@ async function run() {
     check(`${state}: no document or content horizontal overflow`, !metrics.horizontalOverflow && !metrics.contentOverflow, metrics);
     check(`${state}: one 52px header and dedicated 240px navigation`, !metrics.workSidebar && metrics.header.height === 52 && metrics.nav.width === 240, metrics);
     check(`${state}: keys remain masked`, !metrics.unmaskedKey);
-    if (state.endsWith("providers-list") && width === 1440) check(`${state}: S03 row density 60±4px`, metrics.rows.every(row => row.height >= 56 && row.height <= 64), metrics.rows);
+    if (state.endsWith("providers-list") && width === 1440) {
+      check(`${state}: S03 first row y147±4px`, Math.abs(metrics.rows[0].y - 147) <= 4, metrics.rows);
+      check(`${state}: S03 row density 60±4px`, metrics.rows.every(row => row.height >= 56 && row.height <= 64), metrics.rows);
+    }
   };
   const select = async (label, value) => {
     await evaluate(`(() => {const el=document.querySelector('select[aria-label=${JSON.stringify(label)}]');el.value=${JSON.stringify(value)};el.dispatchEvent(new Event('change',{bubbles:true}));})()`);
