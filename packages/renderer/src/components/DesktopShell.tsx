@@ -174,13 +174,13 @@ export function DesktopShell({
           <span aria-hidden className="grid size-6 shrink-0 place-items-center rounded-md bg-accent text-primary-foreground"><Icon name="anchor" /></span><div className="shell-nav-label min-w-0"><strong className="block text-[14px] leading-4">PiDock</strong><span className="block text-[10px] text-muted">桌面 Agent 工作台</span></div>
           <span className="shell-nav-label ml-auto text-[10px] text-muted">{tasks.some((task) => typeof sessions[task.taskId] === "object") ? "Host 就绪" : "Host 未核验"}</span>
         </div>
-        <Button type="button" variant="outline" aria-label="新建任务" title="新建任务" onClick={onNewTask} disabled={!onNewTask} className="shell-new-task mb-2 h-8 justify-start gap-2"><Icon name="plus" /><span className="shell-nav-label">新建任务</span></Button>
+        <Button type="button" variant="outline" aria-label="新建任务" title="新建任务" onClick={() => { setRailExpanded(false); onNewTask?.(); }} disabled={!onNewTask} className="shell-new-task mb-2 h-8 justify-start gap-2"><Icon name="plus" /><span className="shell-nav-label">新建任务</span></Button>
         <button type="button" className="shell-rail-toggle mb-2 hidden h-8 items-center justify-center rounded-md text-muted hover:bg-paper" aria-label={railExpanded ? "收起导航" : "展开导航"} aria-expanded={railExpanded} onClick={() => setRailExpanded((value) => !value)}><Icon name="panel" /></button>
         <button type="button" className="shell-task-picker mb-2 hidden h-8 items-center justify-center rounded-md bg-soft text-accent" aria-label="选择任务或会话" onClick={() => setRailExpanded(true)}><Icon name="folder" /></button>
         <label className="shell-nav-label mb-3 flex h-[30px] shrink-0 items-center gap-1.5 rounded-md border border-line bg-paper px-2 text-muted"><Icon name="search" /><input type="search" aria-label="过滤任务与会话" placeholder="过滤任务与会话…" value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[11px] outline-none" /></label>
         <nav aria-label="主导航" className="flex min-h-0 flex-1 flex-col">
           <div className="shell-tree min-h-0 flex-1 overflow-y-auto" role="group" aria-label="工作空间与任务">
-            <div className="mb-2 flex items-center justify-between px-1 text-[11px] text-muted"><span>工作空间与任务树</span>{onNewWorkspace && <Button type="button" variant="ghost" size="icon-sm" aria-label="新建工作空间" title="新建工作空间" onClick={onNewWorkspace}><Icon name="plus" /></Button>}</div>
+            <div className="mb-2 flex items-center justify-between px-1 text-[11px] text-muted"><span>工作空间与任务树</span>{onNewWorkspace && <Button type="button" variant="ghost" size="icon-sm" aria-label="新建工作空间" title="新建工作空间" onClick={() => { setRailExpanded(false); onNewWorkspace(); }}><Icon name="plus" /></Button>}</div>
             {projects.map((project) => {
               const open = Boolean(needle) || !collapsed.has(project.id);
               return <div key={project.id} data-workspace-tree={project.id}>

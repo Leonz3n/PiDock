@@ -55,7 +55,7 @@ function environmentErrors(rows: ProjectInput["environment"]): Record<number, st
 }
 
 function FieldError({ children }: { children: ReactNode }) {
-  return <p role="alert" className="text-[10px] text-[#ad4545]">{children}</p>;
+  return <p role="alert" className="text-[10px] text-destructive">{children}</p>;
 }
 
 export function DesktopWorkspaceDialog({
@@ -117,8 +117,16 @@ export function DesktopWorkspaceDialog({
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // A repair that lands on the name field makes the user hunt for the row again.
     const repair = openFocus.current ? pathRefs.current[openFocus.current] : null;
-    (repair ?? nameRef.current)?.focus();
-    return () => { if (opener && document.contains(opener)) opener.focus(); };
+    const focusInside = () => {
+      const preferred = repair ?? nameRef.current;
+      (preferred && !preferred.matches(":disabled") ? preferred : dialogRef.current)?.focus();
+    };
+    focusInside();
+    const containFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && !dialogRef.current?.contains(event.target)) focusInside();
+    };
+    document.addEventListener("focusin", containFocus);
+    return () => { document.removeEventListener("focusin", containFocus); if (opener && document.contains(opener)) opener.focus(); };
   }, []);
 
   useEffect(() => {
@@ -135,8 +143,8 @@ export function DesktopWorkspaceDialog({
   const trap = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Tab") return;
     const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      "button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])");
-    if (!focusable || focusable.length === 0) return;
+      "button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])");
+    if (!focusable || focusable.length === 0) { event.preventDefault(); dialogRef.current?.focus(); return; }
     const first = focusable[0]!;
     const last = focusable[focusable.length - 1]!;
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
@@ -149,7 +157,7 @@ export function DesktopWorkspaceDialog({
       {values.map((row, index) => {
         const status = row.id === undefined ? undefined : sourceStatus?.[row.id];
         return <div key={row.id ?? `${kind}-${index}`} className="rounded-[5px] border border-line bg-paper px-2.5 py-1.5">
-          <div className="flex items-center gap-2">
+          <div className="creation-source-fields flex items-center gap-2">
             <Icon name={kind === "repositories" ? "branch" : "folder"} className="shrink-0 text-muted" />
             <input aria-label={`${ROW_LABEL[kind]}名称 ${index + 1}`} className={FIELD} placeholder={`${ROW_TITLE[kind]}名称`}
               value={row.name} maxLength={256} disabled={busy}
@@ -159,9 +167,9 @@ export function DesktopWorkspaceDialog({
               ref={(element) => { pathRefs.current[row.id ?? `${kind}-${index}`] = element; }}
               onChange={(event) => updateRows(kind, values.map((item, at) => at === index ? { ...item, path: event.target.value } : item))} />
             {status?.status === "ok" ? <Badge variant="soft" className="shrink-0">路径可用</Badge> : null}
-            {status?.status === "not-directory" ? <Badge variant="soft" className="shrink-0 text-[#9a6032]">不是目录</Badge> : null}
+            {status?.status === "not-directory" ? <Badge variant="soft" className="shrink-0 text-attention">不是目录</Badge> : null}
             {status?.status === "missing" ? <>
-              <Badge variant="soft" className="shrink-0 text-[#9a6032]">来源缺失</Badge>
+              <Badge variant="soft" className="shrink-0 text-attention">来源缺失</Badge>
               <Button type="button" size="sm" variant="outline" disabled={busy}
                 onClick={() => pathRefs.current[row.id ?? `${kind}-${index}`]?.focus()}>修复路径</Button>
             </> : null}
@@ -180,13 +188,13 @@ export function DesktopWorkspaceDialog({
 
   return (
     <div role="presentation" onClick={() => { if (!busy) onCancel(); }}
-      className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-ink/40 p-4 py-10">
-      <div role="dialog" aria-modal="true" aria-label={title} ref={dialogRef} onKeyDown={trap}
+      className="creation-backdrop">
+      <div role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} ref={dialogRef} onKeyDown={trap}
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-[720px] rounded-[10px] border border-line bg-paper p-6 shadow-xl">
+        className="creation-dialog creation-workspace-dialog">
         <header className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 gap-2.5">
-            <span aria-hidden className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[6px] bg-soft text-accent">
+            <span aria-hidden className="grid size-[30px] shrink-0 place-items-center rounded-[6px] bg-soft text-accent">
               <Icon name="branch" />
             </span>
             <div className="min-w-0">
@@ -197,7 +205,7 @@ export function DesktopWorkspaceDialog({
           <span className={KBD} aria-hidden>Esc</span>
         </header>
 
-        {error ? <p role="alert" className="mt-3 rounded-[5px] border border-[#e6c9c3] bg-[#fdf3f3] px-2.5 py-1.5 text-[11px] text-[#ad4545]">{error}</p> : null}
+        {error ? <p role="alert" className="mt-3 rounded-[5px] border border-destructive bg-paper px-2.5 py-1.5 text-[11px] text-destructive">{error}</p> : null}
 
         <fieldset disabled={busy} className="mt-4 flex flex-col gap-3.5 border-0 p-0">
           <div className="flex flex-wrap gap-3.5">
@@ -261,7 +269,7 @@ export function DesktopWorkspaceDialog({
                   </div>
                   {attempted && variableErrors[index] ? <FieldError>{variableErrors[index]}</FieldError> : null}
                 </div>)}
-                <p className={HINT}>当前只会保存并在工作空间总览展示；任务继承与单次任务覆盖另行接线，不在此处生效。</p>
+                <p className={HINT}>下属任务默认继承这些共享变量；可在任务事实中逐键覆盖。私有凭据不在此处保存。</p>
               </div>
             </div>
 
@@ -274,7 +282,7 @@ export function DesktopWorkspaceDialog({
                     onChange={(event) => onChange({ ...draft, branchTemplate: event.target.value })} />
                 </label>
                 {attempted && templateError ? <FieldError>{templateError}</FieldError> : null}
-                <p className={HINT}>任务分支与推送目标会按此模板生成（标记 {BRANCH_TEMPLATE_TOKEN}）。当前只会保存并展示，不会自动推送。</p>
+                <p className={HINT}>工作空间分支约定（标记 {BRANCH_TEMPLATE_TOKEN}）；创建任务时在交付设置中核对实际分支与推送目标，推送仍需明确操作。</p>
               </div>
             </div>
           </div>

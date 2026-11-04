@@ -27,6 +27,14 @@ function Harness({ mode = "create", initial, onSubmit = vi.fn(), onCancel = () =
 const openCreate = () => within(screen.getByRole("dialog", { name: "新建工作空间" }));
 
 describe("S10 workspace dialog", () => {
+  it("keeps keyboard focus in the dialog while all save controls are busy", async () => {
+    const user = userEvent.setup();
+    render(<><button>背景操作</button><Harness busy /></>);
+    const dialog = screen.getByRole("dialog", { name: "新建工作空间" });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    await user.tab();
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+  });
   it("shows the designed fields and requires a name and at least one source", async () => {
     const onSubmit = vi.fn();
     render(<Harness onSubmit={onSubmit} />);

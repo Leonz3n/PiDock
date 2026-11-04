@@ -39,6 +39,8 @@
   --color-paper: #faf8f4; /* bg-surface */
   --color-ink: #30343b; /* ink-primary */
   --color-muted: #60666f; /* ink-muted */
+  --color-overlay: #24262b66;
+  --color-strong: #bdb7ae;
   --color-line: #dcd8d0; /* border-light */
   --color-accent: #4b638d; /* accent-primary · 雾蓝 */
   --color-soft: #e1e7f0; /* accent-soft */
@@ -91,6 +93,8 @@
   --color-paper: #282b30;
   --color-ink: #dddcd7;
   --color-muted: #9498a1;
+  --color-overlay: #0d0f1499;
+  --color-strong: #616873;
   --color-line: #393d44;
   --color-accent: #adc2e8;
   --color-soft: #303d52;
@@ -218,4 +222,50 @@
   .conversation-markdown { font-size: 11px; }
   [data-testid="desktop-session-identity"] { max-width: 60px; }
   [data-testid="desktop-composer"] [data-testid="composer-model-name"] { max-width: 110px; }
+}
+
+/* S02/S10: the modal lives in the content area; the workspace rail stays dimmed.
+ * At compact sizes the same panel scrolls within the real viewport. */
+.creation-backdrop {
+  position: fixed; inset: 0 0 0 260px; z-index: 40;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: var(--color-overlay);
+}
+.creation-backdrop::before {
+  content: ""; position: fixed; inset: 0 auto 0 0; width: 260px;
+  background: var(--color-sidebar); opacity: .4;
+}
+.creation-dialog {
+  position: relative; width: 100%; max-width: 720px; max-height: calc(100dvh - 32px);
+  overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--color-strong);
+  border-radius: 10px; background: var(--color-paper); padding: 24px;
+  scrollbar-gutter: stable;
+}
+.creation-task-dialog { max-width: 680px; }
+.creation-footer { border-top: 1px solid var(--color-line); padding-top: 6px; }
+.creation-mode-options { gap: 0; width: fit-content; }
+.creation-mode-option { display: flex; align-items: center; gap: 5px; padding: 5px 9px; font-size: 10px; cursor: pointer; }
+.creation-mode-option[data-selected="true"] { background: var(--color-soft); color: var(--color-accent); }
+.creation-mode-option[data-disabled="true"] { opacity: .5; cursor: default; }
+.creation-mode-option input { width: 11px; height: 11px; accent-color: var(--color-accent); }
+.creation-task-dialog input[type="checkbox"] { accent-color: var(--color-accent); }
+.creation-dialog .creation-footer button[type="submit"] { background: var(--color-accent); color: var(--color-primary-foreground); border-color: var(--color-accent); }
+@media (max-width: 960px) {
+  .creation-backdrop { left: 48px; }
+  .creation-backdrop::before { width: 48px; }
+  .creation-dialog { padding: 20px; }
+  .creation-source-fields { flex-wrap: wrap; }
+  .creation-source-fields input { flex: 1 1 180px; width: 0; }
+}
+
+.creation-choice-row { position: relative; min-height: 28px; padding-left: 180px; }
+.creation-choice-row legend { position: absolute; left: 0; top: 7px; }
+.creation-choice-row > div { margin-top: 0; margin-left: auto; }
+.creation-repo-field { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--color-muted); }
+.creation-repo-field input { width: 90px; height: 24px; padding-inline: 6px; font-size: 11px; }
+.creation-preview { margin-top: 6px; }
+.creation-dialog summary { list-style-position: inside; }
+@media (max-width: 720px) {
+  .creation-choice-row { padding-left: 130px; }
+  .creation-mode-option { padding-inline: 6px; }
 }

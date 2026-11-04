@@ -282,5 +282,6 @@ it("creation completion while settings covers facts cannot change the preserved 
   fireEvent.keyDown(window, { key: "Escape" });
   expect(await screen.findByTestId("desktop-task-facts")).toBeVisible();
   expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: createName })).toBeEnabled();
+  // Returning remounts facts; its authoritative lifecycle read must settle first.
+  await waitFor(() => expect(screen.getByRole("button", { name: createName })).toBeEnabled());
 });

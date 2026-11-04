@@ -17,6 +17,27 @@ function bridge(operation: NonNullable<PidockBridge["createTask"]>): PidockBridg
 afterEach(cleanup);
 
 describe("Desktop task creation", () => {
+  it("keeps the busy dialog open on Escape and exposes a failed preparation inside it", async () => {
+    let refuse: ((value: { ok: false; error: string }) => void) | undefined;
+    const createTask = vi.fn(async (request: { op: string }) => {
+      if (request.op === "prepare") return await new Promise<{ ok: false; error: string }>((resolve) => { refuse = resolve; });
+      return { ok: true, payload: null };
+    });
+    render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={async () => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "任务" }));
+    fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "Work" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Web" }));
+    fireEvent.change(screen.getByLabelText("远程名称"), { target: { value: "origin" } });
+    fireEvent.change(screen.getByLabelText("远程分支"), { target: { value: "main" } });
+    fireEvent.click(screen.getByRole("button", { name: "固定基线并预览路径" }));
+    await waitFor(() => expect(refuse).toBeDefined());
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "新建任务" })).toBeInTheDocument();
+    refuse!({ ok: false, error: "远程读取失败，未修改原仓库" });
+    const dialog = await screen.findByRole("dialog", { name: "新建任务" });
+    await waitFor(() => expect(dialog).toHaveTextContent("远程读取失败，未修改原仓库"));
+    expect(screen.getByLabelText("任务名称")).toHaveValue("Work");
+  });
   it("requires explicit remote, branch and shared writable directory confirmation before preview; commits fixed intent only once", async () => {
     const createTask = vi.fn(async (request: { op: string; input?: unknown; id?: string }) => {
       if (request.op === "current") return { ok: true, payload: null };

@@ -35,3 +35,15 @@ it("names a failed session read and retries through the same Host boundary witho
   expect(await screen.findByText("暂无会话")).toBeVisible();
   expect(taskOp.mock.calls.every(([, op]) => op === "task/sessionList")).toBe(true);
 });
+it("returns the compact navigation to its rail when opening a creation dialog", () => {
+  const onNewWorkspace = vi.fn();
+  render(<DesktopShell view={{ view: "project", projectId: "workspace-one" }} onNavigate={vi.fn()} onNewWorkspace={onNewWorkspace}
+    projects={[{ id: "workspace-one", name: "核心开发", description: "", taskCount: 0 }]} projectsInitialized unassignedCount={0}
+    tasks={[]} allTaskCount={0} lifecyclePending={false} lifecycleErrors={[]} roots={[]}
+    rootRetry={{ busy: false, pending: false, error: null, run: vi.fn() }} breadcrumb={{ project: "核心开发" }}>内容</DesktopShell>);
+  // The compact rail's controls are CSS-hidden at the jsdom default viewport.
+  fireEvent.click(screen.getByLabelText("展开导航"));
+  fireEvent.click(screen.getByRole("button", { name: "新建工作空间" }));
+  expect(onNewWorkspace).toHaveBeenCalledOnce();
+  expect(screen.getByLabelText("展开导航")).toHaveAttribute("aria-expanded", "false");
+});

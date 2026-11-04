@@ -6,8 +6,8 @@ import { sourceName, sourcePath, type DesktopProject } from "../data/desktopProj
 import type { PidockBridge } from "../data/shellBridge";
 import { hostText } from "../data/workspaceFiles";
 
-const button = "inline-flex min-h-8 items-center justify-center gap-1.5 border border-line bg-paper px-2.5 py-1 text-xs hover:bg-bg disabled:cursor-not-allowed disabled:opacity-50";
-const field = "w-full min-w-0 border border-line bg-paper px-2 py-1.5 text-sm text-ink";
+const button = "inline-flex min-h-7 rounded-[5px] items-center justify-center gap-1.5 border border-line bg-paper px-2.5 py-1 text-xs hover:bg-bg disabled:cursor-not-allowed disabled:opacity-50";
+const field = "h-8 w-full min-w-0 rounded-[5px] border border-line bg-paper px-2.5 text-xs text-ink outline-none focus:border-accent";
 const fieldDense = "w-full min-w-0 border border-line bg-paper px-1.5 py-1 font-mono text-[11px] text-ink";
 const label = "flex min-w-0 flex-col gap-1 text-[11px] font-medium text-muted";
 const kbd = "rounded-[3px] border border-line bg-bg px-1.5 py-0.5 font-mono text-[10px] text-muted";
@@ -65,7 +65,12 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
   const nameRef = useRef<HTMLInputElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const submitRef = useRef<() => void>(() => undefined);
+  const closeRef = useRef<() => void>(() => undefined);
   const currentName = name;
+  const focusInside = () => {
+    const first = (nameRef.current && !nameRef.current.matches(":disabled") ? nameRef.current : null) ?? dialogRef.current?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled)");
+    (first ?? dialogRef.current)?.focus();
+  };
 
   const resetSelections = useCallback(() => {
     setName(""); setRepos({}); setDirectories([]); setSharedWriteConfirmed(false); setOverride(false);
@@ -315,28 +320,37 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
   // on the task name and Tab stays inside the dialog at 720×560. The handler
   // reads the latest submit through a ref, so it is not re-registered (and does
   // not steal focus) on every keystroke.
-  submitRef.current = () => { if (intent) void commit(); else void prepare(); };
+  closeRef.current = close;
+  submitRef.current = () => { if (busy) return; if (intent) void commit(); else void prepare(); };
   useEffect(() => {
     if (!open) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    nameRef.current?.focus();
+    focusInside();
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); close(); return; }
+      if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submitRef.current(); }
     };
+    const containFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && !dialogRef.current?.contains(event.target)) focusInside();
+    };
+    document.addEventListener("focusin", containFocus);
     document.addEventListener("keydown", onKeyDown);
     return () => {
+      document.removeEventListener("focusin", containFocus);
       document.removeEventListener("keydown", onKeyDown);
       if (opener && document.contains(opener)) opener.focus();
     };
-    // `close` only reads `busy`, which is checked inside the handler closure.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Latest handlers preserve the busy guard without resetting initial focus on typing.
   }, [open]);
+  const previewingIntent = intent !== null;
+  useEffect(() => {
+    if (open && previewingIntent) focusInside();
+  }, [open, previewingIntent]);
   const trap = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Tab") return;
     const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      "button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])");
-    if (!focusable || focusable.length === 0) return;
+      "button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])");
+    if (!focusable || focusable.length === 0) { event.preventDefault(); dialogRef.current?.focus(); return; }
     const first = focusable[0]!, last = focusable[focusable.length - 1]!;
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
@@ -356,17 +370,17 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
     <button className={button} type="button" disabled={busy || !project || !hasSourcesInProject || typeof bridge.createTask !== "function"}
       title={!project ? "请先选择项目" : !hasSourcesInProject ? "当前创建流程至少需要一个仓库或目录" : "创建真实任务"}
       onClick={openForm}><Icon name="plus" />任务</button>
-    {error && <p role={typeof bridge.createTask === "function" ? "alert" : undefined} className="w-full text-xs text-[#ad4545]">{error}</p>}
+    {!open && error && <p role={typeof bridge.createTask === "function" ? "alert" : undefined} className="w-full text-xs text-[#ad4545]">{error}</p>}
     {notice && <p role="status" className="w-full text-xs text-muted">{notice}</p>}
     {open && <div role="presentation" onClick={close}
-      className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-ink/40 p-4 py-6">
-      <div role="dialog" aria-modal="true" aria-label="新建任务" ref={dialogRef} onKeyDown={trap}
+      className="creation-backdrop">
+      <div role="dialog" aria-modal="true" aria-label="新建任务" tabIndex={-1} ref={dialogRef} onKeyDown={trap}
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-[720px] rounded-[10px] border border-line bg-paper p-6 shadow-xl">
+        className="creation-dialog creation-task-dialog">
         <section role="region" aria-label="创建任务">
         <header className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 gap-2.5">
-            <span aria-hidden className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[6px] bg-soft text-accent"><Icon name="branch" /></span>
+            <span aria-hidden className="grid size-[30px] shrink-0 place-items-center rounded-[6px] bg-soft text-accent"><Icon name="branch" /></span>
             <div className="min-w-0">
               <h2 className="text-[16px] font-semibold tracking-[-0.2px] text-ink">{intent ? `任务路径预览 · ${intent.name}` : "新建任务 (New Task)"}</h2>
               <p className="mt-0.5 text-[11px] text-muted">选择任务工作区模式与来源；普通目录共享原文件，已有 Git 目录直接使用原检出</p>
@@ -374,6 +388,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
           </div>
           <button type="button" className={kbd} aria-label="关闭新建任务" onClick={close} disabled={busy}>Esc</button>
         </header>
+        {error && <p role="alert" className="mt-3 text-xs text-destructive">{error}</p>}
         <div className="mt-4">
           {!intent && formProjectId && project?.id !== formProjectId && <p role="status" className="mb-2 text-xs text-[#ad4545]">项目选择已变化，请选择原项目或取消后重新创建。</p>}
           {intent ? <div className="flex flex-col gap-3">
@@ -435,27 +450,31 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
             </div>
           </div> : <form className="flex flex-col gap-3" onSubmit={(event) => void prepare(event)}>
             <div className="flex flex-wrap gap-3">
-              <div className={`${label} w-[190px]`}>所属工作区 *<span className="truncate border border-line bg-bg px-2 py-1.5 text-sm text-ink" title={project?.name}>{project?.name ?? "请先选择工作区"}</span></div>
+              <div className={`${label} w-[220px]`}>所属工作区 *<span className="truncate border border-line bg-bg px-2 py-1.5 text-sm text-ink" title={project?.name}>{project?.name ?? "请先选择工作区"}</span></div>
               <label className={`${label} min-w-[200px] flex-1`}>任务目标 / 名称 *
                 <input ref={nameRef} aria-label="任务名称" className={field} required maxLength={256} value={name}
                   onChange={(event) => setName(event.target.value)} />
               </label>
             </div>
-            <fieldset className="border-0 p-0">
+            <div role="group" aria-label="基准模型与推理强度" className="flex min-h-7 flex-wrap items-center justify-between gap-2 text-[11px]">
+              <span className="font-medium text-muted">基准模型与推理强度</span>
+              <p className="rounded-[5px] border border-line bg-bg px-2 py-1 text-[10px] text-muted">模型：创建后在会话中选择 · 推理：随模型能力确定</p>
+            </div>
+            <fieldset className="creation-choice-row border-0 p-0">
               <legend className="text-[11px] font-medium text-muted">任务工作区模式 *</legend>
-              <div className="mt-1 flex flex-wrap gap-3 rounded-[6px] border border-line bg-bg px-2.5 py-2">
+              <div className="creation-mode-options mt-1 flex flex-wrap rounded-[5px] border border-line bg-bg">
                 {(["worktree", "existing-git", "plain-dirs"] as const).map((value) => {
                   const disabled = busy || (value !== "plain-dirs" && !gitModesAvailable);
-                  return <label key={value} className={`flex items-center gap-1.5 text-xs ${disabled ? "opacity-50" : ""}`}>
+                  return <label key={value} className="creation-mode-option" data-selected={mode === value} data-disabled={disabled}>
                     <input type="radio" name="workspace-mode" value={value} checked={mode === value} disabled={disabled}
                       onChange={() => { setMode(value); if (value === "plain-dirs") setRepos({}); }} />
                     {WORKSPACE_MODE_LABELS[value]}
                   </label>;
                 })}
               </div>
-              <p className="mt-1 text-[11px] text-muted">{MODE_HINTS[mode]}</p>
+              <p className="sr-only">{MODE_HINTS[mode]}</p>
             </fieldset>
-            <fieldset className="border-0 p-0">
+            <fieldset className="creation-choice-row border-0 p-0">
               <legend className="text-[11px] font-medium text-muted">任务类型</legend>
               <div className="mt-1 flex gap-3 text-xs">
                 {([["normal", "普通任务"], ["scheduled", "定时任务"]] as const).map(([value, text]) => (
@@ -499,14 +518,14 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
                           onChange={(event) => setRepos((old) => ({ ...old, [repo.id]: { selected: event.target.checked, remote: old[repo.id]?.remote ?? "", branch: old[repo.id]?.branch ?? "" } }))} />
                         {sourceName(repo)}
                       </label>
-                      <span className="min-w-0 truncate font-mono text-[10px] text-muted" title={sourcePath(repo)}>{sourcePath(repo)}</span>
+                      <span className="min-w-0 max-w-[55%] truncate font-mono text-[10px] text-muted" title={sourcePath(repo)}>{sourcePath(repo)}</span>
                     </div>
                     {entry?.selected && mode !== "plain-dirs" && <div className="mt-1.5 flex flex-wrap gap-2">
-                      <label className={`${label} w-[130px]`}>远程名称
+                      <label className="creation-repo-field">远程名称
                         <input className={field} aria-label="远程名称" required placeholder="origin" value={entry.remote}
                           onChange={(event) => setRepos((old) => ({ ...old, [repo.id]: { ...old[repo.id]!, remote: event.target.value } }))} />
                       </label>
-                      {mode === "worktree" ? <label className={`${label} w-[160px]`}>远程基线分支
+                      {mode === "worktree" ? <label className="creation-repo-field">远程基线分支
                         <input className={field} aria-label="远程分支" required placeholder="main" value={entry.branch}
                           onChange={(event) => setRepos((old) => ({ ...old, [repo.id]: { ...old[repo.id]!, branch: event.target.value } }))} />
                       </label> : <p className="self-end text-[10px] text-muted">使用该目录当前检出的分支（由 Host 读取）</p>}
@@ -534,14 +553,14 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
                 <p className="text-[11px] font-medium text-muted">运行环境变量（继承自工作区）</p>
                 {project?.environment === null ? <p className="mt-1 text-[10px] text-muted">Host 未上报工作区环境变量</p>
                   : (project?.environment ?? []).length === 0 ? <p className="mt-1 text-[10px] text-muted">工作区未存储环境变量</p>
-                  : <><ul className="mt-1 max-h-16 space-y-0.5 overflow-y-auto font-mono text-[10px] text-ink">{(project?.environment ?? []).slice(0, 3).map((row) => <li key={row.key} className="flex min-w-0 items-center gap-1 truncate">
+                  : <><ul className="mt-1 max-h-16 flex flex-col gap-0.5 overflow-y-auto font-mono text-[10px] text-ink">{(project?.environment ?? []).slice(0, 3).map((row) => <li key={row.key} className="flex min-w-0 items-center gap-1 truncate">
                     <span className="shrink-0 rounded-[3px] border border-line px-1 text-[8px] font-semibold text-accent">工作区</span>
                     <span className="truncate">• {row.key}={row.value}</span>
                   </li>)}</ul>
                     <p className="mt-1 text-[10px] text-muted">已读取 {(project?.environment ?? []).length} 个工作区变量，创建后默认继承；可在任务事实中按单个键局部覆盖（删除覆盖恢复继承）。</p></>}
               </div>
               <div className="min-w-0">
-                <p className="text-[11px] font-medium text-muted">交付设置（分支规范 / 推送目标远程）</p>
+                <details className="creation-delivery-settings"><summary className="cursor-pointer text-[11px] font-medium text-muted">交付设置（分支规范 / 推送目标远程）</summary>
                 <div className="mt-1 flex flex-wrap items-end gap-1.5">
                   <label className="flex min-w-[132px] flex-1 flex-col gap-0.5 text-[10px] text-muted">分支规范
                     <input className={fieldDense} aria-label="分支规范" maxLength={200} value={settingsDraft.branchTemplate}
@@ -562,12 +581,11 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
                     : `${settings.savedAt ? "已保存" : "未保存"}：${settings.branchTemplate || "（空）"} · ${settings.remote || "（空）"}`}
                 </p>
                 {settingsNote && <p role="status" className="mt-1 text-[10px] text-muted">{settingsNote}</p>}
-              </div>
-            </div>
+                </details>
             {/* [Pencil T13] #148 the pre-creation preview the form must show
                 BEFORE anything is created: per repository the exact local branch
                 and push target main will make, or the named reason it will not. */}
-            <section aria-label="创建前分支与推送目标预览" className="rounded-[6px] border border-line bg-bg px-2.5 py-2">
+            <section aria-label="创建前分支与推送目标预览" className="creation-preview">
               <div className="flex flex-wrap items-center justify-between gap-1.5">
                 <p className="text-[11px] font-medium text-muted">创建前预览：本地分支与推送目标</p>
                 <span className="text-[10px] text-muted">
@@ -599,9 +617,12 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
                 {preview?.problem?.message ?? preview?.rows.find((row) => row.problem)?.problem?.message}（不会用默认分支名代替）
               </p>}
             </section>
+
+              </div>
+            </div>
             <label className="flex gap-2 text-[11px] text-muted"><input type="checkbox" checked={override} disabled={busy} onChange={(event) => setOverride(event.target.checked)} />单次选择其他任务根（系统目录选择器）</label>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="max-w-[380px] text-[10px] text-muted">创建失败会保留本机待完成意图，可用同一身份重试；不会覆盖原始仓库或目录。写入按本任务审批，跨任务隔离尚未完成（T06）。</p>
+            <div className="creation-footer flex flex-wrap items-center justify-between gap-2">
+              <p className="max-w-[340px] text-[10px] text-muted">创建失败会保留本机待完成意图，可用同一身份重试；不会覆盖原始仓库或目录。普通目录共享原文件，受管写入遵循跨任务真实路径协调；外部编辑器不参与协调。</p>
               <div className="flex gap-1">
                 <button className={button} type="button" disabled={busy} onClick={close}>取消</button>
                 <button className={button} type="submit" aria-label={primaryLabel} disabled={submitDisabled}>{busy ? "正在读取来源" : primaryLabel} <span className={kbd}>⌘↵</span></button>

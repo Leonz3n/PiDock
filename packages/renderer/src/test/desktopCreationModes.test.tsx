@@ -32,6 +32,18 @@ function bridge(operation: NonNullable<PidockBridge["createTask"]>): PidockBridg
 afterEach(cleanup);
 
 describe("task workspace mode in the S02 create form", () => {
+  it("shows the actual unbound model and reasoning state before a task has a session", () => {
+    render(<DesktopTaskCreation project={project} bridge={bridge(vi.fn(async () => ({ ok: true, payload: null })))} onCreated={async () => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "任务" }));
+    expect(screen.getByRole("group", { name: "基准模型与推理强度" })).toHaveTextContent("模型：创建后在会话中选择");
+    expect(screen.getByRole("group", { name: "基准模型与推理强度" })).toHaveTextContent("推理：随模型能力确定");
+  });
+  it("moves keyboard focus into an automatically restored pending intent", async () => {
+    const createTask = vi.fn(async () => ({ ok: true, payload: existingIntent }));
+    render(<DesktopTaskCreation project={project} bridge={bridge(createTask)} onCreated={async () => {}} />);
+    const dialog = await screen.findByRole("dialog", { name: "新建任务" });
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+  });
   it("starts in the default worktree mode and disables Git repos in plain-dirs mode", async () => {
     const createTask = vi.fn(async (request: { op: string }) => {
       if (request.op === "current") return { ok: true, payload: null };
@@ -91,7 +103,7 @@ describe("task workspace mode in the S02 create form", () => {
     // is covered by `desktopCreationPreview.test.tsx`.
     expect(screen.getByRole("region", { name: "创建前分支与推送目标预览" })).toBeInTheDocument();
     expect(screen.queryByText(/origin\/feature\/refactor-auth/)).not.toBeInTheDocument();
-    expect(screen.getByText(/跨任务隔离尚未完成（T06）/)).toBeInTheDocument();
+    expect(screen.getByText(/受管写入遵循跨任务真实路径协调/)).toBeInTheDocument();
   });
 
   it("lands on the created task after commit", async () => {
