@@ -155,9 +155,9 @@ export function DesktopShell({
       {open && <div data-session-tree={task.taskId} className="ml-[30px] flex min-w-0 flex-col">
         {list === undefined ? <p className="py-1 text-[10px] text-muted">正在读取会话…</p> : typeof list === "string" ? <div><p role="status" className="py-1 text-[10px] text-destructive">会话列表读取失败：{list}</p><Button type="button" variant="ghost" size="sm" aria-label={`重试读取${task.name}的会话`} onClick={() => setRevision((value) => value + 1)}>重试读取会话</Button></div> : <>
           {list.sessions.filter((session) => !session.archived && (!needle || matches(session.name) || matches(task.name) || matches(projects.find((project) => project.id === projectId)?.name ?? "未归属任务"))).map((session) => <button key={session.id} type="button" data-session-nav={session.id} aria-label={session.name} title={session.name}
-            aria-current={selected && (view.view === "task" ? view.sessionId ?? list.activeSessionId : null) === session.id ? "true" : undefined}
+            aria-current={selected && (view.view === "task" ? view.sessionId : null) === session.id ? "true" : undefined}
             onClick={() => onNavigate({ view: "task", taskId: task.taskId, sessionId: session.id })}
-            className={cn("flex h-6 min-w-0 items-center gap-1 rounded px-1.5 text-left text-[11px] text-muted hover:bg-paper", selected && (view.view === "task" ? view.sessionId ?? list.activeSessionId : null) === session.id && "border border-line bg-paper text-ink")}>
+            className={cn("flex h-6 min-w-0 items-center gap-1 rounded px-1.5 text-left text-[11px] text-muted hover:bg-paper", selected && (view.view === "task" ? view.sessionId : null) === session.id && "border border-line bg-paper text-ink")}>
             <Icon name="message" /><span className="truncate">{session.name}</span>
           </button>)}
           {list.sessions.every((session) => session.archived) && <p className="py-1 text-[10px] text-muted">暂无会话</p>}
