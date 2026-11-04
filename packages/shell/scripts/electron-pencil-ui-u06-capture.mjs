@@ -249,11 +249,12 @@ async function run() {
     check('no model/tool/session mutations from settings',!calls.slice(mutationStart).some(call=>/sendMessage|sessionCreate|execute|toolReplay/.test(call.op)),calls.slice(mutationStart).map(call=>call.op));
     // Real filesystem failures through production IPC, no bridge substitute.
     await click('设置');await until("document.querySelector('[data-appearance-option=dark]')",'failure settings');
+    await choose('light');
     rmSync(join(profile,'appearance.json'));mkdirSync(join(profile,'appearance.json'));
     await evaluate("document.querySelector('[data-appearance-option=dark]').click()");
     await until("document.querySelector('[role=alert]')?.textContent.includes('appearance-unwritable')",'honest persist failure');
     await capture('dark-appearance-save-failure',true);
-    rmSync(join(profile,'appearance.json'),{recursive:true});await choose('light');
+    rmSync(join(profile,'appearance.json'),{recursive:true});await choose('light');await choose('dark');
     rmSync(join(profile,'appearance.json'));mkdirSync(join(profile,'appearance.json'));
     await evaluate("document.querySelector('[data-appearance-option=light]').click()");
     await until("document.querySelector('[role=alert]')?.textContent.includes('appearance-unwritable')",'light persist failure');
