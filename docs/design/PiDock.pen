@@ -10773,6 +10773,7 @@
                           "type": "frame",
                           "id": "zjuW6",
                           "name": "Fact 1 Worktree",
+                          "context": "已有 Git 目录模式时本行显示「已有 Git 目录 · 共享原检出」，并列出本机检出真实路径、当前分支与 HEAD；不创建 worktree，也不改写原检出的未提交修改。",
                           "width": "fill_container",
                           "stroke": "$border-light",
                           "strokeWidth": {
@@ -11032,6 +11033,17 @@
                           ]
                         }
                       ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "q2wvJC",
+                      "name": "Mode Variant Note",
+                      "fill": "$ink-muted",
+                      "content": "已有 Git 目录模式：仓库行显示「已有 Git 目录 · 共享原检出」与本机检出路径、当前分支与 HEAD，不创建 worktree。仅普通目录模式不显示仓库行，普通目录始终共享原文件。",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 10,
+                      "fontWeight": "normal"
                     }
                   ]
                 },
@@ -17247,7 +17259,7 @@
                               "id": "e8DNt",
                               "name": "Sub",
                               "fill": "$ink-secondary",
-                              "content": "关联工作区仓库并自动创建隔离 Git worktree，推送时自动创建远程分支",
+                              "content": "关联工作区仓库；默认创建隔离 Git worktree，也可直接用已有 Git 目录",
                               "fontFamily": "Inter",
                               "fontSize": 11,
                               "fontWeight": "normal"
@@ -17525,6 +17537,129 @@
                 },
                 {
                   "type": "frame",
+                  "id": "isMPA",
+                  "name": "Row Task Workspace Mode",
+                  "context": "任务工作区模式决定所选 Git 仓库如何落地：独立 Worktree 默认创建任务专属 worktree 与本地分支；已有 Git 目录直接使用已登记的本机检出，不执行 git worktree add；仅普通目录不选择 Git 仓库。普通目录来源在三种模式下都共享原文件，不复制。",
+                  "width": "fill_container",
+                  "height": 28,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "umxw6",
+                      "name": "L",
+                      "fill": "$ink-primary",
+                      "content": "任务工作区模式 *",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "WUf8x",
+                      "name": "Mode Segmented",
+                      "height": 26,
+                      "fill": "$bg-sunken",
+                      "cornerRadius": 4,
+                      "stroke": "$border-strong",
+                      "strokeWidth": 1,
+                      "gap": 2,
+                      "padding": 2,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "Gcxm5",
+                          "name": "独立 Worktree（默认）",
+                          "height": 22,
+                          "fill": "$accent-soft",
+                          "cornerRadius": 3,
+                          "gap": 4,
+                          "padding": [
+                            0,
+                            9
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "l2nLn",
+                              "name": "独立 Worktree（默认） Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "git-branch",
+                              "library": "lucide",
+                              "fill": "$accent-primary"
+                            },
+                            {
+                              "type": "text",
+                              "id": "ZUyI8",
+                              "name": "独立 Worktree（默认） Label",
+                              "fill": "$accent-primary",
+                              "content": "独立 Worktree（默认）",
+                              "fontFamily": "Inter",
+                              "fontSize": 10,
+                              "fontWeight": "700"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "O5URc",
+                          "name": "已有 Git 目录",
+                          "height": 22,
+                          "cornerRadius": 3,
+                          "gap": 4,
+                          "padding": [
+                            0,
+                            9
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "k02b4Z",
+                              "name": "已有 Git 目录 Label",
+                              "fill": "$ink-secondary",
+                              "content": "已有 Git 目录",
+                              "fontFamily": "Inter",
+                              "fontSize": 10,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "DRKFT",
+                          "name": "仅普通目录",
+                          "height": 22,
+                          "cornerRadius": 3,
+                          "gap": 4,
+                          "padding": [
+                            0,
+                            9
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Td6qt",
+                              "name": "仅普通目录 Label",
+                              "fill": "$ink-secondary",
+                              "content": "仅普通目录",
+                              "fontFamily": "Inter",
+                              "fontSize": 10,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
                   "id": "zTLbq",
                   "name": "Section Repo Selection",
                   "width": "fill_container",
@@ -17544,7 +17679,7 @@
                           "id": "y1jXWZ",
                           "name": "T",
                           "fill": "$ink-primary",
-                          "content": "关联工作区仓库与目录 (勾选后自动为任务创建独立 Git worktree) *",
+                          "content": "关联工作区仓库与目录 (按任务工作区模式落地) *",
                           "fontFamily": "Inter",
                           "fontSize": 11,
                           "fontWeight": "700"
@@ -18165,7 +18300,7 @@
                       "id": "eInr4",
                       "name": "Notice",
                       "fill": "$ink-muted",
-                      "content": "点击后将在各选定仓库下自动执行 git worktree add 并开启首个 Agent 会话",
+                      "content": "独立 Worktree 模式在各选定仓库执行 git worktree add；已有 Git 目录直接使用本机检出",
                       "fontFamily": "Inter",
                       "fontSize": 10,
                       "fontWeight": "normal"
@@ -25670,7 +25805,7 @@
                               "id": "AHIjq",
                               "name": "Sub",
                               "fill": "$ink-secondary",
-                              "content": "关联工作区仓库并自动创建隔离 Git worktree，推送时自动创建远程分支",
+                              "content": "关联工作区仓库；默认创建隔离 Git worktree，也可直接用已有 Git 目录",
                               "fontFamily": "Inter",
                               "fontSize": 11,
                               "fontWeight": "normal"
@@ -25948,6 +26083,129 @@
                 },
                 {
                   "type": "frame",
+                  "id": "BQx6d",
+                  "name": "Row Task Workspace Mode",
+                  "context": "任务工作区模式决定所选 Git 仓库如何落地：独立 Worktree 默认创建任务专属 worktree 与本地分支；已有 Git 目录直接使用已登记的本机检出，不执行 git worktree add；仅普通目录不选择 Git 仓库。普通目录来源在三种模式下都共享原文件，不复制。",
+                  "width": "fill_container",
+                  "height": 28,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "I6ftG",
+                      "name": "L",
+                      "fill": "$ink-primary",
+                      "content": "任务工作区模式 *",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "LNtOz",
+                      "name": "Mode Segmented",
+                      "height": 26,
+                      "fill": "$bg-sunken",
+                      "cornerRadius": 4,
+                      "stroke": "$border-strong",
+                      "strokeWidth": 1,
+                      "gap": 2,
+                      "padding": 2,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "iKzHO",
+                          "name": "独立 Worktree（默认）",
+                          "height": 22,
+                          "fill": "$accent-soft",
+                          "cornerRadius": 3,
+                          "gap": 4,
+                          "padding": [
+                            0,
+                            9
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "h9YPF0",
+                              "name": "独立 Worktree（默认） Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "git-branch",
+                              "library": "lucide",
+                              "fill": "$accent-primary"
+                            },
+                            {
+                              "type": "text",
+                              "id": "n9YKs3",
+                              "name": "独立 Worktree（默认） Label",
+                              "fill": "$accent-primary",
+                              "content": "独立 Worktree（默认）",
+                              "fontFamily": "Inter",
+                              "fontSize": 10,
+                              "fontWeight": "700"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "z2Aa5j",
+                          "name": "已有 Git 目录",
+                          "height": 22,
+                          "cornerRadius": 3,
+                          "gap": 4,
+                          "padding": [
+                            0,
+                            9
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Ds3Sm",
+                              "name": "已有 Git 目录 Label",
+                              "fill": "$ink-secondary",
+                              "content": "已有 Git 目录",
+                              "fontFamily": "Inter",
+                              "fontSize": 10,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "M79yqb",
+                          "name": "仅普通目录",
+                          "height": 22,
+                          "cornerRadius": 3,
+                          "gap": 4,
+                          "padding": [
+                            0,
+                            9
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "t1AOl",
+                              "name": "仅普通目录 Label",
+                              "fill": "$ink-secondary",
+                              "content": "仅普通目录",
+                              "fontFamily": "Inter",
+                              "fontSize": 10,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
                   "id": "ukQvZ",
                   "name": "Section Repo Selection",
                   "width": "fill_container",
@@ -25967,7 +26225,7 @@
                           "id": "U2Uq1",
                           "name": "T",
                           "fill": "$ink-primary",
-                          "content": "关联工作区仓库与目录 (勾选后自动为任务创建独立 Git worktree) *",
+                          "content": "关联工作区仓库与目录 (按任务工作区模式落地) *",
                           "fontFamily": "Inter",
                           "fontSize": 11,
                           "fontWeight": "700"
@@ -26588,7 +26846,7 @@
                       "id": "hjzvB",
                       "name": "Notice",
                       "fill": "$ink-muted",
-                      "content": "点击后将在各选定仓库下自动执行 git worktree add 并开启首个 Agent 会话",
+                      "content": "独立 Worktree 模式在各选定仓库执行 git worktree add；已有 Git 目录直接使用本机检出",
                       "fontFamily": "Inter",
                       "fontSize": 10,
                       "fontWeight": "normal"
