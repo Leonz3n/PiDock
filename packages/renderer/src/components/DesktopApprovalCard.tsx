@@ -69,8 +69,16 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
     const pending = read.phase === "read" ? read.approvals.find(approval => approval.status === "pending" && !approval.foreign) : undefined;
     if (!pending) return;
     const keyboard = (event: KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
-      if (!cardRef.current || cardRef.current.closest("[hidden], [inert]") || document.querySelector('[aria-modal="true"]')) return;
+      if (event.repeat || event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+      if (event.target instanceof Element && event.target.closest('[data-testid="desktop-tool-dock"]')) return;
+      const card = cardRef.current;
+      if (!card || card.closest("[hidden], [inert]") || document.querySelector('[aria-modal="true"]')) return;
+      // Responsive tool docks hide the message surface through CSS. Check at
+      // dispatch time so resizing cannot leave a previously visible handler armed.
+      for (let surface: HTMLElement | null = card; surface; surface = surface.parentElement) {
+        const style = getComputedStyle(surface);
+        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return;
+      }
       if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey))) {
         event.preventDefault();
         event.stopPropagation();

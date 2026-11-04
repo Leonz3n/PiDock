@@ -1351,6 +1351,20 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
     </MessageScrollerViewport>
     <MessageScrollerButton aria-label="滚动到最新消息" />
     </MessageScroller></MessageScrollerProvider>
+    </div>
+    <DesktopToolDock
+      taskId={taskId}
+      tool={activeTool}
+      tools={openTools}
+      activeTool={activeTool}
+      collapsed={toolDockCollapsed}
+      onSelectTool={(selected) => { setActiveTool(selected); setToolDockCollapsed(false); }}
+      onCloseTool={closeTool}
+      onCollapse={() => setToolDockCollapsed(true)}
+      onClose={() => { if (activeTool) closeTool(activeTool); }}
+      onReferenceFile={addFileReference}
+    />
+    </div>
     <div data-testid="desktop-composer-container" className="shrink-0 px-4 pt-2 pb-4"><div className="mx-auto max-w-[768px] min-w-0">
       {draftError && <p role="alert" className="mb-2 break-words text-xs text-[#ad4545]">{draftError}</p>}
       {referenceReport && <p role="alert" data-testid="composer-reference-refusal" className="mb-2 break-words text-xs text-[#ad4545]">{referenceReport}</p>}
@@ -1444,20 +1458,6 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
         </div>
       </form>
     </div></div>
-    </div>
-    <DesktopToolDock
-      taskId={taskId}
-      tool={activeTool}
-      tools={openTools}
-      activeTool={activeTool}
-      collapsed={toolDockCollapsed}
-      onSelectTool={(selected) => { setActiveTool(selected); setToolDockCollapsed(false); }}
-      onCloseTool={closeTool}
-      onCollapse={() => setToolDockCollapsed(true)}
-      onClose={() => { if (activeTool) closeTool(activeTool); }}
-      onReferenceFile={addFileReference}
-    />
-    </div>
     {archivePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4">
       <div role="dialog" aria-modal="true" aria-label="归档当前任务" className="w-full max-w-[440px] rounded-[7px] border border-line bg-paper p-5 shadow-lg">
         <h2 className="text-base font-semibold">归档当前任务</h2>

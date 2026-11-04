@@ -115,6 +115,40 @@ describe("ticket 140 会话内审批卡", () => {
     expect(fixture.calls().filter(row=>row.op === "task/approve")).toHaveLength(0);
   });
 
+  it.each(["Enter", "Escape"])("ignores %s while CSS hides the conversation, then accepts one visible decision", async (key) => {
+    let status = "pending";
+    const fixture = setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow({ status })] } }), resolve: () => { status = key === "Enter" ? "approved" : "rejected"; return { ok: true, payload: {} }; } });
+    const view = mount();
+    await screen.findByTestId("desktop-approval-approve");
+    const surface = view.container.firstElementChild as HTMLElement;
+    surface.style.display = "none";
+    fireEvent.keyDown(window, { key, metaKey: key === "Enter" });
+    expect(fixture.calls().filter(row => ["task/approve", "task/reject"].includes(row.op))).toHaveLength(0);
+    surface.style.display = "";
+    fireEvent.keyDown(window, { key, metaKey: key === "Enter", repeat: true });
+    expect(fixture.calls().filter(row => ["task/approve", "task/reject"].includes(row.op))).toHaveLength(0);
+    fireEvent.keyDown(screen.getByLabelText("消息"), { key, metaKey: key === "Enter" });
+    fireEvent.keyDown(screen.getByLabelText("消息"), { key, metaKey: key === "Enter" });
+    await waitFor(() => expect(fixture.calls().filter(row => ["task/approve", "task/reject"].includes(row.op))).toHaveLength(1));
+    expect(fixture.calls().find(row => ["task/approve", "task/reject"].includes(row.op))?.op).toBe(key === "Enter" ? "task/approve" : "task/reject");
+  });
+
+  it("keeps keyboard decisions with the conversation when a tool dock owns focus", async () => {
+    const fixture = setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow()] } }) });
+    mount();
+    await screen.findByTestId("desktop-approval-approve");
+    fireEvent.click(screen.getByRole("button", { name: "文件", exact: true }));
+    const tab = await screen.findByRole("tab", { name: "文件", exact: true });
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "Enter", metaKey: true });
+    fireEvent.keyDown(tab, { key: "Escape" });
+    expect(fixture.calls().filter(row => ["task/approve", "task/reject"].includes(row.op))).toHaveLength(0);
+    expect(screen.getByLabelText("消息")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "收起工具区" }));
+    fireEvent.keyDown(screen.getByLabelText("消息"), { key: "Enter", metaKey: true });
+    await waitFor(() => expect(fixture.calls().filter(row => row.op === "task/approve")).toHaveLength(1));
+  });
+
   it("supports approval shortcuts once and ignores IME confirmation keys", async () => {
     let status = "pending";
     const fixture = setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow({status})] } }), resolve: () => { status = "approved"; return {ok:true,payload:{}}; } });

@@ -17,7 +17,7 @@ const [width, height] = arg("--size", "1440x900").split("x").map(Number);
 const scenario = arg("--scenario", "full");
 const repo = resolve(import.meta.dirname, "../../..");
 const reusedRoot = arg("--reuse-root", "");
-const output = join(repo, "docs/evidence/pencil-ui-u03", reusedRoot ? "restart" : "electron");
+const output = resolve(arg("--output", join(repo, "docs/evidence/pencil-ui-u03", reusedRoot ? "restart" : "electron")));
 const root = reusedRoot || mkdtempSync(join(tmpdir(), "pidock-ui-u03-"));
 const profile = join(root, "profile");
 const taskRoot = join(root, "tasks");
@@ -186,7 +186,7 @@ async function run() {
     await click(label);
     if (width < 960 && await evaluate("document.querySelector('[data-testid=desktop-sidebar]')?.dataset.expanded === 'true'")) await click("收起导航");
   };
-  const capture = async (state) => {
+  const capture = async (state, dock = false) => {
     console.log("CAPTURE",state);
     views.window.show(); app.focus({ steal: true }); views.window.moveTop(); views.window.focus(); await wait(180);
     const metrics = await evaluate(`(() => {
@@ -200,7 +200,7 @@ async function run() {
     })()`);
     check(`${state}: exact renderer viewport`, metrics.viewport[0] === width && metrics.viewport[1] === height, metrics.viewport);
     check(`${state}: no horizontal document overflow`, !metrics.horizontalOverflow, metrics);
-    if (metrics.composer) {
+    if (metrics.composer && !dock) {
       check(`${state}: one unified design header`, Math.abs(metrics.header.height - (width < 960 ? 42 : 52)) <= 2, metrics.header);
       check(`${state}: no stacked facts or old title`, !metrics.taskFacts && !metrics.oldTitle);
       check(`${state}: design conversation measure`, Math.abs(metrics.column.width - (width < 960 ? width - 80 : 768)) <= 2, metrics.column);
@@ -318,6 +318,32 @@ async function run() {
         check(`${theme}: hidden approval ignores management shortcut`, calls.filter(row=>["task/approve","task/reject"].includes(row.op)).length===beforeDecisions);
         await key("Escape");
         await until("document.querySelector('textarea[aria-label=消息]')", "return to pending approval");
+      }
+      if (width < 960) {
+        const beforeDockDecisions = calls.filter(row => ["task/approve", "task/reject"].includes(row.op)).length;
+        for (const dock of ["文件", "日志"]) {
+          await evaluate("document.querySelector('summary[aria-label=\"会话与工具操作\"]').closest('details').open=true;true");
+          await click(dock);
+          await evaluate("document.querySelector('summary[aria-label=\"会话与工具操作\"]').closest('details').open=false;true");
+          check(`${theme}-${decision}-${dock}: approval hidden`, await evaluate("document.querySelector('[data-testid=desktop-approval-card]').getClientRects().length === 0"));
+          check(`${theme}-${decision}-${dock}: composer input/send/stop remain reachable`, await evaluate("['textarea[aria-label=消息]', 'button[aria-label=发送]'].every(s=>{const r=document.querySelector(s).getBoundingClientRect();return r.width>0&&r.height>0&&r.bottom<=innerHeight}) && [...document.querySelectorAll('button')].some(b=>b.textContent.includes('停止')&&b.getClientRects().length>0)"));
+          await evaluate("document.querySelector('[data-testid=desktop-tool-dock] [role=tab]').focus();true");
+          await key("Enter",4); await key("Escape"); await wait(200);
+          check(`${theme}-${decision}-${dock}: hidden shortcuts make zero decisions`, calls.filter(row => ["task/approve", "task/reject"].includes(row.op)).length === beforeDockDecisions);
+          await capture(`${theme}-${decision}-${dock}-hidden`, true);
+          views.window.setContentSize(1440,900); await wait(300);
+          check(`${theme}-${decision}-${dock}: widening reveals approval`, await evaluate("document.querySelector('[data-testid=desktop-approval-card]').getClientRects().length > 0"));
+          await evaluate("document.querySelector('[data-testid=desktop-tool-dock] [role=tab]').focus();true");
+          await key("Enter",4); await key("Escape"); await wait(100);
+          check(`${theme}-${decision}-${dock}: focused desktop dock owns keys`, calls.filter(row => ["task/approve", "task/reject"].includes(row.op)).length === beforeDockDecisions);
+          views.window.setContentSize(width,height); await wait(300);
+          check(`${theme}-${decision}-${dock}: narrowing hides approval again`, await evaluate("document.querySelector('[data-testid=desktop-approval-card]').getClientRects().length === 0"));
+          await evaluate("document.querySelector('textarea[aria-label=消息]').focus();true");
+          await key("Enter",4); await key("Escape"); await wait(100);
+          check(`${theme}-${decision}-${dock}: resized hidden approval ignores composer shortcuts`, calls.filter(row => ["task/approve", "task/reject"].includes(row.op)).length === beforeDockDecisions);
+          await click("收起工具区");
+          check(`${theme}-${decision}-${dock}: return reveals approval`, await evaluate("document.querySelector('[data-testid=desktop-approval-card]').getClientRects().length > 0"));
+        }
       }
       await evaluate("document.querySelector('textarea[aria-label=消息]').focus();true");
       await key(decision === "approve" ? "Enter" : "Escape", decision === "approve" ? 4 : 0);
