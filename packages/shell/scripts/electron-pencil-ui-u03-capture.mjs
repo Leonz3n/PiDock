@@ -205,6 +205,7 @@ async function run() {
       check(`${state}: no stacked facts or old title`, !metrics.taskFacts && !metrics.oldTitle);
       check(`${state}: design conversation measure`, Math.abs(metrics.column.width - (width < 960 ? width - 80 : 768)) <= 2, metrics.column);
       check(`${state}: floating Composer shares column`, Math.abs(metrics.composer.width - metrics.column.width) <= 2 && Math.abs(metrics.composer.x - metrics.column.x) <= 2, metrics);
+      check(`${state}: Pencil Composer height`,Math.abs(metrics.composer.height-(width>960?70:54))<=1,metrics.composer);
       check(`${state}: Composer bottom clearance`, Math.abs(height - metrics.composer.bottom - (width < 960 ? 12 : 16)) <= 2, metrics.composer);
       check(`${state}: centered desktop column`, width < 960 || Math.abs((metrics.column.x + metrics.column.width/2) - (260+(width-260)/2)) <= 2, metrics.column);
       check(`${state}: reachable input/send and scrolling height`, metrics.input.bottom <= height && metrics.send.bottom <= height && metrics.scroll.height >= 180, metrics);

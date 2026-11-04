@@ -1396,10 +1396,10 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
           </ul>
           <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件。</p>
         </div>}
-        <textarea ref={messageInput} aria-label="消息" readOnly={historyReadOnly} value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={1} maxLength={16384} className="max-h-32 w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent py-1 text-[12px] outline-none" placeholder="输入后续指导 Agent，使用 @ 引用工作区文件，使用 $ 调用技能…" />
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
+        <textarea ref={messageInput} aria-label="消息" readOnly={historyReadOnly} value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={1} maxLength={16384} className="block max-h-32 w-full min-w-0 resize-none overflow-y-auto border-0 bg-transparent py-0 text-[12px] leading-[22px] outline-none" placeholder="输入后续指导 Agent，使用 @ 引用工作区文件，使用 $ 调用技能…" />
+        <div className="conversation-composer-controls mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
-            <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="text-muted"><Icon name="plus" /></Button>
+            <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="h-[26px] w-[26px] text-muted"><Icon name="plus" /></Button>
           </span></TooltipTrigger><TooltipContent>附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件</TooltipContent></Tooltip>
           <input ref={attachmentInput} type="file" multiple aria-label="附件选择" data-testid="desktop-composer-file-input" className="hidden" onChange={(event) => { addAttachments(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="权限说明" className="inline-flex">
@@ -1440,7 +1440,7 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
           <span data-testid="composer-usage" title={`${usageDetail} 本会话 SDK 累计：${readout?.usage ? `输入 ${readout.usage.input} / 输出 ${readout.usage.output} / 缓存读 ${readout.usage.cacheRead} / 写 ${readout.usage.cacheWrite}（${readout.turns} 条回复）` : "SDK 未报告"}`} className="sr-only">
             {!usageSnapshot ? "近期用量未核验" : reportedMessages.length ? `近期已报告输入+输出 ${recentTokens} tokens` : "近期用量未报告"}
           </span>
-          <Button type="submit" variant="default" size="icon" disabled={blocked || !draft.trim()} aria-label="发送" title="发送"><Icon name="arrow" /></Button>
+          <Button type="submit" variant="default" size="icon-sm" disabled={blocked || !draft.trim()} aria-label="发送" title="发送" className="h-[26px] w-[26px]"><Icon name="arrow" /></Button>
         </div>
       </form>
     </div></div>

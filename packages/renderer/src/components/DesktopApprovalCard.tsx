@@ -70,7 +70,7 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
     if (!pending) return;
     const keyboard = (event: KeyboardEvent) => {
       if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
-      if (cardRef.current?.closest("[hidden], [inert]") || document.querySelector('[aria-modal="true"]')) return;
+      if (!cardRef.current || cardRef.current.closest("[hidden], [inert]") || document.querySelector('[aria-modal="true"]')) return;
       if (event.key === "Escape" || (event.key === "Enter" && (event.metaKey || event.ctrlKey))) {
         event.preventDefault();
         event.stopPropagation();
