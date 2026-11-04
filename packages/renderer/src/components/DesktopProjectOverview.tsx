@@ -127,7 +127,7 @@ export function DesktopProjectOverview({
         : lifecyclePending ? { text: "核验中", tone: "text-muted" } : { text: "进行中", tone: "text-muted" };
     return (
       <li key={task.taskId} className="border-t border-line px-3">
-        <div className={`${COLUMNS} min-h-[42px] py-2 text-[11px]`}>
+        <div className={`${COLUMNS} min-h-[42px] py-1 text-[11px]`}>
           <div className="min-w-0">
             <strong className="block truncate text-[12px] font-semibold text-ink">{task.name}</strong>
             <span className="block truncate font-mono text-[10px] text-muted">{task.taskId}</span>

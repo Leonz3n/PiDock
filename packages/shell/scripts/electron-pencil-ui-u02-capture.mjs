@@ -16,7 +16,7 @@ const [width, height] = arg("--size", "1440x900").split("x").map(Number);
 const scenario = arg("--scenario", "full");
 const repo = resolve(import.meta.dirname, "../../..");
 const reusedRoot = arg("--reuse-root", "");
-const output = join(repo, "docs/evidence/pencil-ui-u02", ...(reusedRoot ? ["restart"] : []));
+const output = join(repo, "docs/evidence/pencil-ui-u02", ...(reusedRoot ? ["restart"] : []), ...(scenario === "workspace" ? ["workspace"] : []));
 const root = reusedRoot || mkdtempSync(join(tmpdir(), "pidock-ui-u02-"));
 const profile = join(root, "profile");
 const taskRoot = join(root, "tasks");
@@ -165,6 +165,7 @@ async function run() {
     await until(`document.documentElement?.dataset.theme === '${theme}' && document.querySelector('[data-testid=desktop-project-overview]')`, "workspace theme");
     await until("document.body.innerText.includes('路径可用') && document.querySelectorAll('[data-task-nav]').length === 4 && document.querySelector('[data-testid=overview-task-count-inline]')?.textContent === '4'", "workspace sources and lifecycle verified");
     await capture(`${theme}-workspace`);
+    if (scenario === "workspace") continue;
     for (const task of tasks) {
       await sidebarClick(task.name);
       await until("document.querySelector('[data-testid=task-facts-mode]') && document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('个')", "task facts");
@@ -212,6 +213,11 @@ async function run() {
     await wc.reload();
     await until("document.querySelector('[data-testid=desktop-project-overview]')", "reload");
     check(`${theme}: reload retains disk workspace identity`, await evaluate(`document.body.innerText.includes(${JSON.stringify(workspace.name)})`));
+  }
+  if (scenario === "workspace") {
+    const shutdown = await shutdownTestRegistry(registry, { origin, label: "U02 workspace refinement complete" });
+    check("Host shutdown confirmed", shutdown.length === 0, shutdown);
+    finish(0); return;
   }
   // Real absent/replaced source identities, never simulated renderer status.
   renameSync(directory, `${directory}-original`);
