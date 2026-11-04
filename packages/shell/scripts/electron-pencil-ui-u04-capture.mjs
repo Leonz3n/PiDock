@@ -185,7 +185,13 @@ async function run() {
         await capture(`${theme}-${close}-repair-initial`);
         await click('移除仓库 1');
         check(`${theme} ${close}: repair source row removed`, await evaluate("!document.querySelector('input[aria-label=\"仓库路径 1\"]')"));
-        await evaluate("document.querySelector('button[aria-label=新建任务]').focus()");
+        // Chromium suppresses focusin while its document is inactive. Native
+        // window activation can change during capture; establish the keyboard
+        // interaction precondition before probing the modal's redirect handler.
+        views.window.show(); app.focus({steal:true}); views.window.focus(); wc.focus();
+        await until("document.hasFocus()", 'active document before focus redirect probe');
+        const probe = await evaluate("(() => { const before = document.hasFocus(); document.querySelector('button[aria-label=新建任务]').focus(); return {before, after:document.hasFocus()}; })()");
+        check(`${theme} ${close}: document active throughout focus probe`, probe.before && probe.after, probe);
         const focused = await evaluate("({inside:document.querySelector('[role=dialog]').contains(document.activeElement),active:document.activeElement?.outerHTML})");
         check(`${theme} ${close}: removed repair constrains background focus`, focused.inside, focused);
         check(`${theme} ${close}: enabled name receives fallback focus`, await evaluate("document.activeElement?.getAttribute('aria-label') === '工作空间名称 *'"));
