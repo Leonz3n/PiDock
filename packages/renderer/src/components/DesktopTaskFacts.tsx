@@ -16,7 +16,8 @@ import {
 } from "../data/workspaceFiles";
 
 /**
- * [Pencil T02] #137 / S08: the always-visible task facts surface.
+ * [Pencil UI U02] #157 / S08: an independent task facts destination.
+ * The compact variant exposes read-only provenance on the separate session page.
  *
  * One row per real source — an independent worktree, an existing Git checkout
  * used in place, or a shared plain directory — with its mode badge, real path,

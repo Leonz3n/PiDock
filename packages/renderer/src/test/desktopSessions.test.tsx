@@ -432,7 +432,7 @@ describe("[#139] the sidebar session tree", () => {
     const onNavigate = vi.fn();
     render(
       <DesktopShell
-        view={{ view: "task", taskId: TASK_ID }}
+        view={{ view: "task", taskId: TASK_ID, sessionId: "s-1a2b3c4d" }}
         onNavigate={onNavigate}
         projects={[]}
         projectsInitialized
@@ -451,7 +451,7 @@ describe("[#139] the sidebar session tree", () => {
     await waitFor(() => expect(document.querySelector("[data-session-tree]")).not.toBeNull());
     const rows = Array.from(document.querySelectorAll("[data-session-nav]"));
     expect(rows.map((row) => row.textContent)).toEqual(["主会话", "重构认证"]);
-    // The Host's active pointer marks the active row.
+    // An explicitly selected session marks the current conversation route.
     expect(document.querySelector('[data-session-nav="s-1a2b3c4d"]')).toHaveAttribute("aria-current", "true");
     fireEvent.click(document.querySelector('[data-session-nav="main"]') as HTMLElement);
     expect(onNavigate).toHaveBeenCalledWith({ view: "task", taskId: TASK_ID, sessionId: "main" });

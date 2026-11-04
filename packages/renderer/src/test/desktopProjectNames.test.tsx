@@ -92,7 +92,7 @@ describe("[PiDock 03] (#6 box 12) blank Project and source names", () => {
     });
     // The exact branch cell, so a trailing bare `· ` cannot hide behind the guard text.
     expect(row.textContent).toContain("Host 未上报分支");
-    expect(row.textContent).toContain("1 个仓库");
+    expect(row.textContent).toContain("1 个独立仓库");
     expect(row).toHaveTextContent("Host 未上报更新时间");
     expect(within(overview).getByRole("columnheader", { name: "分支与仓库" })).toBeInTheDocument();
   });

@@ -36,7 +36,7 @@ it("workspace, task facts and a named session are separate public destinations",
   fireEvent.click(await sidebar().findByRole("button", { name: "真实任务" }));
   expect(await screen.findByTestId("desktop-task-facts")).toBeVisible();
   expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
-  expect(sidebar().getByRole("button", { name: "主会话" })).not.toHaveAttribute("aria-current");
+  expect(await sidebar().findByRole("button", { name: "主会话" })).not.toHaveAttribute("aria-current");
   expect(screen.queryByRole("textbox", { name: /消息/ })).not.toBeInTheDocument();
   fireEvent.click(await screen.findByRole("button", { name: "进入对话 · 主会话" }));
   expect(await screen.findByTestId("desktop-conversation")).toBeVisible();

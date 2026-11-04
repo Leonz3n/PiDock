@@ -1,4 +1,4 @@
-// #156: built production Electron, real preload/IPC/Host/registry/disk; isolated fixtures only.
+// #157: built production Electron, real preload/IPC/Host/registry/disk; isolated fixtures only.
 // Run after pnpm --filter @pidock/shell build. Each viewport is a fresh real window.
 import { app, utilityProcess } from "electron";
 import { execFileSync } from "node:child_process";
