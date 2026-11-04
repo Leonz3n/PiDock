@@ -148,6 +148,15 @@ async function run() {
     await capture(`${theme}-navigation`);
     await expand();
     await capture(`${theme}-navigation-expanded`);
+    await click("文档与脚手架");
+    await until("document.querySelector('[data-testid=desktop-project-overview]')?.textContent.includes('文档与脚手架')", "workspace selection");
+    check("workspace navigation selects the actual registry workspace", await evaluate("document.querySelector('[data-testid=overview-title]')?.textContent === '文档与脚手架'"));
+    await click("未归属任务");
+    await until("document.querySelector('[data-testid=desktop-unassigned]')", "unassigned tasks");
+    check("unassigned navigation retains the actual unassigned task", await evaluate("document.querySelector('[data-testid=desktop-unassigned]')?.textContent.includes('临时排查本地端口占用')"));
+    await expand();
+    await click("PiDock 核心开发 · 长名称工作空间用于核对截断与树形层级");
+    await until("document.querySelector('[data-testid=desktop-project-overview]')", "return to workspace");
     // Search a real session name, then select it. Native input events drive React's public DOM seam.
     await evaluate(`(() => { const input=document.querySelector('[aria-label="过滤任务与会话"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'边界复查'); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
     await until("document.querySelectorAll('[data-task-nav]').length === 1", "session-name filtering");
