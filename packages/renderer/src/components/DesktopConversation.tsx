@@ -228,6 +228,9 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   const picked = useRef(initialSessionId !== undefined);
   const [activeSessionId, setActiveSessionId] = useState<string>(initialSessionId ?? SDK_SESSION_ID);
   const sessionId = activeSessionId;
+  const sessions = sessionList.phase === "read" ? sessionList.list.sessions : [];
+  const activeSession = sessions.find((session) => session.id === sessionId) ?? null;
+  const historyReadOnly = activeSession?.archived === true;
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -630,7 +633,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     return issues;
   };
   const start = async (reuse = false) => {
-    if (busy.current || !connected || !valid || receiptError || (!reuse && (attemptRef.current?.phase === "unknown" || attemptRef.current?.phase === "accepted" || snapshot?.pending))) return;
+    if (historyReadOnly || busy.current || !connected || !valid || receiptError || (!reuse && (attemptRef.current?.phase === "unknown" || attemptRef.current?.phase === "accepted" || snapshot?.pending))) return;
     const text = reuse ? attemptRef.current?.text : draft;
     if (!text?.trim()) return;
     // A send writes the draft NOW (before any slow verification/refusal path):
@@ -795,7 +798,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     setAttachments((current) => current.filter((entry) => entry.id !== id));
     setAttachmentReport(null);
   };
-  const blocked = !valid || !connected || !!receiptError || snapshot?.pending || attempt?.phase === "starting" || attempt?.phase === "unknown" || attempt?.phase === "accepted";
+  const blocked = historyReadOnly || !valid || !connected || !!receiptError || snapshot?.pending || attempt?.phase === "starting" || attempt?.phase === "unknown" || attempt?.phase === "accepted";
   const archive = async (mode: "archive-only" | "archive-and-cleanup" = "archive-only") => {
     if (archiveBusy || blocked || busy.current) { setArchiveError("会话执行或请求状态未核验，不能归档；请先核验或停止执行"); return; }
     setArchiveBusy(true);
@@ -960,8 +963,6 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
   // Leaving the page flushes the newest draft; a timer must not die with the
   // component and take the last keystrokes with it.
   useEffect(() => () => { flushDraftSave(); }, [flushDraftSave]);
-  const sessions = sessionList.phase === "read" ? sessionList.list.sessions : [];
-  const activeSession = sessions.find((session) => session.id === sessionId) ?? null;
   /**
    * [#139] Switching a session is a re-subscribe: every per-session value this
    * page held (draft, references, attachments, pending receipt, snapshot, stream)
@@ -1400,7 +1401,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
           </ul>
           <p data-testid="desktop-composer-attachment-scope" className="mt-1 text-[11px] text-muted">附件随消息提交：Host 只附上名称与来源行，内容不上传、不读取，Agent 拿到的是清单而不是文件。</p>
         </div>}
-        <textarea ref={messageInput} aria-label="消息" value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
+        <textarea ref={messageInput} aria-label="消息" readOnly={historyReadOnly} value={draft} onChange={(event) => { const text = event.target.value; draftRevision.current++; setDraft(text); queueDraftSave({ text, references }); }} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!blocked) void start(); } }} rows={2} maxLength={16384} className="w-full min-w-0 resize-y border-0 bg-transparent p-1 text-sm outline-none" placeholder="描述你想做什么（仅支持文本消息）" />
         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
           <Tooltip><TooltipTrigger asChild><span tabIndex={0} aria-label="附件说明" className="inline-flex">
             <Button type="button" size="icon-sm" data-testid="desktop-composer-attach" aria-label="添加附件" onClick={() => attachmentInput.current?.click()} className="text-muted"><Icon name="plus" /></Button>

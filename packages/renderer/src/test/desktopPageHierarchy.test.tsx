@@ -140,5 +140,7 @@ it("task session history counts archived sessions as well as active sessions", a
   await screen.findByTestId("desktop-project-overview");
   fireEvent.click(await sidebar().findByRole("button", { name: "真实任务" }));
   await waitFor(() => expect(screen.getByTestId("task-facts-sessions")).toHaveTextContent("会话 2 个"));
-  expect(screen.getByRole("button", { name: "进入对话 · 归档历史" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "进入对话 · 归档历史" }));
+  expect(await screen.findByRole("textbox", { name: "消息" })).toHaveAttribute("readonly");
+  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
 });

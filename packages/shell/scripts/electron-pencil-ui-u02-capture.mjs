@@ -178,6 +178,7 @@ async function run() {
       await capture(`${theme}-archived-facts`);
       await click("进入对话 · 边界复核会话");
       await until("document.querySelector('[data-testid=desktop-conversation]')?.innerText.includes('已归档')", "archived conversation remains read only");
+      check(`${theme}: archived history cannot edit or send`, await evaluate("document.querySelector('textarea[aria-label=消息]')?.readOnly === true && document.querySelector('button[aria-label=发送]')?.disabled === true"));
       await capture(`${theme}-archived-session`);
       continue;
     }
