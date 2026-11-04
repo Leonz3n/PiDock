@@ -15,7 +15,7 @@ type Backend = { withLock<T>(fn: (current: string | undefined) => { result: T; n
 export interface OAuthSettings { clientId?: string; clientSecret?: string; callbackPort?: number; callbackUrl?: string; scope?: string; clientName?: string; clientRegistration?: "auto" | "dcr" | "cimd"; authServerMetadataUrl?: URL }
 interface NativeOAuth {
   McpOAuthCredentialStore: new (backend: Backend, lockDir?: string) => Credentials;
-  signInMcpServer(options: { serverUrl: string; store: ReturnType<Credentials["forServer"]>; settings: OAuthSettings; signal: AbortSignal; prompt: { showAuthorizationUrl(url: URL): void; promptForRedirectUrl(signal: AbortSignal): Promise<string | undefined> } }): Promise<void>;
+  signInMcpServer(options: { serverUrl: string; store: ReturnType<Credentials["forServer"]>; settings: OAuthSettings; challenge?: OAuthChallenge; signal: AbortSignal; prompt: { showAuthorizationUrl(url: URL): void; promptForRedirectUrl(signal: AbortSignal): Promise<string | undefined> } }): Promise<void>;
   createMcpAuthProvider(options: { serverUrl: string; store: ReturnType<Credentials["forServer"]>; settings(): OAuthSettings; onChallenge(challenge: OAuthChallenge): void }): AuthProvider & { settled(): Promise<void> };
 }
 export interface McpPrivateBinding { directory: string; key: string; secrets?: { name: string; url: string; value: string }[] }
@@ -87,4 +87,4 @@ export async function extensionCredentials(binding: McpPrivateBinding, names: st
     remove: (name: string, url: string) => stores.get(name)?.remove(name, url) ?? false,
   } as unknown as Credentials;
 }
-export type { Credentials, McpOAuthState };
+export type { Credentials, McpOAuthState, OAuthChallenge };

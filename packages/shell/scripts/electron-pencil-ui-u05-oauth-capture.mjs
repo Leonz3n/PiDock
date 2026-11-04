@@ -68,6 +68,8 @@ async function run() {
   const { McpOAuth } = await import("../dist/main/mcp-oauth.js");
   const { oauthFixture } = await import("./fixtures/mcp-oauth-server.mjs");
   const authorizationServer = await oauthFixture();
+  // Exercise metadata that is discoverable only through WWW-Authenticate.
+  authorizationServer.challengeOnly(true);
   let browserMode = "hold", browserUrl, browserOpens = 0;
   const nativeMcp = new NativeMcpFile(agentDir);
   const oauth = await McpOAuth.create(nativeMcp, profile, createTestSafeStorage(), async url => {
@@ -247,6 +249,18 @@ async function run() {
     await until("document.querySelector('[data-testid=mcp-test-result][data-state=connected]')", "authenticated connection");
     await capture(`${theme}-oauth-connected`);
     check(`${theme}: authenticated tool list`,await evaluate("document.querySelector('[data-testid=mcp-test-result]').innerText.includes('echo')"));
+    authorizationServer.requireScope("write");
+    await click("测试");
+    await until("document.querySelector('[data-testid=mcp-test-result]')?.innerText.includes('需要认证')", "missing scope challenge");
+    await capture(`${theme}-oauth-additional-scope-required`);
+    await click("重新登录");
+    await until("document.querySelector('[data-testid=mcp-oauth][data-state=signed-in]')", "step-up sign-in");
+    const grants=authorizationServer.requests.filter(request=>request.kind === "authorize");
+    check(`${theme}: additional scope requested through native browser login`, grants.at(-1).scope?.split(/\s+/).includes("write"));
+    await click("测试");
+    await until("document.querySelector('[data-testid=mcp-test-result][data-state=connected]')", "step-up connected");
+    await capture(`${theme}-oauth-additional-scope-connected`);
+    authorizationServer.requireScope("");
     const refreshesBefore=authorizationServer.requests.filter(request=>request.kind === "token" && request.grant === "refresh_token").length;
     authorizationServer.revoke();authorizationServer.expires(0);
     await click("测试");

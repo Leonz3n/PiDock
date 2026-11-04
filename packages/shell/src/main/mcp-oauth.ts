@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { nativeOAuth, privateCredentials, type McpPrivateBinding, type OAuthSettings } from "../mcp-oauth-native.js";
+import { nativeOAuth, privateCredentials, type McpPrivateBinding, type OAuthSettings, type OAuthChallenge } from "../mcp-oauth-native.js";
 import type { SafeStoragePort } from "./provider-secret-store.js";
 import { NativeMcpFile, McpFailure } from "./native-mcp-config.js";
 export type OAuthStatus = { state: "signed-out" | "signing-in" | "signed-in" | "expired" | "cancelled" | "failed"; error: string | null };
@@ -10,6 +10,7 @@ interface Attempt { controller: AbortController; done: Promise<void>; status: OA
 export class McpOAuth {
   private closing = false;
   private attempts = new Map<string, Attempt>();
+  private challenges = new Map<string, Map<string, OAuthChallenge>>();
   private operations = new Map<string, Promise<unknown>>();
   private serial<T>(name: string, action: () => Promise<T>): Promise<T> {
     const next = (this.operations.get(name) ?? Promise.resolve()).catch(() => undefined).then(action);
@@ -60,13 +61,19 @@ export class McpOAuth {
     // An explicit login always uses the browser. Existing sessions can refresh
     // their own grant concurrently; never race them by consuming its refresh
     // token in a staged, cancellable login.
-    if (staged) { staged = { ...staged }; delete staged.tokens; delete staged.tokensExpireAt; }
+    if (staged) {
+      staged = { ...staged };
+      // Upstream merges the previous scope for insufficient_scope challenges.
+      // Remove only the refresh token: browser login must not consume a grant
+      // being refreshed by a live session, even if this attempt is cancelled.
+      if (staged.tokens) { staged.tokens = { ...staged.tokens }; delete staged.tokens.refresh_token; }
+    }
     const pending = {
       load: () => staged,
       save: (state: typeof staged) => { if (!controller.signal.aborted) staged = state; },
       withRefreshLock: store.withRefreshLock.bind(store),
     };
-    attempt.done = native.signInMcpServer({ serverUrl: url, store: pending as typeof store, settings, signal: controller.signal,
+    attempt.done = native.signInMcpServer({ serverUrl: url, store: pending as typeof store, settings, challenge: this.challenges.get(name)?.get(url), signal: controller.signal,
       prompt: {
         showAuthorizationUrl: (authorization) => {
           if (!["https:", "http:"].includes(authorization.protocol) || authorization.username || authorization.password) throw Error("unsafe authorization URL");
@@ -124,11 +131,13 @@ export class McpOAuth {
     const { entry, url } = this.entry(name), native = await nativeOAuth();
     const store = await privateCredentials(this.binding, name), settings = await this.settings(name, entry);
     return native.createMcpAuthProvider({ serverUrl: url, store: store.forServer(name, url), settings: () => settings,
-      // A connection challenge belongs to that transport, not the independent
-      // browser login. Keep its controller/done owned for cancel, config edits
-      // and shutdown, including challenges from older transports. Durable token
-      // state remains the source of truth for completed sign-ins.
-      onChallenge: () => {},
+      // Challenge discovery is independent of browser attempt ownership. An old
+      // transport can update only its own name+URL, never cancel a newer login.
+      onChallenge: (challenge) => {
+        const challenges = this.challenges.get(name) ?? new Map<string, OAuthChallenge>();
+        challenges.set(url, challenge);
+        this.challenges.set(name, challenges);
+      },
     });
   }
   resume(): void { this.closing = false; }

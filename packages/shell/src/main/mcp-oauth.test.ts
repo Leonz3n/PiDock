@@ -294,3 +294,91 @@ it.each(["save", "disable", "remove"] as const)("%s cancels and drains a challen
     finally { await restarted.close(); }
   } finally { await oauth.close(); await server.close(); }
 });
+
+
+it("uses challenge-only resource metadata for the next explicit login", async () => {
+  const { oauthFixture } = await import("../../scripts/fixtures/mcp-oauth-server.mjs");
+  const server = await oauthFixture(), dir = mkdtempSync(join(tmpdir(), "pidock-oauth-")); dirs.push(dir);
+  server.challengeOnly(true);
+  writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: { native: { url: `${server.base}/mcp`, oauth: { clientRegistration: "dcr" } } } }));
+  const file = new NativeMcpFile(dir), oauth = await McpOAuth.create(file, dir, createTestSafeStorage(), async url => { await fetch(url); });
+  const wiring = new McpWiring(file, {}, undefined, oauth);
+  try {
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ error: { code: "mcp-auth-required" } });
+    await wiring.perform({ op: "oauth-start", name: "native" });
+    await expect.poll(async () => (await oauth.status("native")).state).toBe("signed-in");
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ state: "connected" });
+  } finally { await oauth.close(); await server.close(); }
+});
+
+it("reauthorizes missing scopes while retaining the previous grant and avoiding refresh-token races", async () => {
+  const { oauthFixture } = await import("../../scripts/fixtures/mcp-oauth-server.mjs");
+  const server = await oauthFixture(), dir = mkdtempSync(join(tmpdir(), "pidock-oauth-")); dirs.push(dir);
+  const file = new NativeMcpFile(dir);
+  writeFileSync(file.path, JSON.stringify({ mcpServers: { native: { url: `${server.base}/mcp`, oauth: { clientRegistration: "dcr", scope: "read" } } } }));
+  const oauth = await McpOAuth.create(file, dir, createTestSafeStorage(), async url => { await fetch(url); });
+  const wiring = new McpWiring(file, {}, undefined, oauth);
+  try {
+    await oauth.start("native");
+    await expect.poll(async () => (await oauth.status("native")).state).toBe("signed-in");
+    server.requireScope("write");
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ error: { code: "mcp-auth-required" } });
+    // The new configuration is narrower than the grant; the challenge lists
+    // only the missing scope. Upstream must merge all three sources.
+    writeFileSync(file.path, JSON.stringify({ mcpServers: { native: { url: `${server.base}/mcp`, oauth: { clientRegistration: "dcr", scope: "profile" } } } }));
+    await oauth.start("native");
+    await expect.poll(async () => (await oauth.status("native")).state).toBe("signed-in");
+    const authorizations = server.requests.filter((request: { kind: string }) => request.kind === "authorize");
+    expect(authorizations.at(-1).scope.split(/\s+/).sort()).toEqual(["profile", "read", "write"]);
+    expect(server.requests.filter((request: { grant?: string }) => request.grant === "refresh_token")).toHaveLength(0);
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ state: "connected" });
+  } finally { await oauth.close(); await server.close(); }
+});
+
+it("keeps late transport challenges scoped to their original URL and exact server name", async () => {
+  const { oauthFixture } = await import("../../scripts/fixtures/mcp-oauth-server.mjs");
+  const { testMcpConnection } = await import("./mcp-connection-test.js");
+  const first = await oauthFixture(), second = await oauthFixture(), dir = mkdtempSync(join(tmpdir(), "pidock-oauth-")); dirs.push(dir);
+  first.challengeOnly(true);
+  const file = new NativeMcpFile(dir);
+  writeFileSync(file.path, JSON.stringify({ mcpServers: { account: { url: `${first.base}/mcp` }, other: { url: `${first.base}/mcp` } } }));
+  const oauth = await McpOAuth.create(file, dir, createTestSafeStorage(), async url => { await fetch(url); });
+  const oldAuth = await oauth.auth("account");
+  try {
+    writeFileSync(file.path, JSON.stringify({ mcpServers: { account: { url: `${second.base}/mcp` }, other: { url: `${first.base}/mcp` } } }));
+    expect(await testMcpConnection({ url: `${first.base}/mcp` }, { authProvider: oldAuth })).toMatchObject({ error: { code: "mcp-auth-required" } });
+    await oauth.start("account");
+    await expect.poll(async () => (await oauth.status("account")).state).toBe("signed-in");
+    expect(second.requests.filter((request: { kind: string }) => request.kind === "authorize")).toHaveLength(1);
+    expect(first.requests.filter((request: { kind: string }) => request.kind === "authorize")).toHaveLength(0);
+    await oauth.start("other");
+    await expect.poll(async () => (await oauth.status("other")).state).toBe("failed");
+  } finally { await oldAuth.settled(); await oauth.close(); await first.close(); await second.close(); }
+});
+
+it("cancelled step-up login leaves the existing grant usable and can retry the missing scope", async () => {
+  const { oauthFixture } = await import("../../scripts/fixtures/mcp-oauth-server.mjs");
+  const server = await oauthFixture(), dir = mkdtempSync(join(tmpdir(), "pidock-oauth-")); dirs.push(dir);
+  const file = new NativeMcpFile(dir);
+  writeFileSync(file.path, JSON.stringify({ mcpServers: { native: { url: `${server.base}/mcp`, oauth: { scope: "read" } } } }));
+  let held: string | undefined, hold = false;
+  const oauth = await McpOAuth.create(file, dir, createTestSafeStorage(), async url => { if (hold) held = url; else await fetch(url); });
+  const wiring = new McpWiring(file, {}, undefined, oauth);
+  try {
+    await oauth.start("native");
+    await expect.poll(async () => (await oauth.status("native")).state).toBe("signed-in");
+    server.requireScope("write");
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ error: { code: "mcp-auth-required" } });
+    hold = true; await oauth.start("native");
+    await expect.poll(() => held).toBeTruthy();
+    expect(await oauth.cancel("native")).toMatchObject({ state: "cancelled" });
+    await expect(fetch(held!)).rejects.toThrow();
+    expect(server.requests.filter((request: { kind: string }) => request.kind === "token")).toHaveLength(1);
+    server.requireScope("");
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ state: "connected" });
+    server.requireScope("write"); hold = false;
+    await oauth.start("native");
+    await expect.poll(async () => (await oauth.status("native")).state).toBe("signed-in");
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ state: "connected" });
+  } finally { await oauth.close(); await server.close(); }
+});

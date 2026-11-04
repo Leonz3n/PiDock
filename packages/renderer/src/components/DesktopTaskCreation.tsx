@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useDialogFocus } from "../hooks/useDialogFocus";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
 import { abandonCreation, commitCreation, creationStatus, currentCreation, prepareCreation, retryCreation, CREATION_RETENTION_NOTICE, NO_GIT_DELIVERY, WORKSPACE_MODE_LABELS, creationDeliverySettings, previewCreationDelivery, saveCreationDeliverySettings, type AbandonCleanupView, type CreationDeliveryPreviewView, type CreationInput, type CreationIntentView, type CreationScheduleInput, type CreationStatusView, type DeliverySettingsView, type RepoPhaseView, type WorkspaceModeView } from "../data/desktopCreation";
 import { parseProviderStatus, providerCall } from "../data/providerProfile";
@@ -68,10 +69,9 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
   const submitRef = useRef<() => void>(() => undefined);
   const closeRef = useRef<() => void>(() => undefined);
   const currentName = name;
-  const focusInside = () => {
-    const first = (nameRef.current && !nameRef.current.matches(":disabled") ? nameRef.current : null) ?? dialogRef.current?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled)");
-    (first ?? dialogRef.current)?.focus();
-  };
+  const { focusInside, trap } = useDialogFocus(open, dialogRef, () =>
+    (nameRef.current && !nameRef.current.matches(":disabled") ? nameRef.current : null) ??
+      dialogRef.current?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled)"));
 
   const resetSelections = useCallback(() => {
     setName(""); setRepos({}); setDirectories([]); setSharedWriteConfirmed(false); setOverride(false);
@@ -325,37 +325,19 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
   submitRef.current = () => { if (busy) return; if (intent) void commit(); else void prepare(); };
   useEffect(() => {
     if (!open) return;
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    focusInside();
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
       if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submitRef.current(); }
     };
-    const containFocus = (event: FocusEvent) => {
-      if (event.target instanceof Node && !dialogRef.current?.contains(event.target)) focusInside();
-    };
-    document.addEventListener("focusin", containFocus);
     document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("focusin", containFocus);
-      document.removeEventListener("keydown", onKeyDown);
-      if (opener && document.contains(opener)) opener.focus();
-    };
+    return () => document.removeEventListener("keydown", onKeyDown);
     // Latest handlers preserve the busy guard without resetting initial focus on typing.
   }, [open]);
   const previewingIntent = intent !== null;
   useEffect(() => {
     if (open && previewingIntent) focusInside();
-  }, [open, previewingIntent]);
-  const trap = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      "button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])");
-    if (!focusable || focusable.length === 0) { event.preventDefault(); dialogRef.current?.focus(); return; }
-    const first = focusable[0]!, last = focusable[focusable.length - 1]!;
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-  };
+  }, [open, previewingIntent, focusInside]);
+
 
   const hasSourcesInProject = Boolean(project && (project.repositories.length > 0 || project.directories.length > 0));
   const primaryLabel = intent ? "确认创建 / 恢复"

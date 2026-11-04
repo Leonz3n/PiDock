@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useDialogFocus } from "../hooks/useDialogFocus";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Icon } from "./Icon";
@@ -111,27 +112,12 @@ export function DesktopWorkspaceDialog({
     onSubmit();
   }, [busy, invalid, onSubmit, saveDisabled]);
 
-  // Initial focus and focus restoration: a dialog that drops the keyboard user's
-  // place is a regression at 720×560 as much as at 1440×900.
-  useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    // A repair that lands on the name field makes the user hunt for the row again.
-    const focusInside = () => {
-      const dialog = dialogRef.current;
-      // Source rows can be removed while this dialog stays open. Resolve live
-      // refs on every redirect so a detached repair input cannot swallow focus.
-      const repair = openFocus.current ? pathRefs.current[openFocus.current] : null;
-      const preferred = [repair, nameRef.current].find((element) =>
-        element?.isConnected && dialog?.contains(element) && !element.matches(":disabled"));
-      (preferred ?? dialog)?.focus();
-    };
-    focusInside();
-    const containFocus = (event: FocusEvent) => {
-      if (event.target instanceof Node && !dialogRef.current?.contains(event.target)) focusInside();
-    };
-    document.addEventListener("focusin", containFocus);
-    return () => { document.removeEventListener("focusin", containFocus); if (opener && document.contains(opener)) opener.focus(); };
-  }, []);
+  // Resolve live refs: repair rows can disappear while the dialog stays open.
+  const { trap } = useDialogFocus(true, dialogRef, () => {
+    const repair = openFocus.current ? pathRefs.current[openFocus.current] : null;
+    return [repair, nameRef.current].find((element) =>
+      element?.isConnected && dialogRef.current?.contains(element) && !element.matches(":disabled"));
+  });
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -143,17 +129,6 @@ export function DesktopWorkspaceDialog({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [busy, onCancel, submit]);
 
-  // Focus trap: Tab/Shift+Tab cycle inside the dialog only.
-  const trap = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      "button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])");
-    if (!focusable || focusable.length === 0) { event.preventDefault(); dialogRef.current?.focus(); return; }
-    const first = focusable[0]!;
-    const last = focusable[focusable.length - 1]!;
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-  };
 
   const updateRows = (kind: RowKind, rows: ProjectInput["repositories"]) => onChange({ ...draft, [kind]: rows });
   const rows = (kind: RowKind, values: ProjectInput["repositories"], errors: Record<number, string>) => (
