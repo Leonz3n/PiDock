@@ -3,7 +3,7 @@
  * in-task link must delete only the directory entry, never the recorded source
  * directory or its contents.
  */
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -24,6 +24,114 @@ function resources() {
     sessionIds: () => [],
   });
 }
+
+describe("[T12] #147 original checkout paths", () => {
+  const fakeHost = (record: Record<string, unknown>) => ({
+    taskDir: "/tmp/pidock/tasks/task-abcdef12",
+    store: { readTask: () => record },
+  }) as unknown as TaskWorkspaceHost;
+
+  it("names the source repository, never the task root that contains every worktree", () => {
+    const lifecycle = createLifecycleResources({
+      host: fakeHost({
+        taskId: "task-abcdef12",
+        taskDir: "/tmp/pidock/tasks/task-abcdef12",
+        // The production task-root layout: `root` is the PARENT of task dirs.
+        root: "/tmp/pidock/tasks",
+        branch: "ticket/task-abcdef12-t18",
+        baseCommit: "eac51ee4",
+        repos: ["repo-c1249264"],
+        repoSources: [{ repoDir: "repo-c1249264", remote: "origin", remoteBranch: "main", baseCommit: "eac51ee4",
+          sourcePath: "/tmp/pidock/sources/alpha-service", sourceRealPath: "/private/tmp/pidock/sources/alpha-service" }],
+      }),
+      services: () => null,
+      terminals: () => null,
+      sessionIds: () => [],
+    });
+    const originals = lifecycle.originalCheckoutPaths();
+    expect(originals).toEqual(["/private/tmp/pidock/sources/alpha-service", "/tmp/pidock/sources/alpha-service"]);
+    // The managed worktree is NOT inside an original checkout, so an explicit
+    // clean scope can really remove it (#147) — `record.root` would have made
+    // this an "inside the original checkout" refusal.
+    const worktree = "/tmp/pidock/tasks/task-abcdef12/repo-c1249264";
+    expect(originals.some((original) => worktree === original || worktree.startsWith(`${original}/`))).toBe(false);
+  });
+
+  it("keeps the old fallback for records written before the source binding existed", () => {
+    const lifecycle = createLifecycleResources({
+      host: fakeHost({ taskId: "task-abcdef12", taskDir: "/tmp/pidock/tasks/task-abcdef12", root: "/tmp/pidock/sources/legacy", branch: "main", baseCommit: "eac51ee4", repos: ["repo-c1249264"] }),
+      services: () => null,
+      terminals: () => null,
+      sessionIds: () => [],
+    });
+    expect(lifecycle.originalCheckoutPaths()).toEqual(["/tmp/pidock/sources/legacy"]);
+  });
+});
+
+describe("[T12] #147 managed worktree removal on the production task-root layout", () => {
+  it("removes the managed worktree from the repository that owns it and keeps the source checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "pidock-worktree-cleanup-"));
+    roots.push(root);
+    const source = join(root, "sources", "alpha-service");
+    const taskDir = join(root, "tasks", "task-abcdef12");
+    const worktree = join(taskDir, "repo-c1249264");
+    mkdirSync(source, { recursive: true });
+    mkdirSync(taskDir, { recursive: true });
+    const git = (cwd: string, args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    execFileSync("git", ["init", "-b", "main", source], { stdio: "ignore", cwd: root });
+    git(source, ["config", "user.email", "evidence@pidock.local"]);
+    git(source, ["config", "user.name", "PiDock Evidence"]);
+    writeFileSync(join(source, "README.md"), "source checkout\n");
+    git(source, ["add", "."]);
+    git(source, ["commit", "-m", "base"]);
+    const base = git(source, ["rev-parse", "HEAD"]);
+    git(source, ["worktree", "add", "-b", "ticket/task-abcdef12-t18", worktree, base]);
+
+    const record = {
+      taskId: "task-abcdef12", taskDir,
+      // The production layout: `root` is the PARENT of every task directory.
+      root: join(root, "tasks"),
+      branch: "ticket/task-abcdef12-t18", branchKind: "task-worktree", remoteBranch: "main", baseCommit: base,
+      repos: ["repo-c1249264"],
+      repoSources: [{ repoDir: "repo-c1249264", remote: "origin", remoteBranch: "main", baseCommit: base,
+        sourcePath: source, sourceRealPath: realpathSync(source) }],
+      workspaceMode: "worktree",
+    };
+    const lifecycle = createLifecycleResources({
+      host: { taskDir, store: { readTask: () => record } } as unknown as TaskWorkspaceHost,
+      services: () => null,
+      terminals: () => null,
+      sessionIds: () => [],
+    });
+    expect(existsSync(join(worktree, "README.md"))).toBe(true);
+    const removal = lifecycle.removeManagedWorktree(worktree);
+    expect(removal.ok).toBe(true);
+    // The worktree is really gone; the source checkout, its branch and its files stay.
+    expect(existsSync(worktree)).toBe(false);
+    expect(existsSync(join(source, "README.md"))).toBe(true);
+    expect(git(source, ["rev-parse", "HEAD"])).toBe(base);
+    expect(git(source, ["symbolic-ref", "--short", "HEAD"])).toBe("main");
+    expect(git(source, ["worktree", "list", "--porcelain"])).not.toContain(worktree);
+    expect(git(source, ["rev-parse", "--verify", "ticket/task-abcdef12-t18"])).toBe(base);
+  });
+
+  it("refuses a path that is not one of this task's registered worktrees", () => {
+    const root = mkdtempSync(join(tmpdir(), "pidock-worktree-refuse-"));
+    roots.push(root);
+    const taskDir = join(root, "tasks", "task-abcdef12");
+    mkdirSync(taskDir, { recursive: true });
+    const elsewhere = join(root, "not-a-task-worktree");
+    mkdirSync(elsewhere, { recursive: true });
+    const lifecycle = createLifecycleResources({
+      host: { taskDir, store: { readTask: () => ({ taskId: "task-abcdef12", taskDir, root: join(root, "tasks"), branch: "main", baseCommit: "eac51ee4", repos: [] }) } } as unknown as TaskWorkspaceHost,
+      services: () => null,
+      terminals: () => null,
+      sessionIds: () => [],
+    });
+    expect(lifecycle.removeManagedWorktree(elsewhere)).toMatchObject({ ok: false, reason: expect.stringContaining("不在本任务登记的工作副本中") });
+    expect(existsSync(elsewhere)).toBe(true);
+  });
+});
 
 describe("createLifecycleResources link removal", () => {
   it("removes only the in-task symlink and preserves the source directory contents", () => {

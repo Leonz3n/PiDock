@@ -582,7 +582,11 @@ describe("cleanup waits and identity-verified removal (#147)", () => {
     const a = build(replaced);
     a.lifecycle.archive();
     const refused = a.lifecycle.runCleanup({ selection: NO_EXPORT });
-    expect(refused.ok).toBe(true);
+    // [#147] A refused removal is a per-item recovery entry with the named
+    // identity reason; the run never claims the work copy is gone.
+    expect(refused.recovery.map((entry) => entry.item)).toContain("code");
+    expect(String(refused.recovery.find((entry) => entry.item === "code")?.reason)).toContain("不是本任务登记的 Git 工作副本");
+    expect(refused.receipt?.partialFailure).toBe(true);
     expect(replaced.calls).not.toContain(`remove-worktree:${TASK_DIR}/invoice-service`);
 
     const verified = fakeState();
@@ -590,6 +594,20 @@ describe("cleanup waits and identity-verified removal (#147)", () => {
     b.lifecycle.archive();
     b.lifecycle.runCleanup({ selection: NO_EXPORT });
     expect(verified.calls).toContain(`remove-worktree:${TASK_DIR}/invoice-service`);
+  });
+
+  it("[#147] never reports a removed work copy when the removal was skipped", () => {
+    // The worktree exists and verifies, but the run's scope says `keep`, so the
+    // item was planned as `code: remove` by the preview and nothing is deleted.
+    const state = fakeState({ repoDelivery: [{ repoDir: `${TASK_DIR}/invoice-service`, uncommitted: false, delivered: true }] });
+    const { lifecycle, store } = build(state);
+    lifecycle.archive();
+    const result = lifecycle.runCleanup({ selection: NO_EXPORT, repoScopes: { [`${TASK_DIR}/invoice-service`]: "keep" } });
+    // A kept scope is declared in the preview (keep-copy), so the receipt is honest.
+    expect(result.items?.find((item) => item.id === "code")?.disposition).toBe("keep-copy");
+    expect(result.ok).toBe(true);
+    expect(state.calls).not.toContain(`remove-worktree:${TASK_DIR}/invoice-service`);
+    expect(store.readLifecycle(TASK_DIR)?.cleanup?.removed).not.toContain("code");
   });
 
   it("keeps state and a recovery entry when one worktree removal fails, and retries", () => {

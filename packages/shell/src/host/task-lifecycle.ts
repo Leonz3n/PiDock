@@ -454,6 +454,7 @@ export class TaskLifecycleHost {
       // becomes a per-repo recovery entry instead of a silent success.
       const failures: string[] = [];
       const removed: string[] = [];
+      const skipped: string[] = [];
       for (const worktree of this.resources.worktrees()) {
         const row = repos.find((entry) => entry.repoDir === worktree.repoDir);
         const identity = verifyGitResourceIdentity({
@@ -466,13 +467,20 @@ export class TaskLifecycleHost {
           scope: row?.scope ?? "keep",
           originalCheckoutPaths: this.resources.originalCheckoutPaths(),
         });
-        if (decision.action !== "remove") continue;
+        // [#147] A refusal is named, not swallowed: the item below only reports
+        // success when something was really removed.
+        if (decision.action !== "remove") { skipped.push(`${worktree.repoDir}：${decision.reason}`); continue; }
         const outcome = this.resources.removeManagedWorktree(worktree.repoDir);
         if (outcome.ok) removed.push(worktree.repoDir);
         else failures.push(`${worktree.repoDir}：${outcome.reason}`);
       }
       if (failures.length > 0) return { id: item.id, ok: false, reason: failures.join("；") };
-      return { id: item.id, ok: true, reason: removed.length > 0 ? `已移除受管工作副本 ${removed.join("、")}` : item.detail };
+      // [#147] The item was planned as `remove`, so removing nothing is a failed
+      // cleanup, never a receipt that says the work copy is gone.
+      if (removed.length === 0) {
+        return { id: item.id, ok: false, reason: `未移除任何工作副本：${skipped.join("；") || item.detail}` };
+      }
+      return { id: item.id, ok: true, reason: `已移除受管工作副本 ${removed.join("、")}` };
     }
     if (item.id === "sessions" || item.id === "drafts") {
       try {
