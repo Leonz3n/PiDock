@@ -373,7 +373,7 @@ describe("#149 return keeps context + compact layout", () => {
     expect(within(nav).getByRole("button", { name: "外观" })).toBeVisible();
     expect(screen.getByTestId("desktop-settings-page").querySelector(".overflow-auto")).not.toBeNull();
     const list = screen.getByRole("radiogroup", { name: "外观偏好" });
-    expect(list.className).toContain("below-narrow:grid-cols-1");
+    expect(within(list).getAllByRole("radio")).toHaveLength(3); // Actual compact geometry is verified in Electron.
     // Every option label stays in the DOM (nothing is hidden at the small tier).
     for (const option of APPEARANCE_OPTIONS) expect(screen.getByText(option.label)).toBeVisible();
   });
@@ -422,16 +422,43 @@ describe("#149 settings round trip on the production shell", () => {
   fireEvent.click(await screen.findByRole("button", { name: "进入对话 · 主会话" }));
     await screen.findByTestId("desktop-conversation");
 
+    const composer = screen.getByRole("textbox", { name: "消息" });
+    composer.focus();
+    fireEvent.change(composer, { target: { value: "未发送 · 保持焦点" } });
     fireEvent.click(within(screen.getByTestId("desktop-sidebar")).getByRole("button", { name: "设置" }));
     const page = await screen.findByTestId("desktop-settings-page");
     expect(within(page).getByRole("button", { name: /返回任务工作区/ })).toHaveTextContent("真实任务");
+    // Focus actually moved into settings, as it does for a keyboard user.
+    within(page).getByRole("button", { name: "返回任务工作区" }).focus();
     // Esc is PiDock's own shortcut and lands back on the same task.
     fireEvent.keyDown(window, { key: "Escape" });
     expect(await screen.findByTestId("desktop-conversation")).toBeInTheDocument();
     expect(screen.getByTestId("desktop-shell")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "消息" })).toBe(composer);
+    expect(composer).toHaveValue("未发送 · 保持焦点");
+    await waitFor(() => expect(composer).toHaveFocus());
     // No 未接线 placeholder and no forbidden management entry on the way back.
     expect(screen.queryByText(/Extensions|Computer Use|Browser/)).toBeNull();
     // A whole-app render plus the production route: this one test mounts the
     // real shell, so it gets its own bound instead of the 5s unit default.
   }, 20_000);
+});
+
+
+describe("#161 keyboard appearance selection", () => {
+  it("moves selection and focus with arrow keys, keeping one tab stop", async () => {
+    stubPreferences(vi.fn(async (payload: { op: string; appearance?: string }) =>
+      ({ ok: true, payload: { appearance: payload.op === "appearance/read" ? "light" : payload.appearance } })));
+    render(<DesktopSettingsPage />);
+    const light = screen.getByTestId("desktop-settings-page").querySelector('[data-appearance-option="light"]') as HTMLElement;
+    await waitFor(() => expect(light).toHaveAttribute("aria-checked", "true"));
+    light.focus();
+    fireEvent.keyDown(light, { key: "ArrowRight" });
+    const dark = screen.getByRole("radio", { name: /夜间/ });
+    await waitFor(() => expect(dark).toHaveAttribute("aria-checked", "true"));
+    expect(dark).toHaveFocus();
+    expect(document.documentElement.dataset["theme"]).toBe("dark");
+    expect(light).toHaveAttribute("tabindex", "-1");
+    expect(dark).toHaveAttribute("tabindex", "0");
+  });
 });

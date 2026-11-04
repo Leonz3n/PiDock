@@ -1,5 +1,5 @@
 /** Workspace shell aligned with Pencil S01/S06; management replaces the whole window. */
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "./ui/button";
 import { Icon, type IconName } from "./Icon";
 import { cn } from "../lib/utils";
@@ -109,6 +109,18 @@ export function DesktopShell({
   headerFacts?: ReactNode;
   children: ReactNode;
 }) {
+  const managementOpen = Boolean(management);
+  const workspaceFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (managementOpen || !workspaceFocus.current) return;
+    // Wait until the workspace is painted again; Chromium refuses focus while
+    // the previously hidden management replacement is still being laid out.
+    const target = workspaceFocus.current;
+    const frame = requestAnimationFrame(() => {
+      if (target.isConnected) target.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [managementOpen]);
   const activeTaskId = view.view === "task" ? view.taskId : undefined;
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -216,7 +228,7 @@ export function DesktopShell({
         </header>}
         <DesktopRootErrors roots={roots} busy={rootRetry.busy} retryPending={rootRetry.pending} retryError={rootRetry.error} onRetry={rootRetry.run} className="shrink-0 border-b border-line bg-paper px-4 empty:hidden" />
         {lifecycleErrors.length > 0 && <p role="alert" className="shrink-0 border-b border-line bg-paper px-4 py-2 text-[11px] text-destructive">任务归档状态未核验：{lifecycleErrors.join("；")}</p>}
-        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="desktop-shell-content">{children}</main>
+        <main onFocusCapture={(event) => { workspaceFocus.current = event.target as HTMLElement; }} className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-testid="desktop-shell-content">{children}</main>
       </div>
     </div>
     {management}

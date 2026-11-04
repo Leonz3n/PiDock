@@ -14,8 +14,12 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
+        running: "border-transparent bg-secondary text-primary px-3 py-1 text-xs",
+        settled: "border-transparent bg-settled-soft text-settled px-3 py-1 text-xs",
+        attention: "border-transparent bg-attention-soft text-attention px-3 py-1 text-xs",
+        danger: "border-transparent bg-danger-soft text-destructive px-3 py-1 text-xs",
         default: "border-border bg-card text-foreground",
-        soft: "border-border bg-secondary text-[#5b6670]",
+        soft: "border-border bg-secondary text-muted-foreground",
         outline: "border-border bg-transparent text-muted-foreground",
         accent: "border-primary bg-secondary text-foreground",
       },

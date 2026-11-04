@@ -23,6 +23,8 @@ import {
 import { Icon } from "./Icon";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
+import { Separator } from "./ui/separator";
 
 const field = "min-w-0 w-full border border-line bg-bg px-2 py-1 text-xs disabled:opacity-70";
 
@@ -102,8 +104,8 @@ export function DesktopSettingsPage({
   const preference = useAppearanceStore((state) => state.preference);
   const resolved = useAppearanceStore((state) => state.resolved);
 
-  return <div data-testid="desktop-settings-page" className="management-window flex h-screen min-h-0 w-full text-ink">
-    <nav aria-label="设置" className="flex w-[240px] shrink-0 flex-col border-r border-line bg-sidebar px-3 py-4 ">
+  return <div data-testid="desktop-settings-page" className="settings-window management-window flex h-screen min-h-0 w-full text-ink">
+    <nav aria-label="设置" className="settings-nav flex w-[240px] shrink-0 flex-col border-r border-line bg-sidebar px-3 py-4 ">
       {onBack ? <button type="button" aria-label="返回任务工作区" onClick={close}
         className="mb-3 flex items-center gap-1.5 rounded-[6px] border border-line bg-paper px-2.5 py-1.5 text-left text-[11px] text-muted hover:text-ink">
         <span aria-hidden>←</span>
@@ -128,7 +130,7 @@ export function DesktopSettingsPage({
         <p>返回时保留当前任务</p>
       </div>
     </nav>
-    <div className="min-w-0 flex-1 overflow-auto bg-bg">
+    <div className="settings-content min-w-0 flex-1 overflow-auto bg-bg">
       <header data-testid="management-header" className="flex h-[52px] shrink-0 items-center justify-between gap-2 border-b border-line bg-paper px-10 below-narrow:px-5">
         <h1 className="text-[14px] font-semibold text-ink">{[...NAV].find((item) => item.key === pane)?.label ?? "设置"}</h1>
         <p className="text-[11px] text-muted">{pane === "appearance"
@@ -137,7 +139,7 @@ export function DesktopSettingsPage({
           : pane === "language" ? "PiDock 界面语言"
           : "本机通用偏好"}</p>
       </header>
-      <div className="px-12 py-10 below-narrow:px-5">
+      <div className="settings-body px-12 py-10 below-narrow:px-5">
         {pane === "appearance" ? <AppearancePane /> : null}
         {pane === "keybindings" ? <KeybindingsPane /> : null}
         {pane === "language" ? <LanguagePane /> : null}
@@ -149,46 +151,49 @@ export function DesktopSettingsPage({
 
 function AppearancePane() {
   const preference = useAppearanceStore((state) => state.preference);
-  const resolved = useAppearanceStore((state) => state.resolved);
   const status = useAppearanceStore((state) => state.status);
   const readError = useAppearanceStore((state) => state.readError);
   const persistError = useAppearanceStore((state) => state.persistError);
   const setPreference = useAppearanceStore((state) => state.setPreference);
 
   return <section aria-label="外观" className="min-w-0">
-    <h2 className="text-[15px] font-semibold text-ink">让工作界面适应当前光线</h2>
-    <p className="mt-2 max-w-[620px] text-xs leading-6 text-muted">柔和的中性底色、清晰的文字层次，以及克制的雾蓝强调色。日间与夜间使用同一套语义色，只有明暗不同。</p>
-    <div role="radiogroup" aria-label="外观偏好" className="mt-6 grid max-w-[860px] gap-3 below-narrow:grid-cols-1 sm:grid-cols-3">
+    <h2 className="appearance-title">让工作界面适应当前光线</h2>
+    <p className="mt-2 max-w-[620px] text-xs leading-6 text-muted">柔和的中性底色、清晰的文字层次，以及克制的雾蓝强调色。</p>
+    <ToggleGroup type="single" role="radiogroup" aria-label="外观偏好" value={preference}
+      className="appearance-options" spacing={1} onValueChange={(value) => { if (value) void setPreference(value as typeof preference); }}
+      onKeyDown={(event) => {
+        const offset = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+        if (!offset) return;
+        event.preventDefault();
+        const index = APPEARANCE_OPTIONS.findIndex((option) => option.mode === preference);
+        const next = APPEARANCE_OPTIONS[(index + offset + APPEARANCE_OPTIONS.length) % APPEARANCE_OPTIONS.length];
+        if (!next) return;
+        void setPreference(next.mode);
+        event.currentTarget.querySelector<HTMLElement>(`[data-appearance-option="${next.mode}"]`)?.focus();
+      }}>
       {APPEARANCE_OPTIONS.map((option) => {
         const active = preference === option.mode;
-        return <button key={option.mode} type="button" role="radio" aria-checked={active} data-appearance-option={option.mode}
-          onClick={() => void setPreference(option.mode)}
-          className={`min-w-0 rounded-[8px] border p-2.5 text-left ${active ? "border-accent bg-soft" : "border-line bg-paper hover:bg-soft"}`}>
+        return <ToggleGroupItem key={option.mode} value={option.mode} role="radio" aria-checked={active}
+          tabIndex={active ? 0 : -1} data-appearance-option={option.mode} className="appearance-option">
           <AppearancePreview mode={option.mode} />
-          <span className="mt-2 flex items-center gap-2 text-[12px] font-medium text-ink">
-            {option.label}
-            {active ? <Badge variant="soft" className="rounded-[4px]">已选</Badge> : null}
-            {option.mode === "system" ? <span className="text-[10px] text-muted">当前{appearanceModeLabel(resolved)}</span> : null}
-          </span>
-          <span className="mt-0.5 block text-[10px] leading-4 text-muted">{option.description}</span>
-        </button>;
+          <span className="appearance-option-label">{option.label}<span aria-hidden className="appearance-radio">{active ? "✓" : ""}</span></span>
+          <span className="appearance-description">{option.description}</span>
+        </ToggleGroupItem>;
       })}
-    </div>
+    </ToggleGroup>
     <p className="mt-4 flex items-center gap-2 text-[11px] text-muted">
       <Icon name="check" />
-      选择后立即生效并自动保存到 PiDock 的应用偏好，下次打开继续使用；「跟随系统」会响应系统外观变化。
+      选择后立即生效并自动保存，下次打开继续使用。
     </p>
     {status === "unavailable" ? <p role="status" className="mt-3 border border-line bg-soft px-3 py-2 text-[11px] text-muted">当前不在桌面壳内：外观只会在此次会话生效，不会写入应用偏好。</p> : null}
     {readError ? <p role="alert" className="mt-3 break-words border border-line bg-soft px-3 py-2 text-[11px] text-ink">外观偏好读取失败：{readError}</p> : null}
     {persistError ? <p role="alert" className="mt-3 break-words border border-line bg-soft px-3 py-2 text-[11px] text-ink">外观偏好保存失败：{persistError}（当前选择仅此次会话有效）</p> : null}
-    <div className="mt-8 border-t border-line pt-6">
-      <h3 className="text-[13px] font-semibold text-ink">清晰、安静的状态提示</h3>
+    <Separator className="appearance-divider" />
+    <div className="appearance-status">
+      <h3 className="text-[16px] font-semibold text-ink">清晰、安静的状态提示</h3>
       <ul className="mt-3 flex flex-wrap gap-3 text-[11px]">
-        {[{ key: "settled", label: "运行中" }, { key: "done", label: "已完成" }, { key: "waiting", label: "等待确认" }, { key: "failed", label: "执行失败" }].map((item) => (
-          <li key={item.key} className={`flex items-center gap-1.5 rounded-[6px] border border-line px-2 py-1 ${item.key === "failed" ? "text-ink" : "text-muted"}`}>
-            <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${item.key === "failed" ? "bg-orange" : item.key === "waiting" ? "bg-orange" : "bg-accent"}`} />
-            {item.label}
-          </li>
+        {[{ variant: "running", label: "运行中" }, { variant: "settled", label: "已完成" }, { variant: "attention", label: "等待确认" }, { variant: "danger", label: "执行失败" }].map((item) => (
+          <li key={item.variant}><Badge variant={item.variant as "running" | "settled" | "attention" | "danger"}><span aria-hidden>•</span>{item.label}</Badge></li>
         ))}
       </ul>
       <p className="mt-3 max-w-[620px] text-[11px] leading-5 text-muted">状态同时使用文字与颜色表达；正文、路径与辅助信息在两种模式下保持清晰可读。</p>
@@ -198,16 +203,11 @@ function AppearancePane() {
 
 /** A miniature conversation rendered with the SAME tokens as the real shell. */
 function AppearancePreview({ mode }: { mode: "light" | "dark" | "system" }) {
-  const panel = (theme: "light" | "dark") => <span data-preview-theme={theme} data-theme={theme} className="block min-w-0 flex-1 rounded-[4px] border border-line bg-bg p-1.5">
-    <span className="flex gap-1">
-      <span aria-hidden className="h-1 w-3 rounded-full bg-line" />
-      <span aria-hidden className="h-1 w-3 rounded-full bg-line" />
-    </span>
-    <span className="mt-1 block h-1 w-4/5 rounded-full bg-ink opacity-70" />
-    <span className="mt-1 block h-1 w-2/3 rounded-full bg-muted opacity-60" />
-    <span className="mt-1.5 block h-2 w-full rounded-[2px] border border-line bg-paper" />
+  const panel = (theme: "light" | "dark") => <span data-preview-theme={theme} data-theme={theme} className="appearance-preview-panel">
+    <span className="appearance-preview-nav">{[0, 1, 2, 3].map((line) => <i key={line} />)}</span>
+    <span className="appearance-preview-conversation"><span>任务对话</span><i /><i /><span className="appearance-preview-composer"><i /></span></span>
   </span>;
-  return <span aria-hidden className="flex h-[62px] min-w-0 items-stretch gap-1">
+  return <span aria-hidden className="appearance-preview">
     {mode === "system" ? <>{panel("light")}{panel("dark")}</> : panel(mode)}
   </span>;
 }
@@ -268,7 +268,7 @@ function KeybindingsPane() {
     {!connected ? <p role="status" className="mt-3 border border-line bg-soft px-3 py-2 text-[11px] text-muted">当前不在桌面壳内，无法读写 Pi 的 keybindings.json。</p> : null}
     {error ? <p role="alert" data-testid="keybindings-error" className="mt-3 break-words border border-line bg-soft px-3 py-2 text-[11px] text-ink">快捷键读取／保存失败：{error}</p> : null}
     {view?.keybindingsError ? <p role="alert" className="mt-3 break-words border border-line bg-soft px-3 py-2 text-[11px] text-ink">文件中有无法识别的按键值（已按 Pi 默认显示）：{view.keybindingsError}</p> : null}
-    <ul className="mt-5 space-y-2">
+    <ul className="mt-5 flex flex-col gap-2">
       {(view?.keybindings ?? []).map((row) => <li key={row.id} className={`${CARD} flex flex-wrap items-center gap-2`}>
         <span className="min-w-[180px] flex-1">
           <span className="block text-[12px] font-medium text-ink">{row.label}</span>
@@ -447,7 +447,7 @@ function ExternalEditorSection() {
       <p className="mt-2 max-w-[720px] text-xs leading-6 text-muted">
         任务文件面板的「用外部编辑器打开」使用这里保存的程序。程序必须是本机可执行的绝对路径；保存时会先校验并在磁盘上确认可执行，未通过则不写入。
       </p>
-      <form className="mt-3 max-w-[620px] space-y-3" onSubmit={submit}>
+      <form className="mt-3 max-w-[620px] flex flex-col gap-3" onSubmit={submit}>
         <div>
           <label className="text-xs text-muted" htmlFor="external-editor-program">外部编辑器程序</label>
           <input
