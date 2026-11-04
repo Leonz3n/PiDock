@@ -243,7 +243,7 @@ it.each([
   } else {
     expect(screen.getByTestId("desktop-task-facts")).toBeVisible();
     expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
-    expect(screen.getByTestId("task-facts-sessions")).toHaveTextContent("会话 1 个");
+    await waitFor(() => expect(screen.getByTestId("task-facts-sessions")).toHaveTextContent(destination === "return-before-completion" && outcome === "success" ? "会话 2 个" : "会话 1 个"));
     expect(screen.getByRole("button", { name: createName })).toBeEnabled();
   }
   fireEvent.click(sidebar().getByRole("button", { name: project.name }));

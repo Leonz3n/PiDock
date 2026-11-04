@@ -91,17 +91,21 @@ async function run() {
   }, (id) => index.resolve(id), undefined, index, taskEnvironment);
   const route = registry.routeTaskOp.bind(registry);
   let holdCreation = false;
+  let holdBeforeCreation = false;
   /** @type {(() => void) | null} */
   let releaseCreation;
   let landedCreation;
   registry.routeTaskOp = async (request) => {
     calls.push({ op: request.op, taskId: request.taskId, payload: request.payload });
+    const held = holdCreation && request.op === "task/sessionCreate";
+    if (held) holdCreation = false;
+    // The return-before-completion case delays the real write itself. Other
+    // cases delay delivery of its real completed response. No data is replaced.
+    if (held && holdBeforeCreation) await new Promise(resolve => { releaseCreation = () => resolve(undefined); });
     const result = await route(request);
-    // Delay only delivery of a genuine completed Host write, never its data.
-    if (holdCreation && request.op === "task/sessionCreate") {
-      holdCreation = false;
+    if (held) {
       landedCreation = result;
-      await new Promise(resolve => { releaseCreation = () => resolve(undefined); });
+      if (!holdBeforeCreation) await new Promise(resolve => { releaseCreation = () => resolve(undefined); });
     }
     return result;
   };
@@ -194,12 +198,12 @@ async function run() {
         const beforeSessions = /** @type {Array<{id:string}>} */ (before.payload.sessions);
         const count = beforeSessions.length;
         landedCreation = null; releaseCreation = null; holdCreation = true;
+        holdBeforeCreation = destination === "return-before-completion";
         await click("在当前任务工作区中新建会话（全新上下文）");
         for (let attempt = 0; attempt < 200 && !releaseCreation; attempt++) await wait(50);
-        const committed = /** @type {{payload:{activeSessionId:string,sessions:Array<{id:string}>}}} */ (/** @type {unknown} */ (landedCreation));
-        check(`${theme}/${destination}: real Host committed while renderer awaits IPC`, Boolean(releaseCreation) && Boolean(committed?.payload?.activeSessionId), committed);
-        const createdId = committed.payload.activeSessionId;
-        check(`${theme}/${destination}: new Host identity belongs to originating task`, committed.payload.sessions.length === count + 1 && !beforeSessions.some(session => session.id === createdId), createdId);
+        check(`${theme}/${destination}: production creation IPC remains outstanding`, Boolean(releaseCreation));
+        if (holdBeforeCreation) check(`${theme}: original task write has not completed before return`, landedCreation === null);
+        else check(`${theme}/${destination}: real Host committed while renderer awaits IPC`, Boolean((/** @type {{payload?:{activeSessionId?:string}}} */ (/** @type {unknown} */ (landedCreation)))?.payload?.activeSessionId), landedCreation);
         if (destination === "task") {
           await sidebarClick(tasks[1].name);
           await until(`document.querySelector('[data-testid=desktop-breadcrumb]')?.innerText.includes(${JSON.stringify(tasks[1].name)}) && document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('1 个')`, "second task facts");
@@ -209,7 +213,7 @@ async function run() {
           await until("document.querySelector('[data-testid=desktop-project-overview]')", "workspace while IPC held");
           if (destination === "return-before-completion") {
             await sidebarClick(first.name);
-            await until(`document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('${count + 1} 个')`, "return rereads committed Host identity before delivery");
+            await until(`document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('${count} 个')`, "return reads original list while Host write is pending");
           }
         } else if (destination === "conversation") {
           await click("进入对话 · 边界复核会话");
@@ -219,7 +223,12 @@ async function run() {
           await until("document.querySelector('[data-testid=desktop-settings-page]')", "settings covers preserved facts");
         }
         (/** @type {() => void} */ (/** @type {unknown} */ (releaseCreation)))();
+        for (let attempt = 0; attempt < 200 && !landedCreation; attempt++) await wait(50);
+        const committed = /** @type {{payload:{activeSessionId:string,sessions:Array<{id:string}>}}} */ (/** @type {unknown} */ (landedCreation));
+        const createdId = committed.payload.activeSessionId;
+        check(`${theme}/${destination}: new Host identity belongs to originating task`, committed.payload.sessions.length === count + 1 && !beforeSessions.some(session => session.id === createdId), createdId);
         await wait(350);
+        if (holdBeforeCreation) await until(`document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('${count + 1} 个')`, "existing write notification refreshes returned facts from Host");
         if (destination === "settings") {
           check(`${theme}: pending completion retains settings destination`, await evaluate("Boolean(document.querySelector('[data-testid=desktop-settings-page]'))"));
           await evaluate("window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");

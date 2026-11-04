@@ -5,7 +5,7 @@ import { SHARED_DIR_MANAGED_PROTECTION } from "../data/sharedDirProtection";
 import { fileRootsThroughShell, type PidockBridge } from "../data/shellBridge";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
-import { createSession, readTaskSessions, type SessionList } from "../data/taskSessions";
+import { createSession, readTaskSessions, subscribeSessionWrites, type SessionList } from "../data/taskSessions";
 import {
   hostText,
   observedText,
@@ -97,6 +97,10 @@ export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, de
    * printed as "one session" (the sentence this line used to carry unconditionally).
    */
   const [sessions, setSessions] = useState<SessionList | null>(null);
+  const [sessionRevision, setSessionRevision] = useState(0);
+  useEffect(() => subscribeSessionWrites((writtenTaskId) => {
+    if (destinationActive && writtenTaskId === taskId) setSessionRevision((value) => value + 1);
+  }), [taskId, destinationActive]);
   const [creating, setCreating] = useState(false);
   const [sessionCount, setSessionCount] = useState<number | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -120,7 +124,7 @@ export function DesktopTaskFacts({ taskId, taskName, bridge, compact = false, de
       setSessionError(result.error);
     });
     return () => { live = false; };
-  }, [taskId, onActiveSession, destinationActive]);
+  }, [taskId, onActiveSession, destinationActive, sessionRevision]);
 
   useEffect(() => {
     let live = true;
