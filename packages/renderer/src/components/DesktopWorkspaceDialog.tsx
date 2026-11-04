@@ -116,10 +116,14 @@ export function DesktopWorkspaceDialog({
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // A repair that lands on the name field makes the user hunt for the row again.
-    const repair = openFocus.current ? pathRefs.current[openFocus.current] : null;
     const focusInside = () => {
-      const preferred = repair ?? nameRef.current;
-      (preferred && !preferred.matches(":disabled") ? preferred : dialogRef.current)?.focus();
+      const dialog = dialogRef.current;
+      // Source rows can be removed while this dialog stays open. Resolve live
+      // refs on every redirect so a detached repair input cannot swallow focus.
+      const repair = openFocus.current ? pathRefs.current[openFocus.current] : null;
+      const preferred = [repair, nameRef.current].find((element) =>
+        element?.isConnected && dialog?.contains(element) && !element.matches(":disabled"));
+      (preferred ?? dialog)?.focus();
     };
     focusInside();
     const containFocus = (event: FocusEvent) => {

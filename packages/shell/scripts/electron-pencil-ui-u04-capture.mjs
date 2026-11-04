@@ -5,7 +5,7 @@
 import { app, utilityProcess } from "electron";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, mkdtempSync, readdirSync, unlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, mkdtempSync, readdirSync, unlinkSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
@@ -167,10 +167,41 @@ async function run() {
   };
   await until("document.querySelector('[data-testid=desktop-sidebar]')",'workspace loaded');
   check('production built renderer',/^file:.*\/renderer\/index.html$/.test(await evaluate('location.href')));
+  if (scenario === 'repair-focus') renameSync(source, source + '-moved');
   for(const theme of ['light','dark']) {
     await evaluate(`window.pidock.preferencesOp({op:'appearance/save',appearance:'${theme}'})`);
     wc.reload();
     await until(`document.documentElement?.dataset.theme==='${theme}'`,'theme');
+    if (scenario === 'repair-focus') {
+      await sidebarClick('PiDock 核心开发');
+      await until("[...document.querySelectorAll('button')].some(el => el.textContent.trim() === '修复路径')", 'actual missing source repair');
+      const original = JSON.stringify(projects.list());
+      for (const close of ['Escape', 'cancel']) {
+        // Retain the actual trigger node to prove identity, not just its label.
+        await evaluate("window.__repairOpener = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === '修复路径')");
+        await click('修复路径');
+        await until("document.querySelector('[role=dialog]')", 'repair edit dialog');
+        check(`${theme} ${close}: repair source gets initial focus`, await evaluate("document.activeElement?.getAttribute('aria-label') === '仓库路径 1'"));
+        await capture(`${theme}-${close}-repair-initial`);
+        await click('移除仓库 1');
+        check(`${theme} ${close}: repair source row removed`, await evaluate("!document.querySelector('input[aria-label=\"仓库路径 1\"]')"));
+        await evaluate("document.querySelector('button[aria-label=新建任务]').focus()");
+        const focused = await evaluate("({inside:document.querySelector('[role=dialog]').contains(document.activeElement),active:document.activeElement?.outerHTML})");
+        check(`${theme} ${close}: removed repair constrains background focus`, focused.inside, focused);
+        check(`${theme} ${close}: enabled name receives fallback focus`, await evaluate("document.activeElement?.getAttribute('aria-label') === '工作空间名称 *'"));
+        await keyboard('Tab', 'Tab', 8);
+        check(`${theme} ${close}: Shift+Tab wraps to save`, await evaluate("document.activeElement?.textContent.includes('保存更改')"));
+        await keyboard('Tab', 'Tab');
+        check(`${theme} ${close}: Tab wraps to name`, await evaluate("document.activeElement?.getAttribute('aria-label') === '工作空间名称 *'"));
+        await capture(`${theme}-${close}-repair-removed-contained`);
+        if (close === 'Escape') await keyboard('Escape', 'Escape');
+        else await click('取消');
+        check(`${theme} ${close}: returns to exact connected visible repair opener`, await evaluate("!document.querySelector('[role=dialog]') && document.activeElement === window.__repairOpener && window.__repairOpener.isConnected && window.__repairOpener.getBoundingClientRect().width > 0"));
+        check(`${theme} ${close}: unsaved removal does not mutate registry`, JSON.stringify(projects.list()) === original);
+        check(`${theme} ${close}: no task intent secretly created`, creation.current() === null);
+      }
+      continue;
+    }
     await sidebarClick('新建工作空间');
     await until("document.querySelector('[role=dialog]')",'workspace dialog');
     await capture(`${theme}-workspace-empty`);
