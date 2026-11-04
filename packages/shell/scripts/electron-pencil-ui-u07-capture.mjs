@@ -412,6 +412,7 @@ async function run() {
       "empty S04",
     );
     await capture(`${theme}-s04-empty`);
+    if (width < 960) await click("展开导航");
     await click("已归档");
     await until(
       "document.body.innerText.includes('还没有归档任务')",
