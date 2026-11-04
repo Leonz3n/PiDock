@@ -2650,7 +2650,11 @@ async function performTaskOp(
         const lifecycle = lifecycleFor(taskId);
         if ("error" in lifecycle) return { ok: false, error: lifecycle.error };
         taskAdmission.seal();
-        host.sealExecution();
+        // Defer the SDK-context seal: a sealed context client refuses every call
+        // (`sdk-context-closing`), so sealing it before the abort stage below
+        // turned each cancel into a silent no-op and the quit then sat on the
+        // live model stream until its budget expired.
+        host.sealExecution({ deferSdkContextSeal: true });
         if (serviceOwnerInventory || process.env["PIDOCK_SERVICE_OWNER_REQUIRED"] === "1") ownerInventoryFor(host).seal();
         sdkClosing = true;
         host.sealSdkTurnTransport();
@@ -2668,6 +2672,9 @@ async function performTaskOp(
               const aborted = await shutdownDeadline(liveTurns ? liveTurns.abortAll() : Promise.resolve<string[]>([]), 15_000, "sdk-turns-abort-unconfirmed");
               if (aborted.length > 0) abortedTurns = aborted;
             } catch (error) { abortFailure = error; }
+            // The live turns were aborted (or the abort was reported) above: only
+            // now may the isolated context refuse further calls.
+            host.sealSdkContext();
             // Real service children are stopped before the Agent/SDK stages: a
             // detached child (reserved process group, ignored stdin) has no
             // other stop path once this op seals control, so its termination

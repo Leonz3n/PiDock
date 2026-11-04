@@ -419,8 +419,27 @@ async function run() {
     const payload = provider === null ? { provider: null } : { provider: {
       config: providerProfiles.config(provider.profileId, provider.modelId),
       credential: provider.credential, thinkingLevel: provider.thinkingLevel } };
-    await registry.routeTaskOp({ workspaceId, taskId: id, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } });
+    try {
+      await registry.routeTaskOp({ workspaceId, taskId: id, op: "task/sdkProvider", payload, origin: { kind: "shell-ui", senderWebContentsId } });
+    } catch (error) {
+      console.error("T18_DEBUG_SDKPROVIDER=" + JSON.stringify({ taskId: id, message: String(error?.message ?? error) }));
+      throw error;
+    }
   }, process.env, { secrets, native: nativeModels });
+  // The Provider binding lives in the Host process, so every phase must install it
+  // again. A shell page that refreshes the Provider surface at the same moment can
+  // get in first (`sdk-provider-operation-in-flight`), which is a named, retryable
+  // refusal rather than a missing selection — so retry briefly instead of flaking.
+  const selectProvider = async (taskId) => {
+    let status = null;
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      try { status = await providers.select(taskId, profileId, MODEL, undefined, sender()); }
+      catch (error) { status = { state: "refused", error: String(error?.message ?? error) }; }
+      if (status?.state === "configured") return status;
+      await wait(200);
+    }
+    return status;
+  };
   creation = new ProjectTaskCreation(new CreationIntentStore(profile), projects, index, registry, taskRoot,
     undefined, new WorktreeMetadataLock(profile, { notify: () => {} }));
   const catalog = new ServiceCatalog(profile, serviceCatalogAuthority(index, projects));
@@ -1030,7 +1049,7 @@ async function run() {
       stage = "kill:start a real run";
       // The Provider binding is per-Host-process state (not persisted), so a fresh
       // process must select it before a run can really start.
-      await providers.select(scheduleTaskId, profileId, MODEL, undefined, sender());
+      await selectProvider(scheduleTaskId);
       await route(scheduleTaskId, "task/setPermission", { sessionId: "main", permission: "read" }).catch(() => undefined);
       const before = await runsOf(scheduleTaskId);
       const manual = await route(scheduleTaskId, "task/scheduleRunNow", { scheduleId, label: "立即运行" });
@@ -1148,19 +1167,25 @@ async function run() {
     schedulesDriver.stop();
     await section("quit: an explicit quit aborts the live turn and the quit report proves every Host stopped", async () => {
       await route(scheduleTaskId, "task/scheduleList");
-      await providers.select(scheduleTaskId, profileId, MODEL, undefined, sender());
+      const status = await selectProvider(scheduleTaskId);
+      check("the Provider selection is configured in this process before the quit", status?.state === "configured", JSON.stringify({ state: status?.state, error: status?.error ?? null, profileId }));
       await route(scheduleTaskId, "task/setPermission", { sessionId: "main", permission: "read" }).catch(() => undefined);
       stage = "quit:start a live turn";
       const requestId = `req-quitok-${Date.now()}`;
       await route(scheduleTaskId, "task/sendMessage", { sessionId: "main", requestId, text: `${SLOW_TAG} T18 退出中止验收` });
       const live = await untilMain(async () => {
-        const answer = await route(scheduleTaskId, "task/executionState", { sessionId: "main" }).catch(() => null);
-        return answer?.state?.session?.runState === "running" ? answer : null;
+        const status = await route(scheduleTaskId, "task/sdkStatus", { sessionId: "main", requestId }).catch(() => null);
+        const turn = status?.turn ?? null;
+        // Two independent live signals: the Host's durable turn journal says the
+        // turn is still accepted (not settled), and the loopback endpoint really
+        // holds the HTTP/SSE response open.
+        return turn !== null && turn.state === "accepted" && providerState.holds >= 1 ? { turn } : null;
       }, "the SDK turn is live before the quit", 300);
-      check("a real SDK turn is in flight before the explicit quit", live !== null, JSON.stringify(live?.state?.session?.runState));
+      check("a real SDK turn is in flight before the explicit quit (journal accepted + the endpoint still holds the response)",
+        live !== null && providerState.holds >= 1, JSON.stringify({ holds: providerState.holds, turn: live?.turn?.state ?? null }));
       check("the loopback endpoint is holding that turn open (a real HTTP/SSE request is pending)",
         providerState.holds >= 1, JSON.stringify({ holds: providerState.holds }));
-      saveState({ quitokLiveAt: new Date().toISOString(), quitokSessionId: "main" });
+      saveState({ quitokLiveAt: new Date().toISOString(), quitokSessionId: "main", quitokRequestId: requestId });
       app.on("will-quit", () => {
         try {
           const report = lastQuitReport;
@@ -1168,6 +1193,7 @@ async function run() {
           const aborted = quitOps.flatMap((row) => row.abortedTurns ?? []);
           log.identity.quitReport = report;
           log.identity.hostQuitOps = quitOps;
+          log.identity.quitTimeline = timeline;
           check("the quit report proves every Host stopped (report.ok true, no retained task)",
             report?.ok === true && (report?.tasks ?? []).every((task) => task.ok === true && task.retainedTasks.length === 0),
             JSON.stringify(report).slice(0, 1200));
@@ -1182,10 +1208,26 @@ async function run() {
         writeLog("quitok-log.json");
       });
       stage = "quit:app.quit()";
-      console.log("T18_DEBUG_QUITOK=" + JSON.stringify({ holds: providerState.holds, runState: live?.state?.session?.runState }));
+      const quitAt = Date.now();
+      console.log("T18_DEBUG_QUITOK=" + JSON.stringify({ holds: providerState.holds, turn: live?.turn?.state ?? null }));
+      const journalPath = join(recordOf(scheduleTaskId).taskDir, ".pidock-sdk-turns", "main", `${requestId}.json`);
+      const timeline = [];
       app.quit();
-      await wait(25000);
-      exitNow(1, "app.quit() did not terminate the process");
+      for (let i = 0; i < 120; i += 1) {
+        await wait(250);
+        // The Host is sealed as soon as quitAll starts, so only the durable turn
+        // journal on disk can still answer from this side.
+        const journal = readJson(journalPath, null);
+        const row = { ms: Date.now() - quitAt, holds: providerState.holds, journal: journal?.state ?? null, quitOk: lastQuitReport?.ok ?? null };
+        if (timeline.at(-1)?.journal !== row.journal || timeline.at(-1)?.quitOk !== row.quitOk) { timeline.push(row); console.log("T18_DEBUG_QUIT_STEP=" + JSON.stringify(row)); }
+        if (row.journal !== null && row.journal !== "accepted") break;
+      }
+      log.identity.quitTimeline = timeline;
+      log.findings.push({ kind: "explicit-quit-refused",
+        detail: "app.quit() aborted the live model turn (the Host's turn journal went accepted -> cancelled) but the quit was still refused: the Host's own quit receipt named service-owner-shutdown-unconfirmed for every task, so the app stayed alive and the last-window escalation persisted an unconfirmed-quit record instead",
+        lastQuitReport, timeline });
+      writeLog("quitok-log.json");
+      exitNow(1, "the explicit quit did not terminate the process");
     });
     exitNow(1, "quitok phase did not quit");
     return;
@@ -1199,9 +1241,9 @@ async function run() {
       check("the previous quit that stopped every Host left no unconfirmed-quit report",
         quitReports.pending() === null, JSON.stringify(quitReports.pending()));
       await route(scheduleTaskId, "task/scheduleList");
-      const abortedState = await route(scheduleTaskId, "task/executionState", { sessionId: "main" }).catch(() => ({}));
+      const abortedState = await route(scheduleTaskId, "task/sdkStatus", { sessionId: "main", requestId: state.quitokRequestId }).catch(() => ({}));
       check("the turn the previous quit aborted is NOT running in this new process",
-        abortedState?.state?.session?.runState !== "running", JSON.stringify(abortedState?.state?.session?.runState));
+        abortedState?.turn?.state !== "accepted", JSON.stringify(abortedState?.turn?.state));
       await gotoTask(scheduleTaskId);
       await openSchedulesPage();
       const bannerBefore = await evalJs("!!document.querySelector('[data-testid=desktop-scheduler-quit-unconfirmed]')");

@@ -1836,13 +1836,25 @@ export class TaskWorkspaceHost {
 
   /**
    * Freeze new execution/claims, while allowing admitted work to settle.
+   *
+   * `deferSdkContextSeal` exists for the explicit-quit order: the isolated
+   * context client refuses EVERY call once it is sealed (`sdk-context-closing`),
+   * so sealing it before the abort stage turned each cancel into a silent no-op
+   * and the quit then sat on the live model stream until its budget expired.
+   * The quit seals execution first, aborts the live turns, and only then seals
+   * the context (`sealSdkContext`).
    */
-  sealExecution(): void {
+  sealExecution(options: { deferSdkContextSeal?: boolean } = {}): void {
     this.executionClosing = true;
     // No tool call may stay parked on an approval or start an effect after this.
     this.sdkToolBroker?.close();
-    this.sdkContext?.seal();
+    if (options.deferSdkContextSeal !== true) this.sdkContext?.seal();
     for (const channel of this.channels.values()) channel.sealExecution();
+  }
+
+  /** Seal the isolated SDK context; only correct AFTER the live turns were aborted. */
+  sealSdkContext(): void {
+    this.sdkContext?.seal();
   }
 
   private assertExecutionOpen(): void {
