@@ -51,17 +51,17 @@ export function DesktopRootErrors({ roots, busy, retryPending, retryError, onRet
   className?: string;
 }) {
   return <div className={className} aria-busy={retryPending}>
-    {roots.filter((root) => root.state === "error").map((root) => <div role="alert" key={root.label} className="flex min-w-0 items-center gap-2 py-2 text-[11px] text-[#ad4545]">
+    {roots.filter((root) => root.state === "error").map((root) => <div role="alert" key={root.label} className="flex min-w-0 items-center gap-2 py-2 text-[11px] text-destructive">
       <span className="min-w-0 flex-1 break-words">{root.label}：{root.message}</span>
       <Button type="button" variant="outline" aria-label={`重试读取${root.label}`} title={`重试读取${root.label}`} disabled={busy} onClick={onRetry} className="h-8 w-8 shrink-0 rounded-[5px] p-0">
         <Icon name="refresh" className={retryPending ? "animate-spin" : undefined} />
       </Button>
     </div>)}
-    {roots.filter((root) => root.state !== "error" && root.message).map((root) => <p role="status" key={root.label} className="border-b border-[#dfc99f] py-2 text-[11px] text-[#9a6032]">
+    {roots.filter((root) => root.state !== "error" && root.message).map((root) => <p role="status" key={root.label} className="border-b border-line py-2 text-[11px] text-orange">
       {root.label}：{root.message}
     </p>)}
     {retryPending && <p role="status" className="pb-2 text-[11px] text-muted">正在重读任务根</p>}
-    {retryError && <p role="alert" className="pb-2 text-[11px] text-[#ad4545]">{retryError}</p>}
+    {retryError && <p role="alert" className="pb-2 text-[11px] text-destructive">{retryError}</p>}
   </div>;
 }
 
