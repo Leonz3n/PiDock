@@ -15,7 +15,7 @@ const arg = (key, fallback) => process.argv.includes(key) ? process.argv[process
 const [width, height] = arg("--size", "1440x900").split("x").map(Number);
 const scenario = arg("--scenario", "full");
 const repo = resolve(import.meta.dirname, "../../..");
-const output = join(repo, "docs/evidence/pencil-ui-u01");
+const output = join(repo, "docs/evidence/pencil-ui-u01", ...(scenario === "navigation" ? ["fix1"] : []));
 const root = mkdtempSync(join(tmpdir(), "pidock-ui-u01-"));
 const profile = join(root, "profile");
 const taskRoot = join(root, "tasks");
@@ -59,7 +59,7 @@ async function run() {
   const projects = new ProjectRegistry(profile);
   const workspace = await projects.create({ name: "PiDock 核心开发 · 长名称工作空间用于核对截断与树形层级", description: "U01 真实生产导航验收", repositories: [], directories: [] });
   await projects.create({ name: "文档与脚手架", description: "空任务列表", repositories: [], directories: [] });
-  if (scenario === "full") {
+  if (scenario === "full" || scenario === "navigation") {
     /** @type {Array<[string, string, boolean]>} */
     const fixtures = [["task-aaaa1111", "修复结算对账分页边界 · 超长任务名称核对截断不会挤出导航", true], ["task-bbbb2222", "升级 Electron 运行时", true], ["task-cccc3333", "临时排查本地端口占用", false]];
     for (const [taskId, name, assigned] of fixtures) {
@@ -88,7 +88,7 @@ async function run() {
   const catalog = new ServiceCatalog(profile, serviceCatalogAuthority(index, projects));
   registerIpc(createUnavailableHostClient(), views.registry, registry, projects, index, undefined, creation, providers, catalog);
   const origin = { kind: /** @type {const} */ ("shell-ui"), senderWebContentsId: views.shellView.webContents.id };
-  if (scenario === "full") {
+  if (scenario === "full" || scenario === "navigation") {
     const created = await registry.routeTaskOp({ taskId: "task-aaaa1111", op: "task/sessionCreate", payload: { name: "边界复查 · 会话长名称验证", permission: "default" }, origin });
     check("real Host creates the seeded second session", Boolean(created.payload?.session), created);
   }
@@ -143,6 +143,44 @@ async function run() {
     await evaluate(`window.pidock.preferencesOp({ op: 'appearance/save', appearance: '${theme}' })`);
     await wc.reload();
     await until(`document.documentElement?.dataset.theme === '${theme}' && document.querySelector('${scenario === "failed" ? "[role=alert]" : "[data-testid=desktop-project-overview]"}')`, "theme hydration");
+    if (scenario === "navigation") {
+      await until("document.querySelectorAll('[data-task-nav]').length === 3", "real task tree");
+      const before = await registry.routeTaskOp({ taskId: "task-aaaa1111", op: "task/sessionList", payload: {}, origin });
+      const mutationStart = calls.length;
+      for (const [label, selector] of [
+        ["定时任务", "[data-testid=desktop-schedules-page]"],
+        ["已归档", "[data-testid=desktop-archive-page]"],
+        ["需要处理", "[data-testid=desktop-attention-page]"],
+        ["环境与服务", "[data-testid=desktop-environment-page]"],
+        ["Token 用量", "[data-testid=desktop-usage-page]"],
+        ["PiDock 核心开发 · 长名称工作空间用于核对截断与树形层级", "[data-testid=desktop-project-overview]"],
+        ["未归属任务", "[data-testid=desktop-unassigned]"],
+        ["修复结算对账分页边界 · 超长任务名称核对截断不会挤出导航", "[data-testid=desktop-task-facts]"],
+        ["边界复查 · 会话长名称验证", "[aria-label=消息]"],
+        ["能力管理", ".management-window"],
+        ["设置", ".management-window"],
+      ]) {
+        if (width < 960 && !(await evaluate("document.querySelector('[data-testid=desktop-sidebar]')?.dataset.expanded === 'true'"))) await expand();
+        if (["需要处理", "环境与服务", "Token 用量"].includes(label) && !(await evaluate("document.querySelector('[data-nav-destination=more]')?.getAttribute('aria-expanded') === 'true'"))) await click("更多");
+        await click(label);
+        await until(`document.querySelector(${JSON.stringify(selector)})`, `destination ${label}`);
+        if (selector === ".management-window") {
+          await click("返回任务工作区");
+          await until("document.querySelector('[data-testid=desktop-sidebar]')", "management return before creation");
+        }
+        await click("新建任务");
+        await until("document.querySelector('[role=dialog][aria-label=新建任务]')", `New Task from ${label}`);
+        check(`${theme}: ${label} opens the production creation dialog`, await evaluate("Boolean(document.querySelector('[data-testid=desktop-inventory]') && document.querySelector('[role=dialog] input'))"));
+        if (label === "定时任务") await capture(`${theme}-new-task-schedules`);
+        await click("取消");
+        await until("!document.querySelector('[role=dialog]')", `cancel creation from ${label}`);
+      }
+      const after = await registry.routeTaskOp({ taskId: "task-aaaa1111", op: "task/sessionList", payload: {}, origin });
+      check(`${theme}: navigation/creation entry preserves real Host sessions`, JSON.stringify(before.payload.sessions) === JSON.stringify(after.payload.sessions) && before.payload.activeSessionId === after.payload.activeSessionId);
+      check(`${theme}: navigation/creation entry sends no model/tool/session writes`, !calls.slice(mutationStart).some(call => /sessionCreate|sendMessage|execute|toolReplay/.test(call.op)), calls.slice(mutationStart).map(call => call.op));
+      check(`${theme}: no renderer console errors`, consoleErrors.length === 0, consoleErrors);
+      continue;
+    }
     if (scenario !== "full") { await capture(`${theme}-${scenario}`); continue; }
     await until("document.querySelectorAll('[data-task-nav]').length === 3", "real task tree");
     await capture(`${theme}-navigation`);

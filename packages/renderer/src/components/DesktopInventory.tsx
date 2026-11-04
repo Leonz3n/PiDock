@@ -491,7 +491,12 @@ export function DesktopInventory() {
     projects={shellProjects}
     projectsInitialized={data?.projectsInitialized ?? true}
     unassignedCount={lifecycleReady ? data?.associations.filter((row) => row.projectId === null).length ?? 0 : null}
-    onNewTask={() => { setActiveTask(null); setSessionFocus(undefined); setManage(true); setCreationEntry((value) => value + 1); setActionError(null); }}
+    onNewTask={() => {
+      navigate(selection.kind === "project" ? { view: "project", projectId: selection.id } : { view: "unassigned" });
+      setSessionFocus(undefined);
+      setManage(true);
+      setCreationEntry((value) => value + 1);
+    }}
     management={localPage === "capabilities" ? <DesktopCapabilitiesPage taskId={activeTask?.id ?? null} taskName={activeTask?.name ?? null} onBack={() => setLocalPage(null)} />
       : localPage === "settings" ? <DesktopSettingsPage taskName={activeTask?.name ?? null} onBack={() => setLocalPage(null)} /> : undefined}
     onNewWorkspace={openCreateWorkspace}
