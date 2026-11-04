@@ -116,7 +116,6 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
             <strong className="text-[12px] text-ink">待批准：{approvalToolLabel(approval.tool)}</strong>
             <Badge variant="soft">{approval.tool}</Badge>
             <span data-testid="desktop-approval-session" className="text-[10px] text-muted">会话 · {approval.sessionId}</span>
-            <span data-testid="desktop-approval-version" className="ml-auto text-[10px] text-muted">载荷版本 · {approval.payloadVersion}</span>
           </div>
           <p data-testid="desktop-approval-target" className="mt-0.5 break-all text-[11px] text-ink">目标：{approval.target || "（Host 未记录目标）"}</p>
           {approval.operation !== null && (
@@ -124,6 +123,7 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
           )}
           <p data-testid="desktop-approval-real-target" className="mt-0.5 break-all text-[11px] text-ink">{approvalRealTargetText(approval)}</p>
           <details className="mt-1 text-[10px] text-muted"><summary className="cursor-pointer">安全边界与拒绝原因</summary>
+          <p data-testid="desktop-approval-version" className="break-all">载荷版本 · {approval.payloadVersion}</p>
           <p data-testid="desktop-approval-impact" className="mt-0.5 break-words text-[10px] leading-4 text-muted">{APPROVAL_IMPACT_TEXT}</p>
           <p data-testid="desktop-approval-shared" className="break-words text-[10px] leading-4 text-muted">{SHARED_ROOT_IMPACT_TEXT}</p>
           <p data-testid="desktop-approval-expiry" className="break-words text-[10px] leading-4 text-muted">{APPROVAL_EXPIRY_TEXT}</p>
@@ -149,7 +149,8 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
         <ul data-testid="desktop-approval-settled" className="mt-1 flex flex-col gap-0.5">
           {settled.map((approval) => (
             <li key={approval.approvalId} data-testid={`desktop-approval-settled-${approval.approvalId}`} className="break-words text-[10px] text-muted">
-              {approvalToolLabel(approval.tool)} · {approvalStatusText(approval)} · 会话 {approval.sessionId} · 载荷版本 {approval.payloadVersion}
+              {approvalToolLabel(approval.tool)} · {approvalStatusText(approval)} · 会话 {approval.sessionId}
+              <details className="inline-block pl-1 align-top"><summary className="cursor-pointer">载荷版本</summary><span className="break-all">{approval.payloadVersion}</span></details>
               {approval.foreign ? " · 其他会话的确认，本页不代确认" : ""}
             </li>
           ))}

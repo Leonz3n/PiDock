@@ -1319,12 +1319,12 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
         // 渲染为芯片，正文不再把这段尾注当作用户打字。无法解析时整条消息原样显示。
         const parsed = message.role === "user" ? splitPromptContext(message.text) : { text: message.text, references: [] };
         return (<article key={index} className="min-w-0 text-[13px]"><ChatMessage><MessageContent>
-        <MessageHeader className="gap-2 px-0">
+        <MessageHeader className="gap-2 px-0 text-[12px] below-mid:text-[11px]">
           {message.role === "user" ? <LocalUserAvatar /> : <BrandMark size="sm" />}
           <span className="font-semibold text-ink">{message.role === "user" ? "你" : "Pi"}</span>
         </MessageHeader>
         <Bubble variant={message.role === "user" ? "outline" : "ghost"} className="w-full"><BubbleContent className="w-full">
-          {message.role === "assistant" ? <ConversationMarkdown text={parsed.text} /> : <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{parsed.text}</p>}
+          {message.role === "assistant" ? <ConversationMarkdown text={parsed.text} /> : <p className="whitespace-pre-wrap break-words text-[13px] below-mid:text-[11px] [overflow-wrap:anywhere]">{parsed.text}</p>}
         </BubbleContent></Bubble>
         {parsed.references.length > 0 && <div data-testid="history-references" className="mt-1 min-w-0">
           <ul className="flex min-w-0 flex-wrap gap-1.5">
@@ -1337,7 +1337,7 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
           </ul>
           <p className="mt-1 text-[11px] text-muted">本条消息附带以上来源；Host 附带的是身份清单，内容由 Agent 用工具读取。</p>
         </div>}
-        {message.usage && <p className="mt-1 text-xs text-muted">SDK 用量 · 输入 {message.usage.input} / 输出 {message.usage.output} / 缓存读取 {message.usage.cacheRead} / 写入 {message.usage.cacheWrite}</p>}
+        {message.usage && <details className="mt-1 text-[10px] text-muted"><summary className="cursor-pointer">用量</summary><p>SDK 用量 · 输入 {message.usage.input} / 输出 {message.usage.output} / 缓存读取 {message.usage.cacheRead} / 写入 {message.usage.cacheWrite}</p></details>}
       </MessageContent></ChatMessage></article>);
       })}
       {stream && <article className="min-w-0 border-l-2 border-ink pl-3 text-sm"><p className="mb-1 text-xs text-muted">暂存回复 · 尚未核验</p><ConversationMarkdown text={stream} /></article>}
