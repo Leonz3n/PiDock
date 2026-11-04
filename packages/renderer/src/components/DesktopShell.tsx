@@ -180,7 +180,7 @@ export function DesktopShell({
         <label className="shell-nav-label mb-3 flex h-[30px] shrink-0 items-center gap-1.5 rounded-md border border-line bg-paper px-2 text-muted"><Icon name="search" /><input type="search" aria-label="过滤任务与会话" placeholder="过滤任务与会话…" value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[11px] outline-none" /></label>
         <nav aria-label="主导航" className="flex min-h-0 flex-1 flex-col">
           <div className="shell-tree min-h-0 flex-1 overflow-y-auto" role="group" aria-label="工作空间与任务">
-            <div className="mb-2 flex items-center justify-between px-1 text-[11px] text-muted"><span>工作空间与任务树</span>{onNewWorkspace && <Button type="button" variant="ghost" size="icon-sm" aria-label="新建工作空间" title="新建工作空间" onClick={() => { setRailExpanded(false); onNewWorkspace(); }}><Icon name="plus" /></Button>}</div>
+            <div className="mb-2 flex items-center justify-between px-1 text-[11px] text-muted"><span>工作空间与任务树</span>{onNewWorkspace && <Button type="button" variant="ghost" size="icon-sm" aria-label="新建工作空间" title="新建工作空间" onClick={onNewWorkspace}><Icon name="plus" /></Button>}</div>
             {projects.map((project) => {
               const open = Boolean(needle) || !collapsed.has(project.id);
               return <div key={project.id} data-workspace-tree={project.id}>
