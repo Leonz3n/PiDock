@@ -319,7 +319,16 @@ export function createLifecycleResources(input: LifecycleResourceInput): TaskLif
     originalCheckoutPaths: () => {
       const record = recordOf(input);
       if (!record) return [];
-      return [record.root];
+      // [T12] #147 the ORIGINAL checkout is the source repository a worktree was
+      // derived from, never `record.root`: with the production task-root layout
+      // `record.root` is the PARENT of every task directory, so returning it made
+      // every managed worktree look like it was "inside the original checkout" and
+      // the destructive cleanup refused every removal while still reporting a
+      // success receipt. Records written before the source binding existed keep
+      // the old fallback so nothing becomes removable that was not removable then.
+      const sources = (record.repoSources ?? []).flatMap((source) =>
+        [source.sourceRealPath, source.sourcePath].filter((path): path is string => typeof path === "string" && path.length > 0));
+      return sources.length > 0 ? sources : [record.root];
     },
     otherTaskDirs: () => otherTaskDirs(input),
     delivery: () => deliveryOf(input),
@@ -343,18 +352,34 @@ export function createLifecycleResources(input: LifecycleResourceInput): TaskLif
       if (!record) return { ok: false, reason: "任务记录缺失，拒绝移除工作副本" };
       const registered = worktreesOf(input).some((worktree) => worktree.repoDir === repoDir);
       if (!registered) return { ok: false, reason: `${repoDir} 不在本任务登记的工作副本中，拒绝移除` };
-      try {
-        execFileSync("git", ["-C", record.root, "worktree", "remove", "--force", repoDir], {
-          encoding: "utf8",
-          timeout: 20_000,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-          stdio: ["ignore", "pipe", "ignore"],
-        });
-      } catch (error) {
-        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      // [T12] #147 `git worktree remove` must run inside the repository that OWNS
+      // the worktree. `record.root` is the task ROOT (the parent of every task
+      // directory), not a repository, so it cannot address the worktree: use the
+      // recorded source checkout first and keep the record root only as the
+      // legacy fallback for records written before the source binding existed.
+      const source = (record.repoSources ?? []).find((row) => join(record.taskDir, row.repoDir) === repoDir);
+      const candidates = [source?.sourceRealPath, source?.sourcePath, record.root]
+        .filter((path): path is string => typeof path === "string" && path.length > 0)
+        .filter((path, index, all) => all.indexOf(path) === index);
+      let lastError = "";
+      for (const cwd of candidates) {
+        try {
+          execFileSync("git", ["-C", cwd, "worktree", "remove", "--force", repoDir], {
+            encoding: "utf8",
+            timeout: 20_000,
+            env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          lastError = "";
+          break;
+        } catch (error) {
+          const stderr = (error as { stderr?: unknown }).stderr;
+          lastError = `${cwd}: ${String(stderr ?? (error instanceof Error ? error.message : error)).trim()}`;
+        }
       }
+      if (lastError.length > 0) return { ok: false, reason: lastError };
       if (existsSync(repoDir)) return { ok: false, reason: `${repoDir} 移除后仍然存在，保留恢复入口` };
-      return { ok: true, reason: `已移除受管工作副本 ${repoDir}，原仓库 ${record.root} 保留` };
+      return { ok: true, reason: `已移除受管工作副本 ${repoDir}，原仓库 ${candidates[0] ?? ""} 保留` };
     },
     // [#117 第 5 项] No `browserPages` probe: the persistent partition is
     // main's, so page/retention facts reach the lifecycle state machine as an

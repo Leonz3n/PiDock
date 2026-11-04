@@ -148,39 +148,57 @@ it("shows cleanup preview details and selection returned by Host", async () => {
   });
 });
 
-it("does not call runCleanup when the user cancels the destructive confirmation", async () => {
+it("[T12] #147 the destructive confirmation is an in-app dialog, not a native modal", async () => {
   const taskOp = cleanupBridge();
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  // The native modal blocked the renderer (the click that opened it never
+  // returned), so the page must never reach for it.
+  const nativeConfirm = vi.spyOn(window, "confirm");
   render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
   await openHostPreview();
   const callsBeforeConfirmation = taskOp.mock.calls.length;
   fireEvent.click(screen.getByRole("button", { name: "确认清理" }));
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Host 将删除 3 个会话"));
+  const dialog = await screen.findByRole("dialog", { name: "确认清理任务" });
+  expect(dialog).toHaveTextContent("Host 将删除 3 个会话");
+  expect(nativeConfirm).not.toHaveBeenCalled();
   expect(taskOp).toHaveBeenCalledTimes(callsBeforeConfirmation);
   expect(taskOp.mock.calls.some(([, op]) => op === "task/runCleanup")).toBe(false);
+});
+
+it("[T12] #147 cancelling the in-app confirmation runs nothing and keeps the preview", async () => {
+  const taskOp = cleanupBridge();
+  render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
+  await openHostPreview();
+  const callsBeforeConfirmation = taskOp.mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: "确认清理" }));
+  fireEvent.click(await screen.findByRole("button", { name: "取消" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "确认清理任务" })).toBeNull());
+  expect(taskOp).toHaveBeenCalledTimes(callsBeforeConfirmation);
+  expect(taskOp.mock.calls.some(([, op]) => op === "task/runCleanup")).toBe(false);
+  expect(screen.getByRole("region", { name: "任务 A清理预览" })).toBeInTheDocument();
 });
 
 it("does not claim an incomplete Host preview has no destructive items", async () => {
   const incompletePreview = { ...preview, items: preview.items.map(({ disposition: _disposition, ...item }) => item) };
   const taskOp = cleanupBridge(undefined, { ok: true, payload: { preview: incompletePreview } });
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: "清理…" }));
   fireEvent.click(screen.getByRole("button", { name: "生成清单" }));
   expect(await screen.findByText("Host 未上报将删除项目")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "确认清理" }));
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Host 预览将删除：Host 未上报将删除项目"));
+  const dialog = await screen.findByRole("dialog", { name: "确认清理任务" });
+  expect(dialog).toHaveTextContent("Host 预览将删除：Host 未上报将删除项目");
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
   expect(taskOp.mock.calls.some(([, op]) => op === "task/runCleanup")).toBe(false);
 });
 
 it("shows the Host cleanup receipt and refreshes the archived list after execution", async () => {
   const taskOp = cleanupBridge();
   const onRestored = vi.fn();
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={onRestored} />);
   await openHostPreview();
   fireEvent.click(screen.getByRole("button", { name: "确认清理" }));
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Host 将删除 3 个会话"));
+  fireEvent.click(await screen.findByRole("button", { name: "执行清理" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "确认清理任务" })).toBeNull());
   const panel = screen.getByRole("region", { name: "任务 A清理预览" });
   await waitFor(() => expect(panel).toHaveTextContent("实际移除：sessions"));
   expect(panel).toHaveTextContent("保留位置：/host/kept/task-a");
@@ -195,10 +213,10 @@ it("shows the Host cleanup receipt and refreshes the archived list after executi
 it("shows a Host cleanup refusal verbatim without reporting success", async () => {
   const refusal = "permission-denied: 清理只允许界面显式操作，不能由 Agent 会话发起";
   const taskOp = cleanupBridge({ ok: false, error: refusal });
-  vi.spyOn(window, "confirm").mockReturnValue(true);
   render(<DesktopArchivePage tasks={[tasks[0]!]} onRestored={() => {}} />);
   await openHostPreview();
   fireEvent.click(screen.getByRole("button", { name: "确认清理" }));
+  fireEvent.click(await screen.findByRole("button", { name: "执行清理" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(refusal);
   expect(screen.queryByText("清理已执行")).toBeNull();
   expect(taskOp.mock.calls.some(([, op]) => op === "task/runCleanup")).toBe(true);
