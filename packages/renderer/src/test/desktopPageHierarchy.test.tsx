@@ -21,7 +21,7 @@ const bridge = (): PidockBridge => ({
   }),
   projectOp: vi.fn(async (request) => {
     if (request.op === "list") return { ok: true, payload: { initialized: true, projects: [project] } };
-    if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: null, state: "unassigned" }] } };
+    if (request.op === "associations") return { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: project.id, state: "assigned" }] } };
     return { ok: true, payload: { id: "ced35ecc-2d27-4ff8-a3cb-02dc5900e7a9" } };
   }),
 });
@@ -108,4 +108,21 @@ it("keeps the verified facts destination while a direct-session task identity re
   expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
   release?.();
   expect(await screen.findByTestId("desktop-conversation")).toBeVisible();
+});
+
+it("returning from a directly selected task opens its owning workspace", async () => {
+  const api = bridge();
+  const other = { ...project, id: "6fd712ce-a43b-4614-a459-de81d78a16aa", name: "任务所属工作空间" };
+  const original = api.projectOp!;
+  api.projectOp = vi.fn(async (request) => request.op === "list"
+    ? { ok: true, payload: { initialized: true, projects: [project, other] } }
+    : request.op === "associations" ? { ok: true, payload: { roots, tasks: [{ taskId: "real-1", projectId: other.id, state: "assigned" }] } } : original(request));
+  window.pidock = api;
+  render(<App />);
+  await screen.findByTestId("desktop-project-overview");
+  expect(screen.getByTestId("overview-title")).toHaveTextContent("真实项目");
+  fireEvent.click(await sidebar().findByRole("button", { name: "真实任务" }));
+  await screen.findByTestId("desktop-task-facts");
+  fireEvent.click(screen.getByRole("button", { name: "返回工作空间总览" }));
+  expect(await screen.findByTestId("overview-title")).toHaveTextContent(other.name);
 });

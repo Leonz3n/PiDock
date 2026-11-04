@@ -464,6 +464,10 @@ export function DesktopInventory() {
   const activeProject = activeTask
     ? shellProjects.find((project) => project.id === shellTasks.find((task) => task.taskId === activeTask.id)?.projectId)
     : undefined;
+  const returnToWorkspace = () => {
+    navigate(activeProject ? { view: "project", projectId: activeProject.id } : { view: "unassigned" });
+    void load();
+  };
   // #24: the task header's branch / repository-count chips read the SAME
   // `listTasks` row the sidebar card renders (`shellTasks`), so the two surfaces
   // cannot disagree and no second read is issued. A row that is absent (or a
@@ -515,7 +519,7 @@ export function DesktopInventory() {
     breadcrumb={breadcrumb}
     headerActions={activeTask && !conversationOpen ? <>
       <Button type="button" size="sm" variant="default" disabled={factsActiveSession?.taskId !== activeTask.id || factsActiveSession.sessionId === null} onClick={() => { if (factsActiveSession?.sessionId) { setSessionFocus(factsActiveSession.sessionId); setConversationOpen(true); } }}>进入活跃对话</Button>
-      <Button type="button" size="sm" variant="outline" onClick={() => { entryEpoch.current++; setActiveTask(null); void load(); }}>返回工作空间总览</Button>
+      <Button type="button" size="sm" variant="outline" onClick={returnToWorkspace}>返回工作空间总览</Button>
     </> : !activeTask && !manage && !usageOpen && !schedulesOpen && !archiveOpen && !attentionOpen && !environmentOpen && selection.kind === "project" ? <>
       <Button type="button" size="sm" variant="default" onClick={() => { setManage(true); setCreationEntry((value) => value + 1); }}>在此工作空间新建任务</Button>
       <Button type="button" size="sm" variant="outline" onClick={() => openEditWorkspace(selection.id)}>添加来源仓库/目录</Button>
@@ -564,7 +568,7 @@ export function DesktopInventory() {
     </div>
   </div> : <DesktopTaskFacts headerInShell onActiveSession={reportActiveSession} taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge}
     onOpenSession={(sessionId) => { setSessionFocus(sessionId); setConversationOpen(true); }}
-    onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }}
+    onBack={returnToWorkspace}
     onRepair={() => { if (activeProject) openEditWorkspace(activeProject.id); }} />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
     <div className="w-full max-w-[620px]">
