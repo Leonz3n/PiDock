@@ -15,13 +15,14 @@ const arg = (key, fallback) => process.argv.includes(key) ? process.argv[process
 const [width, height] = arg("--size", "1440x900").split("x").map(Number);
 const scenario = arg("--scenario", "full");
 const repo = resolve(import.meta.dirname, "../../..");
-const output = join(repo, "docs/evidence/pencil-ui-u02", ...(scenario === "navigation" ? ["fix1"] : []));
-const root = mkdtempSync(join(tmpdir(), "pidock-ui-u02-"));
+const reusedRoot = arg("--reuse-root", "");
+const output = join(repo, "docs/evidence/pencil-ui-u02", ...(reusedRoot ? ["restart"] : []));
+const root = reusedRoot || mkdtempSync(join(tmpdir(), "pidock-ui-u02-"));
 const profile = join(root, "profile");
 const taskRoot = join(root, "tasks");
 const agentDir = join(root, "agent");
 for (const path of [profile, taskRoot, agentDir, output]) mkdirSync(path, { recursive: true });
-app.setPath("userData", profile);
+app.setPath("userData", reusedRoot ? join(root, "chromium-restart") : profile);
 process.env.PIDOCK_AGENT_DIR = agentDir;
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 const assertions = [], shots = [], calls = [], consoleErrors = [];
@@ -59,6 +60,10 @@ async function run() {
   const projects = new ProjectRegistry(profile);
   const source = join(root, "sources", "pidock-source");
   const directory = join(root, "sources", "shared-directory-with-a-long-name-for-path-wrapping");
+  const fixture = reusedRoot ? JSON.parse(readFileSync(join(root, "fixture.json"), "utf8")) : null;
+  let workspace;
+  if (fixture) workspace = projects.get(fixture.workspaceId);
+  else {
   mkdirSync(source, { recursive: true }); mkdirSync(directory, { recursive: true });
   const git = (args) => execFileSync("git", args, { cwd: source, encoding: "utf8" }).trim();
   git(["init", "-q", "-b", "main"]);
@@ -67,7 +72,9 @@ async function run() {
   const remote = join(root, "remote.git");
   execFileSync("git", ["clone", "-q", "--bare", source, remote]);
   git(["remote", "add", "origin", remote]);
-  const workspace = await projects.create({ name: "PiDock 核心开发", description: "U02 真实生产工作空间分层验收", repositories: [{ name: "pidock", path: source }], directories: [{ name: "common-configs", path: directory }], environment: [{ key: "NODE_ENV", value: "development" }], branchTemplate: "feature/{taskId}" });
+    workspace = await projects.create({ name: "PiDock 核心开发", description: "U02 真实生产工作空间分层验收", repositories: [{ name: "pidock", path: source }], directories: [{ name: "common-configs", path: directory }], environment: [{ key: "NODE_ENV", value: "development" }], branchTemplate: "feature/{taskId}" });
+  }
+  if (!workspace) throw Error("persisted workspace missing on restart");
   const taskVariables = new TaskVariableStore(profile);
   const taskEnvironment = (id) => {
     const association = projects.association(id, index);
@@ -93,15 +100,19 @@ async function run() {
   registerIpc(createUnavailableHostClient(), views.registry, registry, projects, index, undefined, creation, providers, catalog, undefined, undefined, taskVariables);
   const origin = { kind: /** @type {const} */ ("shell-ui"), senderWebContentsId: views.shellView.webContents.id };
   creation.saveDeliverySettings({ branchTemplate: "feature/{taskId}", remote: "origin" });
-  const tasks = [];
+  const tasks = fixture?.tasks ?? [];
+  if (!fixture) {
   for (const [mode, name] of /** @type {Array<[import("../dist/main/project-task-creation.js").CreationRequest["workspaceMode"], string]>} */ ([["worktree", "修复结算对账分页边界"], ["existing-git", "已有 Git 目录任务"], ["plain-dirs", "普通目录任务"], ["plain-dirs", "空会话任务"]])) {
     const intent = await creation.prepare({ projectId: workspace.id, name, repositories: mode === "plain-dirs" ? [] : [{ sourceId: workspace.repositories[0].id, remote: "origin", remoteBranch: "main" }], directoryIds: [workspace.directories[0].id], sharedWriteConfirmed: true, override: false, workspaceMode: mode });
     tasks.push({ ...await creation.commit(intent.id), name, mode: name === "空会话任务" ? "empty" : mode });
   }
   await registry.routeTaskOp({ taskId: tasks[3].taskId, op: "task/sessionDelete", payload: { sessionId: "main" }, origin });
-  const first = tasks[0];
-  const second = await registry.routeTaskOp({ taskId: first.taskId, op: "task/sessionCreate", payload: { name: "边界复核会话" }, origin });
+  const second = await registry.routeTaskOp({ taskId: tasks[0].taskId, op: "task/sessionCreate", payload: { name: "边界复核会话" }, origin });
   check("real Host creates another independent session", Boolean(second.payload?.session), second);
+  writeFileSync(join(root, "fixture.json"), JSON.stringify({ workspaceId: workspace.id, tasks, recordHashes: tasks.map(task => hash(join(taskRoot, task.taskId, "task.json"))) }));
+  }
+  const first = tasks[0];
+  if (fixture) check("fresh process restores original task records", tasks.every((task, index) => hash(join(taskRoot, task.taskId, "task.json")) === fixture.recordHashes[index]));
   const recordsBefore = tasks.map(task => readFileSync(join(taskRoot, task.taskId, "task.json"), "utf8"));
   await loadTrustedViews(views);
   const wc = views.shellView.webContents;
@@ -159,8 +170,18 @@ async function run() {
       await until("document.querySelector('[data-testid=task-facts-mode]') && document.querySelector('[data-testid=task-facts-sessions]')?.textContent.includes('个')", "task facts");
       await until(`document.querySelector('[data-testid=desktop-breadcrumb]')?.innerText.includes(${JSON.stringify(task.name)}) && document.querySelector('[data-testid=desktop-task-facts]')?.innerText.includes('已核验')`, "Host verifies the selected task sources");
       check(`${theme}: ${task.mode} uses Host verified sources`, true);
+      if (task.mode === "empty") await until("document.querySelector('[data-testid=desktop-task-facts]')?.innerText.includes('此任务尚无会话')", "empty list resolved");
       if (task.mode === "empty") check(`${theme}: empty session history is honest`, await evaluate("document.querySelector('[data-testid=desktop-task-facts]').innerText.includes('此任务尚无会话')"));
       await capture(`${theme}-${task.mode}-facts`);
+      if (task.mode === "empty") {
+        await click("在当前任务工作区中新建会话（全新上下文）");
+        await until("document.querySelector('textarea[aria-label=消息]')", "explicit new session conversation");
+        const created = await registry.routeTaskOp({ taskId: task.taskId, op: "task/sessionList", payload: {}, origin });
+        check(`${theme}: explicit creation owns one real session`, Array.isArray(created.payload?.sessions) && created.payload.sessions.length === 1 && Boolean(created.payload?.activeSessionId), created);
+        await capture(`${theme}-new-session`);
+        await sidebarClick(workspace.name);
+        await registry.routeTaskOp({ taskId: task.taskId, op: "task/sessionDelete", payload: { sessionId: created.payload.activeSessionId }, origin });
+      }
     }
     await sidebarClick(first.name);
     await until("[...document.querySelectorAll('button')].some(el=>el.getAttribute('aria-label')==='进入对话 · 边界复核会话')", "named session entry");
