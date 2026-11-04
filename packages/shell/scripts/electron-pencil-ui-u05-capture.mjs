@@ -288,7 +288,7 @@ async function run() {
       await click("保存");
     } else await click("返回列表");
     await until("document.querySelectorAll('[data-testid=mcp-row]').length===3", "saved HTTP MCP");
-    await evaluate("[...document.querySelectorAll('[data-testid=mcp-row]')].find(el=>el.innerText.includes('Streamable HTTP 工具')).querySelector('button').click();true");
+    await evaluate("[...[...document.querySelectorAll('[data-testid=mcp-row]')].find(el=>el.innerText.includes('Streamable HTTP 工具')).querySelectorAll('button')].find(el=>el.textContent.trim()==='测试').click();true");
     await until("document.querySelector('[data-testid=mcp-test-result][data-state=connected]')?.innerText.includes('http_echo')", "real Streamable HTTP connected");
     await capture(`${theme}-mcp-http-connected`);
     await pane("Skills");
