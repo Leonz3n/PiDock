@@ -75,6 +75,8 @@ const readJson = (path, fallback = null) => { try { return JSON.parse(readFileSy
 
 const children = [];
 const hostPids = [];
+/** The real UtilityProcess behind each `hostPids` row, so a pid read can never be a stale copy. */
+const hostProcs = new WeakMap();
 // Every Host TRANSPORT call this process made, including the ones `quitAll`
 // issues directly (it bypasses the registry's op seam), so the explicit-quit
 // receipt (`abortedTurns`) is real evidence and not a restatement of the UI.
@@ -269,7 +271,7 @@ async function run() {
   const { TaskRootIndex } = await import("../dist/main/task-root-index.js");
   const { ProjectRegistry } = await import("../dist/main/project-registry.js");
   const { ServiceCatalog, serviceCatalogAuthority } = await import("../dist/main/service-catalog.js");
-  const { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc } = await import("../dist/main/runtime.js");
+  const { createTrustedWindow, loadTrustedViews, PerTaskHostRegistry, registerIpc, createHostStopper } = await import("../dist/main/runtime.js");
   const { CreationIntentStore, ProjectTaskCreation } = await import("../dist/main/project-task-creation.js");
   const { performCreationOperation } = await import("../dist/main/project-task-ipc.js");
   const { WorktreeMetadataLock } = await import("../dist/main/worktree-metadata-lock.js");
@@ -282,7 +284,7 @@ async function run() {
   const { TaskVariableStore, resolveTaskVariables, variableEnvironment } = await import("../dist/main/workspace-variables.js");
   const { HostClient } = await import("../dist/rpc/host-client.js");
   const { readTaskRecordOnDisk } = await import("../dist/host/task-store.js");
-  const { buildHostEnv } = await import("../dist/host/host-guards.js");
+  const { buildHostEnv, serviceExecutionAdmitted } = await import("../dist/host/host-guards.js");
   const { registerApplicationLifecycle } = await import("../dist/main/application-lifecycle.js");
   const { ScheduleDriver } = await import("../dist/main/schedule-driver.js");
   const { QuitReportStore, SchedulerGate } = await import("../dist/main/schedule-supervision.js");
@@ -304,6 +306,20 @@ async function run() {
   } else {
     for (const path of [profile, taskRoot, agentDir, outDir, app.getPath("userData")]) if (!existsSync(path)) mkdirSync(path, { recursive: true });
     providerState.port = state.loopbackPort ?? (await freePort());
+  }
+  // Every phase ends this process with `app.exit()` (the kill phase with a real
+  // SIGKILL), so a previous phase's owner authority never reaches `dispose()`
+  // and leaves its durable exclusive writer lock behind. The authority is the
+  // real `InstalledServiceHostAuthority` over this app's own userData, and it
+  // fails closed on a taken lock (`service-recovery-unavailable` -> an
+  // unbootstrappable Host inventory -> `service-owner-shutdown-unconfirmed` at
+  // quit). Phases run one Electron process at a time against this fixed temp
+  // root, so a lock observed here was left by a dead process: remove it and say
+  // so, instead of silently fencing the owner bootstrap.
+  const ownerLock = join(app.getPath("userData"), "service-execution-recovery", "writer.lock");
+  if (existsSync(ownerLock)) {
+    rmSync(ownerLock, { force: true });
+    console.log("T18_DEBUG_ORPHAN_OWNER_LOCK_REMOVED=" + ownerLock);
   }
   providerState.server = await startProvider(providerState.port);
   stage = "whenReady";
@@ -367,11 +383,20 @@ async function run() {
     const entry = join(import.meta.dirname, "..", "dist", "host", "host-entry.js");
     const child = utilityProcess.fork(entry, [], {
       serviceName: `${workspaceId}-host`,
-      env: { ...buildHostEnv(process.env, workspace, task, profile, undefined, process.platform, variables), PIDOCK_MCP_CONFIG: nativeMcp.path },
+      env: { ...buildHostEnv(process.env, workspace, task, profile, undefined, process.platform, variables), PIDOCK_MCP_CONFIG: nativeMcp.path,
+        // Exactly `createHost` in `main/runtime.ts`: where service execution is
+        // admitted, main owns the Host's service-owner inventory, so the Host
+        // must fail closed on an unverified inventory until main bootstraps it.
+        ...(task && serviceExecutionAdmitted() ? { PIDOCK_SERVICE_OWNER_REQUIRED: "1" } : {}) },
       stdio: "pipe",
     });
     children.push(child);
-    hostPids.push({ taskId: task?.taskId ?? null, pid: child.pid, at: new Date().toISOString() });
+    // `pid` is only guaranteed once the utility process really spawned, so the row
+    // is filled from the spawn event instead of reading it at fork time.
+    const hostRow = { taskId: task?.taskId ?? null, pid: child.pid, at: new Date().toISOString() };
+    if (hostRow.pid === undefined) child.once("spawn", () => { hostRow.pid = child.pid; });
+    hostProcs.set(hostRow, child);
+    hostPids.push(hostRow);
     child.stderr?.on("data", (data) => process.stderr.write(`[${workspaceId}-host ${task?.taskId ?? ""}] ${data}`));
     const client = new HostClient(child);
     const originalTask = client.task.bind(client);
@@ -498,13 +523,21 @@ async function run() {
     // harness clock choice so the REAL timer can be observed while the window is
     // closed and while the machine is "asleep"; it changes nothing else.
   }, { intervalMs: 1000 });
-  stopHostsBase = async () => {
-    const report = await registry.quitAll({ origin: { kind: "shell-ui", senderWebContentsId: sender() }, label: "应用退出" });
+  // The quit path is `main.ts`'s: `createHostStopper` (quit report) followed by
+  // `registry.disposeAll()` (observed exits + owner-authority disposal), so a
+  // clean quit also releases the durable owner writer lock and a refused one
+  // retains everything. The report is captured at the seam so the log still
+  // carries the receipt `quitAll` memoized.
+  const observedQuitAll = registry.quitAll.bind(registry);
+  registry.quitAll = async (input) => {
+    const report = await observedQuitAll(input);
     lastQuitReport = report;
     log.identity.quitReport = report;
     console.log("T18_QUIT_REPORT=" + JSON.stringify(report).slice(0, 4000));
-    return report.ok === true;
+    return report;
   };
+  stopHostsBase = createHostStopper(registry, { kind: "shell-ui", senderWebContentsId: sender() },
+    async () => { await registry.disposeAll(); });
   // The gate owns the quit window exactly as `main.ts` does. A refused quit puts
   // scheduling back AND records the refusal for the next start.
   const gatedStopHosts = async () => {
@@ -1197,8 +1230,13 @@ async function run() {
           check("the quit report proves every Host stopped (report.ok true, no retained task)",
             report?.ok === true && (report?.tasks ?? []).every((task) => task.ok === true && task.retainedTasks.length === 0),
             JSON.stringify(report).slice(0, 1200));
-          check("the Host's own task/quit receipt aborted the live SDK turn (abortedTurns names the session)",
-            aborted.length >= 1 && aborted.includes("main"), JSON.stringify(aborted));
+          // `abortedTurns` names the Host's own turn ids; the durable journal for
+          // the request this phase started carries that turn id, so the receipt is
+          // proven to have aborted THIS live turn.
+          const liveJournal = readJson(join(recordOf(scheduleTaskId).taskDir, ".pidock-sdk-turns", "main", `${requestId}.json`), null);
+          check("the Host's own task/quit receipt aborted the live SDK turn (abortedTurns names that turn's own id)",
+            aborted.length >= 1 && liveJournal?.turnId !== undefined && aborted.includes(liveJournal.turnId),
+            JSON.stringify({ aborted, turnId: liveJournal?.turnId ?? null }));
           check("a quit that confirmed every Host leaves NO unconfirmed-quit report behind",
             quitReports.pending() === null, JSON.stringify(quitReports.pending()));
         } catch (error) {
@@ -1206,7 +1244,14 @@ async function run() {
           log.assertions.push({ name: "quitok verification", ok: false, detail: String(error).slice(0, 900) });
         }
         writeLog("quitok-log.json");
+        // A confirmed quit carried a failed assertion: keep the receipt but make
+        // the process exit code say so instead of reporting a green phase.
+        if (log.assertions.some((entry) => entry.ok !== true)) { exiting = true; app.exit(1); }
       });
+      // One PNG of the state being quit: the task page with that turn live.
+      stage = "quit:capture the live turn";
+      await gotoTask(scheduleTaskId).catch(() => undefined);
+      await capture("t18-09-quit-live-turn").catch(() => undefined);
       stage = "quit:app.quit()";
       const quitAt = Date.now();
       console.log("T18_DEBUG_QUITOK=" + JSON.stringify({ holds: providerState.holds, turn: live?.turn?.state ?? null }));
@@ -1223,8 +1268,20 @@ async function run() {
         if (row.journal !== null && row.journal !== "accepted") break;
       }
       log.identity.quitTimeline = timeline;
+      // A confirmed quit converges on its own: `will-quit` writes the receipt and
+      // Electron exits this process. Only a quit that stayed alive falls through
+      // to the evidence exit below.
+      if (lastQuitReport?.ok === true) {
+        log.findings.push({ kind: "explicit-quit-confirmed",
+          detail: "app.quit() aborted the live model turn and the Host quit receipt confirmed every task (report.ok true, no retained task, Host abortedTurns names the live session), so the app exits instead of persisting an unconfirmed-quit record",
+          lastQuitReport, timeline });
+        writeLog("quitok-log.json");
+        await wait(20000);
+      }
       log.findings.push({ kind: "explicit-quit-refused",
-        detail: "app.quit() aborted the live model turn (the Host's turn journal went accepted -> cancelled) but the quit was still refused: the Host's own quit receipt named service-owner-shutdown-unconfirmed for every task, so the app stayed alive and the last-window escalation persisted an unconfirmed-quit record instead",
+        detail: lastQuitReport?.ok === true
+          ? "the quit report confirmed every Host but this process was still alive 20s later, so the phase exited itself with that receipt"
+          : "app.quit() aborted the live model turn but the quit was still refused: a task's quit receipt did not confirm, so the app stayed alive and the last-window escalation persisted an unconfirmed-quit record instead",
         lastQuitReport, timeline });
       writeLog("quitok-log.json");
       exitNow(1, "the explicit quit did not terminate the process");
@@ -1251,13 +1308,24 @@ async function run() {
         bannerBefore === false, String(bannerBefore));
       stage = "failedquit:make the next quit impossible";
       const host = hostPids.filter((row) => row.taskId === scheduleTaskId).at(-1);
-      check("the task Host process is known before it is killed", host !== undefined && typeof host.pid === "number", JSON.stringify(hostPids));
-      process.kill(host.pid, "SIGKILL");
+      // Read the pid from the real UtilityProcess: the row keeps its own copy, and a
+      // Host forked moments ago may not have reported one yet.
+      const hostPid = host?.pid ?? hostProcs.get(host)?.pid;
+      check("the task Host process is known before it is killed", typeof hostPid === "number", JSON.stringify({ host, hostPid }));
+      process.kill(hostPid, "SIGKILL");
       await wait(800);
       stage = "failedquit:app.quit() must be refused";
       const exitBefore = app.isReady();
       app.quit();
-      await wait(6000);
+      // Main's own `task/quit` RPC to a Host that is already gone only settles when
+      // its call budget expires, so wait for the real receipt instead of assuming a
+      // fixed delay; the phase then asserts the settled refusal below.
+      let settled = true;
+      try { await untilMain(async () => lastQuitReport !== null, "the quit report after the Host is already gone", 1500); }
+      catch { settled = false; }
+      check("the quit that could not stop a Host really settled as a refusal (it did not stay in flight)",
+        settled && lastQuitReport?.ok === false, JSON.stringify({ settled, quitReport: lastQuitReport }).slice(0, 1200));
+      await wait(500);
       const pending = quitReports.pending();
       const stateAfter = gate.view();
       log.identity.failedQuit = { pending, phase: stateAfter.phase, driverRunning: schedulesDriver.running, quitReport: lastQuitReport };
