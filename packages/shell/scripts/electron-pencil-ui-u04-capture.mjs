@@ -178,7 +178,7 @@ async function run() {
       const original = JSON.stringify(projects.list());
       for (const close of ['Escape', 'cancel']) {
         // Retain the actual trigger node to prove identity, not just its label.
-        await evaluate("window.__repairOpener = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === '修复路径')");
+        await evaluate("(() => { window.__repairOpener = [...document.querySelectorAll('button')].find(el => el.textContent.trim() === '修复路径'); return true; })()");
         await click('修复路径');
         await until("document.querySelector('[role=dialog]')", 'repair edit dialog');
         check(`${theme} ${close}: repair source gets initial focus`, await evaluate("document.activeElement?.getAttribute('aria-label') === '仓库路径 1'"));
