@@ -370,7 +370,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
     <button className={button} type="button" disabled={busy || !project || !hasSourcesInProject || typeof bridge.createTask !== "function"}
       title={!project ? "请先选择项目" : !hasSourcesInProject ? "当前创建流程至少需要一个仓库或目录" : "创建真实任务"}
       onClick={openForm}><Icon name="plus" />任务</button>
-    {!open && error && <p role={typeof bridge.createTask === "function" ? "alert" : undefined} className="w-full text-xs text-[#ad4545]">{error}</p>}
+    {!open && error && <p role={typeof bridge.createTask === "function" ? "alert" : undefined} className="w-full text-xs text-destructive">{error}</p>}
     {notice && <p role="status" className="w-full text-xs text-muted">{notice}</p>}
     {open && <div role="presentation" onClick={close}
       className="creation-backdrop">
@@ -390,7 +390,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
         </header>
         {error && <p role="alert" className="mt-3 text-xs text-destructive">{error}</p>}
         <div className="mt-4">
-          {!intent && formProjectId && project?.id !== formProjectId && <p role="status" className="mb-2 text-xs text-[#ad4545]">项目选择已变化，请选择原项目或取消后重新创建。</p>}
+          {!intent && formProjectId && project?.id !== formProjectId && <p role="status" className="mb-2 text-xs text-destructive">项目选择已变化，请选择原项目或取消后重新创建。</p>}
           {intent ? <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs text-muted">任务工作区模式：<strong className="text-ink">{WORKSPACE_MODE_LABELS[intent.workspaceMode]}</strong></p>
@@ -426,10 +426,10 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
               <ul className="mt-1 flex list-none flex-col gap-1 p-0">
                 {recovery.repos.map((row) => <li key={row.repoDir} className="break-all text-xs">
                   <span className="font-mono">{row.repoDir}</span> · {PHASE_LABELS[row.phase]} · 任务分支 {hostText(row.branch, "未记录")} · 基线 {hostText(row.baseCommit, "未记录")}
-                  {row.failure && <span className="text-[#ad4545]"> · {row.failure.code}：{row.failure.detail}</span>}
+                  {row.failure && <span className="text-destructive"> · {row.failure.code}：{row.failure.detail}</span>}
                   {row.previousFailure && <span className="text-muted"> · 上一次 {row.previousFailure.code}</span>}
-                  {row.orphan?.adoptable && <span className="text-[#9a6032]"> · 任务分支已存在但无工作树（可显式接管）</span>}
-                  {row.orphan && !row.orphan.adoptable && <span className="text-[#ad4545]"> · 任务分支已存在但不在固定提交上，只能放弃并清理</span>}
+                  {row.orphan?.adoptable && <span className="text-attention"> · 任务分支已存在但无工作树（可显式接管）</span>}
+                  {row.orphan && !row.orphan.adoptable && <span className="text-destructive"> · 任务分支已存在但不在固定提交上，只能放弃并清理</span>}
                 </li>)}
               </ul>
               <p className="mt-1 text-[11px] text-muted">{recovery.message}</p>
@@ -489,7 +489,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
             {scheduled ? <fieldset className="border-0 p-0">
               <legend className="text-[11px] font-medium text-muted">定时设置 *</legend>
               <p className="mt-1 text-[11px] text-muted">定时任务拥有自己的任务工作区；每次触发在该工作区新建独立会话，不继承其他执行上下文，运行记录可回到原会话继续对话。</p>
-              {providersError && <p role="alert" className="mt-2 border border-[#e0b4b4] bg-[#fdf3f3] p-2 text-[11px] text-[#ad4545]">Provider 列表读取失败：{providersError}。不会改用其它 Provider；保存或运行会明确失败。</p>}
+              {providersError && <p role="alert" className="mt-2 border border-destructive bg-bg p-2 text-[11px] text-destructive">Provider 列表读取失败：{providersError}。不会改用其它 Provider；保存或运行会明确失败。</p>}
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <label className={label}>执行周期 *<input aria-label="定时任务规则" className={field} required value={scheduleRule} onChange={(event) => setScheduleRule(event.target.value)} placeholder="每日 09:15 / 每周五 15:00 / 一次性 2026-10-01T09:00 / 五段 Cron" /></label>
                 <label className={label}>时区 *<input aria-label="定时任务时区" className={field} required value={scheduleTimezone} list="desktop-creation-timezones" onChange={(event) => setScheduleTimezone(event.target.value)} /><datalist id="desktop-creation-timezones"><option value="Asia/Shanghai" /><option value="UTC" /><option value="America/Los_Angeles" /></datalist></label>
@@ -598,7 +598,7 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
                 {(preview?.rows ?? []).map((row) => <li key={row.repoId} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]">
                   <span className="shrink-0 font-medium text-ink">{row.name}</span>
                   {row.problem
-                    ? <span className="min-w-0 break-all text-[#ad4545]">{row.problem.code}：{row.problem.message}</span>
+                    ? <span className="min-w-0 break-all text-destructive">{row.problem.code}：{row.problem.message}</span>
                     : preview?.gitDelivery === "existing"
                       ? <span className="min-w-0 break-all text-muted">本地分支 <code className="font-mono text-accent">{row.localBranch}</code> · 使用原检出当前分支，不创建任务分支</span>
                       : <>
@@ -609,10 +609,10 @@ export function DesktopTaskCreation({ project, bridge, onCreated, openOnMount = 
                 {preview !== null && preview.rows.length === 0 && <li className="text-[11px] text-muted">尚未选择仓库，没有可预览的分支。</li>}
               </ul>}
               {previewError && <p className="mt-1 text-[10px] text-muted">创建前预览不可读取：{previewError}（创建时 main 仍会按已保存的分支规范校验）</p>}
-              {preview !== null && <p className={`mt-1 break-all text-[10px] ${preview.ready ? "text-muted" : "text-[#ad4545]"}`}>
+              {preview !== null && <p className={`mt-1 break-all text-[10px] ${preview.ready ? "text-muted" : "text-destructive"}`}>
                 {preview.message}
               </p>}
-              {previewBlocked && !noSelections && <p role="alert" className="mt-1 break-all text-[10px] text-[#ad4545]">
+              {previewBlocked && !noSelections && <p role="alert" className="mt-1 break-all text-[10px] text-destructive">
                 创建已阻止：{preview?.problem?.code ?? preview?.rows.find((row) => row.problem)?.problem?.code}：
                 {preview?.problem?.message ?? preview?.rows.find((row) => row.problem)?.problem?.message}（不会用默认分支名代替）
               </p>}

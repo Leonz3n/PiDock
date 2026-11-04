@@ -151,11 +151,12 @@ async function run() {
     const metrics=await evaluate(`(() => {
       const box=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right,scrollHeight:el.scrollHeight,clientHeight:el.clientHeight}};
       const dialog=document.querySelector('[role=dialog]');
-      return {viewport:[innerWidth,innerHeight],dialog:box(dialog),backdrop:box(dialog?.parentElement),theme:document.documentElement.dataset.theme,active:document.activeElement?.getAttribute('aria-label'),fields:[...dialog.querySelectorAll('input,button')].filter(el=>el.getBoundingClientRect().width).map(el=>({label:el.getAttribute('aria-label')??el.textContent.trim(),box:box(el)})),text:dialog.innerText};
+      return {viewport:[innerWidth,innerHeight],dialog:box(dialog),backdrop:box(dialog?.parentElement),theme:document.documentElement.dataset.theme,dangerColor:(()=>{const el=[...document.querySelectorAll('[aria-label=仓库准备状态] span')].find(el=>el.textContent.includes('WORKTREE_BRANCH_ORPHANED'));return el?getComputedStyle(el).color:null})(),active:document.activeElement?.getAttribute('aria-label'),fields:[...dialog.querySelectorAll('input,button')].filter(el=>el.getBoundingClientRect().width).map(el=>({label:el.getAttribute('aria-label')??el.textContent.trim(),box:box(el)})),text:dialog.innerText};
     })()`);
     const name=`${width}x${height}-${state}.png`;
     const shot=await wc.debugger.sendCommand('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     writeFileSync(join(output,name),Buffer.from(shot.data,'base64'));shots.push({file:name,sha256:hash(join(output,name)),metrics});
+    if(state.includes('partial-failure')) check(`${state}: Pencil danger ink`,metrics.dangerColor===(metrics.theme==='dark'?'rgb(227, 161, 154)':'rgb(158, 73, 67)'),metrics.dangerColor);
     check(`${state}: exact viewport`,metrics.viewport[0]===width&&metrics.viewport[1]===height,metrics);
     const rail=width<960?48:260;
     check(`${state}: Pencil modal width`,Math.abs(metrics.dialog.width-Math.min(task?680:720,width-rail-32))<=2,metrics.dialog);
