@@ -225,7 +225,7 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
    */
   const [sessionList, setSessionList] = useState<SessionListRead>({ phase: "reading" });
   /** True once the reader has chosen a session in this mount; see `loadSessions`. */
-  const picked = useRef(false);
+  const picked = useRef(initialSessionId !== undefined);
   const [activeSessionId, setActiveSessionId] = useState<string>(initialSessionId ?? SDK_SESSION_ID);
   const sessionId = activeSessionId;
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
@@ -940,15 +940,15 @@ function TaskConversation({ taskId, initialSessionId, name, branch, repoCount, r
     // them — never a silent jump back.
     const target = result.list.activeSessionId ?? result.list.sessions.find((session) => !session.archived)?.id ?? SDK_SESSION_ID;
     setActiveSessionId((current) => {
-      const present = result.list.sessions.some((session) => session.id === current && !session.archived);
+      const present = result.list.sessions.some((session) => session.id === current && (!session.archived || initialSessionId === current));
       return picked.current && present ? current : target;
     });
-  }, [applyList, taskId]);
+  }, [applyList, taskId, initialSessionId]);
   useEffect(() => { void loadSessions(); }, [loadSessions]);
   // The sidebar's session rows navigate here: an explicitly named session wins
   // over the task's stored active pointer until the user picks another one.
   useEffect(() => {
-    if (initialSessionId !== undefined) setActiveSessionId((current) => (current === initialSessionId ? current : initialSessionId));
+    if (initialSessionId !== undefined) { picked.current = true; setActiveSessionId((current) => (current === initialSessionId ? current : initialSessionId)); }
   }, [initialSessionId]);
   /**
    * [Pencil T10] #145 切换会话后把焦点放回输入区（键盘流程不因切换而中断）：

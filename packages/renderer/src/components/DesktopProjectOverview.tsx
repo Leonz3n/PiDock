@@ -33,15 +33,15 @@ function environmentReadout({ projectId, connected, environments, error }: {
 }
 
 /** S07 `CbsS5`: 复用来源 · 下属任务台账 · 环境与推送. Real Host data only. */
-const COLUMNS = "grid grid-cols-[minmax(0,260px)_minmax(0,280px)_minmax(0,1fr)_minmax(0,1fr)_110px] items-center gap-3";
+const COLUMNS = "grid grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,0.6fr)_110px] below-narrow:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_90px] items-center gap-3";
 const SECTION = "rounded-[8px] border border-line bg-paper";
 const CARD = "flex min-w-0 flex-col gap-1.5 rounded-[8px] border border-line bg-paper p-3";
 const CARD_TITLE = "flex min-w-0 items-center gap-2 text-[12px] font-semibold text-ink";
-const MONO = "break-all font-mono text-[10px] text-muted";
+const MONO = "truncate font-mono text-[10px] text-muted";
 
 const STATUS_LABEL: Record<SourceVerification["status"], string> = { ok: "路径可用", missing: "来源缺失", "not-directory": "不是目录" };
 function statusTone(status: SourceVerification["status"]): string {
-  return status === "ok" ? "text-[#496174]" : "text-[#805c28]";
+  return status === "ok" ? "text-muted" : "text-orange";
 }
 
 export function DesktopProjectOverview({
@@ -53,11 +53,9 @@ export function DesktopProjectOverview({
   projectsInitialized,
   onOpenTask,
   onManage,
-  onCreateTask,
   onEdit,
   onRepairSource,
   onDelete,
-  onManageDirectories,
   creationIncompleteTaskId,
   sourceStatus,
   sourceStatusError,
@@ -123,10 +121,10 @@ export function DesktopProjectOverview({
   const taskRow = (task: DesktopShellTask) => {
     const association = associations.find((row) => row.taskId === task.taskId);
     const status = task.taskId === creationIncompleteTaskId
-      ? { text: "创建未完成", tone: "text-[#805c28]" }
+      ? { text: "创建未完成", tone: "text-orange" }
       : association?.state === "needs-repair"
-        ? { text: "关联待修复", tone: "text-[#805c28]" }
-        : lifecyclePending ? { text: "核验中", tone: "text-muted" } : { text: "进行中", tone: "text-[#496174]" };
+        ? { text: "关联待修复", tone: "text-orange" }
+        : lifecyclePending ? { text: "核验中", tone: "text-muted" } : { text: "进行中", tone: "text-muted" };
     return (
       <li key={task.taskId} className="border-t border-line px-3">
         <div className={`${COLUMNS} min-h-[42px] py-2 text-[11px]`}>
@@ -138,8 +136,8 @@ export function DesktopProjectOverview({
             <span className="block truncate font-mono text-[11px] text-accent">{hostText(task.branch, "Host 未上报分支")}</span>
             <span className="block truncate text-[10px] text-muted">{task.repoCount > 0 ? `${task.repoCount} 个仓库` : "无仓库来源"}</span>
           </div>
-          <span className="min-w-0 truncate text-muted">{hostText(task.updatedAt.slice(0, 10), "Host 未上报更新时间")}</span>
-          <span className={`min-w-0 truncate font-semibold ${status.tone}`}>{status.text}</span>
+          <span className="min-w-0 truncate text-muted below-narrow:hidden">{hostText(task.updatedAt.slice(0, 10), "Host 未上报更新时间")}</span>
+          <span className={`min-w-0 truncate font-semibold below-narrow:hidden ${status.tone}`}>{status.text}</span>
           <span className="justify-self-end"><Button type="button" size="sm" variant="outline" onClick={() => onOpenTask(task.taskId)}>进入任务</Button></span>
         </div>
       </li>
@@ -148,35 +146,13 @@ export function DesktopProjectOverview({
 
   return (
     <div className="px-[24px] py-[20px] below-narrow:px-4" data-testid="desktop-project-overview">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="truncate text-[20px] font-semibold tracking-[-0.4px] text-ink" data-testid="overview-title">
-            {project ? projectName(project) : projectsInitialized ? "未归属任务" : "项目映射未建立"}
-          </h1>
-          <p className="mt-1 text-[11px] text-muted">
-            {project?.description || (projectsInitialized ? "尚未填写描述与业务用途。" : "本机尚未建立持久工作空间映射；任务以未归属状态列出，不编造归属。")}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {project ? <>
-            <Button type="button" variant="default" onClick={onCreateTask}><Icon name="plus" />在此工作空间新建任务</Button>
-            <Button type="button" onClick={onManageDirectories}><Icon name="plus" />添加来源仓库/目录</Button>
-            <Button type="button" onClick={onManage}>项目管理</Button>
-            <Button type="button" onClick={onEdit}>编辑工作空间</Button>
-            <Button type="button" variant="destructive" onClick={onDelete}>删除</Button>
-          </> : <Button type="button" onClick={onManage}>项目管理</Button>}
-        </div>
+      <h1 className="sr-only" data-testid="overview-title">{project ? projectName(project) : projectsInitialized ? "未归属任务" : "项目映射未建立"}</h1>
+      <div className="sr-only">
+        <span data-testid="overview-repo-count">{project?.repositories.length ?? 0}</span>
+        <span data-testid="overview-task-count">{lifecyclePending ? "未核验" : scoped.length}</span>
       </div>
-      {project ? <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted">
-        <Badge variant="soft">
-          <span data-testid="overview-repo-count">{project.repositories.length}</span> 来源代码库 · {project.directories.length} 普通目录 ·
-          {" "}<span data-testid="overview-task-count">{lifecyclePending ? "未核验" : scoped.length}</span> 进行中的任务
-        </Badge>
-        <span>磁盘上的身份由 Host 保存；重命名不改变工作空间身份。</span>
-      </div> : null}
-
       {project ? <>
-        <section className="mt-5 flex flex-col gap-2" aria-label="复用来源">
+        <section className="flex flex-col gap-2" aria-label="复用来源">
           <div className="flex flex-wrap items-end justify-between gap-2">
             <h2 className="text-[12px] font-bold text-ink">工作空间复用来源（Git 仓库与普通目录）</h2>
             <p className="text-[11px] text-muted">下属任务按需选定来源，可选择独立 worktree 或共享已有目录</p>
@@ -190,14 +166,14 @@ export function DesktopProjectOverview({
                     <Icon name={kind === "repository" ? "branch" : "folder"} className="shrink-0 text-accent" />
                     <span className="truncate">{sourceName(row)}（{kind === "repository" ? "Git 仓库" : "普通目录"}）</span>
                   </span>
-                  {status ? <Badge variant="soft" className={statusTone(status.status)}>{STATUS_LABEL[status.status]}</Badge> : <Badge variant="outline">未检查</Badge>}
+                  {status ? <Badge variant="outline" className={statusTone(status.status)}>{STATUS_LABEL[status.status]}</Badge> : <Badge variant="outline">未检查</Badge>}
                 </div>
-                <span className={MONO}>{sourcePath(row)}</span>
+                <span className={MONO} title={sourcePath(row)}>{sourcePath(row)}</span>
                 <span className="text-[10px] text-muted">
                   {kind === "repository" ? "Git 仓库：任务可派生独立 worktree" : "纯普通目录，非 Git 仓库；修改直接作用于原路径（共享原文件 · 需协调写入）"}
                 </span>
                 {status && status.status !== "ok" ? <div className="flex flex-wrap items-center gap-2">
-                  <span role="note" className="text-[10px] text-[#805c28]">
+                  <span role="note" className="text-[10px] text-orange">
                     来源{status.status === "missing" ? "路径已缺失" : "不是目录"}{status.error ? `（${status.error}）` : ""}，请在编辑工作空间中修复路径。
                   </span>
                   <Button type="button" size="sm" variant="outline" onClick={() => onRepairSource(row.id)}>修复路径</Button>
@@ -206,19 +182,19 @@ export function DesktopProjectOverview({
             })}
             {sourceRows.length === 0 ? <p className="text-xs text-muted">尚未登记 Git 仓库或普通目录。</p> : null}
           </div>
-          {sourceStatusError ? <p className="text-[10px] text-[#805c28]" data-testid="source-status-error" aria-live="polite">来源检查未完成：{sourceStatusError}</p> : null}
+          {sourceStatusError ? <p className="text-[10px] text-orange" data-testid="source-status-error" aria-live="polite">来源检查未完成：{sourceStatusError}</p> : null}
         </section>
 
         <section className={`mt-5 ${SECTION}`} aria-label="下属任务台账">
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
-            <h2 className="text-[12px] font-bold text-ink">工作空间下属任务台账（点击任务可直接进入任务或对话）</h2>
+            <h2 className="text-[12px] font-bold text-ink">工作空间下属任务台账（点击任务可进入任务事实）</h2>
             <span className="text-[11px] text-muted">共 <span data-testid="overview-task-count-inline">{lifecyclePending ? "未核验" : scoped.length}</span> 个进行中任务</span>
           </div>
           <div className={`${COLUMNS} border-y border-line bg-bg px-3 py-1.5 text-[10px] font-semibold text-muted`} role="row">
             <span role="columnheader">任务名称</span>
             <span role="columnheader">分支与仓库</span>
-            <span role="columnheader">最近更新</span>
-            <span role="columnheader">状态</span>
+            <span role="columnheader" className="below-narrow:hidden">最近更新</span>
+            <span role="columnheader" className="below-narrow:hidden">状态</span>
             <span role="columnheader" className="justify-self-end">操作</span>
           </div>
           {scoped.length > 0
@@ -243,7 +219,7 @@ export function DesktopProjectOverview({
               </div>
               {project.environment === null
                 ? <div className="rounded-[5px] bg-bg px-3 py-2"><p className="text-[10px] text-muted">Host 未上报环境变量</p></div>
-                : <DesktopWorkspaceVariables projectId={project.id} initialRows={project.environment} />}
+                : <DesktopWorkspaceVariables projectId={project.id} initialRows={project.environment} compact />}
             </div>
             <div className="flex min-w-0 flex-col gap-1.5">
               <div className="flex items-center justify-between gap-2">
@@ -260,7 +236,12 @@ export function DesktopProjectOverview({
       </> : null}
 
       {project ? <>
-        <SharedRepoIsolation tasks={scoped.map((task) => ({ taskId: task.taskId, name: task.name }))} />
+        <details className="mt-3 text-[11px] text-muted"><summary className="cursor-pointer">核验共享仓库与任务隔离事实</summary><SharedRepoIsolation tasks={scoped.map((task) => ({ taskId: task.taskId, name: task.name }))} /></details>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button type="button" size="sm" variant="ghost" onClick={onManage}>项目管理</Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onEdit}>编辑工作空间</Button>
+          <Button type="button" size="sm" variant="destructive" onClick={onDelete}>删除</Button>
+        </div>
         <p className="mt-4 text-[10px] text-muted">
           任务根 {roots.filter((root) => root.state === "ready").length}/{roots.length} 就绪 · 全部数据来自本机真实 Host。
         </p>

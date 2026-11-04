@@ -37,7 +37,7 @@ function bridge(lifecycle: (taskId: string) => { ok: true; payload: unknown } | 
   return {
     listTasks: vi.fn(async () => ({ ok: true, payload: { tasks, roots } })),
     importTaskRoot: vi.fn(async () => ({ ok: true, payload: { canceled: false, count: 1 } })),
-    taskOp: vi.fn(async (taskId: string, op: string) => op === "task/lifecycleState"
+    taskOp: vi.fn(async (taskId: string, op: string) => op === "task/sessionList" ? { ok: true, payload: { activeSessionId: "main", sessions: [{ id: "main", name: "主会话", archived: false, createdAt: "2026-01-01", updatedAt: "2026-01-01", permission: "default", binding: null }], provider: null } } : op === "task/lifecycleState"
       ? lifecycle(taskId)
       : { ok: true, payload: { lifecycle: { taskId, archived: false, archivedAt: null }, op } }),
     projectOp: vi.fn(async (request: { op: string }) => request.op === "list"
@@ -58,6 +58,7 @@ async function openRealTask() {
   fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
   fireEvent.click(await within(screen.getByRole("navigation", { name: "项目导航" })).findByRole("button", { name: project.name }));
   fireEvent.click(await screen.findByRole("button", { name: "进入工作区" }));
+  fireEvent.click(await screen.findByRole("button", { name: "进入对话 · 主会话" }));
   await screen.findByTestId("desktop-conversation");
 }
 

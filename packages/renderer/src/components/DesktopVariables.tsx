@@ -133,7 +133,8 @@ export function DesktopTaskVariables({ taskId, bridge }: { taskId: string; bridg
 }
 
 /** S07 workspace-level editor: exact-key add/edit/delete with the same refusals. */
-export function DesktopWorkspaceVariables({ projectId, bridge, initialRows }: {
+export function DesktopWorkspaceVariables({ projectId, bridge, initialRows, compact = false }: {
+  compact?: boolean;
   projectId: string;
   bridge?: PidockBridge;
   /**
@@ -187,11 +188,14 @@ export function DesktopWorkspaceVariables({ projectId, bridge, initialRows }: {
           </span>
         </li>)}
       </ul>)}
+    <details open={compact ? undefined : true}>
+      <summary className="cursor-pointer text-[10px] text-accent">添加或编辑变量</summary>
     <div className="mt-1.5 grid gap-1.5 below-narrow:grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]">
       <input aria-label="工作空间变量名" className={INPUT} value={key} placeholder="变量名（如 NODE_ENV）" onChange={(event) => setKey(event.target.value)} />
       <input aria-label="工作空间变量值" className={INPUT} value={value} placeholder="共享值（非密文）" onChange={(event) => setValue(event.target.value)} />
       <button type="button" className={BUTTON} disabled={busy} onClick={save}>保存变量</button>
     </div>
+    </details>
     <p className="mt-1 text-[10px] text-muted">逐键保存；任务默认继承，单任务覆盖在任务事实中编辑。运行中的任务在下次启动时读取新值。</p>
   </div>;
 }

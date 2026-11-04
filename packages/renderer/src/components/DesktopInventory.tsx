@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
+import { Button } from "./ui/button";
 import { DesktopTaskCreation } from "./DesktopTaskCreation";
 import { DesktopConversation } from "./DesktopConversation";
 import { DesktopTaskFacts } from "./DesktopTaskFacts";
@@ -87,7 +88,10 @@ export function DesktopInventory() {
   const [creationNotice, setCreationNotice] = useState<{ taskId: string; message: string } | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [activeTask, setActiveTask] = useState<{ id: string; name: string; roots: string; association: string } | null>(null);
+  const [factsActiveSession, setFactsActiveSession] = useState<{ taskId: string; sessionId: string | null } | null>(null);
+  const reportActiveSession = useCallback((taskId: string, sessionId: string | null) => setFactsActiveSession({ taskId, sessionId }), []);
   /** [#139] The session the sidebar asked the open task page to show; `undefined` = the task's active session. */
+  const [conversationOpen, setConversationOpen] = useState(false);
   const [sessionFocus, setSessionFocus] = useState<string | undefined>(undefined);
   /** 能力管理 and 本机设置 — the 系统 group's two local pages, each a real page (#24). */
   const [localPage, setLocalPage] = useState<DesktopLocalPageKey | null>(null);
@@ -108,7 +112,7 @@ export function DesktopInventory() {
   // management list) wins and is never overridden by a later reread.
   const pinned = useRef(false);
   const entryEpoch = useRef(0);
-  const openTask = async (taskId: string) => {
+  const openTask = async (taskId: string, sessionId?: string) => {
     if (rootRetryRef.current) return;
     const epoch = ++entryEpoch.current;
     setBusy(true); setActionError(null);
@@ -123,6 +127,9 @@ export function DesktopInventory() {
       if (epoch !== entryEpoch.current) return;
       if (!lifecycle.ok) throw new Error(lifecycle.error ?? "任务归档状态读取失败");
       if (parseLifecycle(lifecycle.payload, taskId).archived) throw new Error("该任务已归档，请先从已归档页恢复");
+      setFactsActiveSession(null);
+      setSessionFocus(sessionId);
+      setConversationOpen(sessionId !== undefined);
       setActiveTask({ id: taskId, name: task.name, roots: JSON.stringify(fresh.inventory.roots), association: JSON.stringify(row) });
     } catch (error) { if (epoch === entryEpoch.current) setActionError(errorMessage(error)); }
     finally { if (epoch === entryEpoch.current) setBusy(false); }
@@ -413,7 +420,7 @@ export function DesktopInventory() {
     : localPage
       ? { view: localPage }
       : activeTask
-        ? { view: "task", taskId: activeTask.id, sessionId: sessionFocus }
+        ? { view: "task", taskId: activeTask.id, sessionId: conversationOpen ? sessionFocus : undefined }
         : selection.kind === "project" && selectedProject
           ? { view: "project", projectId: selectedProject.id }
           : { view: "unassigned" };
@@ -425,7 +432,6 @@ export function DesktopInventory() {
     if (next.view === "task") {
       // [#139] The sidebar's session rows name a session; opening the task from
       // anywhere else clears the focus so the Host's active session is shown.
-      setSessionFocus(next.sessionId);
       setLocalPage(null);
       setUsageOpen(false);
       setSchedulesOpen(false);
@@ -433,7 +439,7 @@ export function DesktopInventory() {
       setAttentionOpen(false);
       setEnvironmentOpen(false);
       setUsageTaskId(null);
-      void openTask(next.taskId);
+      void openTask(next.taskId, next.sessionId);
       return;
     }
     entryEpoch.current++;
@@ -507,6 +513,13 @@ export function DesktopInventory() {
     roots={ready?.inventory.roots ?? []}
     rootRetry={{ busy, pending: rootRetryPending, error: rootRetryError, run: () => void retryRoots() }}
     breadcrumb={breadcrumb}
+    headerActions={activeTask && !conversationOpen ? <>
+      <Button type="button" size="sm" variant="default" disabled={factsActiveSession?.taskId !== activeTask.id || factsActiveSession.sessionId === null} onClick={() => { if (factsActiveSession?.sessionId) { setSessionFocus(factsActiveSession.sessionId); setConversationOpen(true); } }}>进入活跃对话</Button>
+      <Button type="button" size="sm" variant="outline" onClick={() => { entryEpoch.current++; setActiveTask(null); void load(); }}>返回工作空间总览</Button>
+    </> : !activeTask && !manage && !usageOpen && !schedulesOpen && !archiveOpen && !attentionOpen && !environmentOpen && selection.kind === "project" ? <>
+      <Button type="button" size="sm" variant="default" onClick={() => { setManage(true); setCreationEntry((value) => value + 1); }}>在此工作空间新建任务</Button>
+      <Button type="button" size="sm" variant="outline" onClick={() => openEditWorkspace(selection.id)}>添加来源仓库/目录</Button>
+    </> : undefined}
   >
     {children}
     {form && draft ? <DesktopWorkspaceDialog
@@ -534,7 +547,7 @@ export function DesktopInventory() {
     /> : null}
   </DesktopShell>;
   if (environmentOpen) return shell(<DesktopEnvironmentPage projects={shellProjects} projectId={environmentProject?.id ?? null} taskCount={environmentProject ? shellTasks.filter((task) => task.projectId === environmentProject.id).length : 0} tasks={environmentProject ? activeTasks.filter((task) => task.projectId === environmentProject.id) : []} tasksPending={!lifecycleReady} onSelectProject={(id) => { pinned.current = true; setSelection({ kind: "project", id }); }} />);
-  if (attentionOpen) return shell(<DesktopAttentionPage tasks={activeTasks} projects={shellProjects} lifecyclePending={!lifecycleReady} lifecycleErrors={lifecycleIndex?.errors ?? []} onOpenTask={(taskId) => navigate({ view: "task", taskId })} />);
+  if (attentionOpen) return shell(<DesktopAttentionPage tasks={activeTasks} projects={shellProjects} lifecyclePending={!lifecycleReady} lifecycleErrors={lifecycleIndex?.errors ?? []} onOpenTask={(taskId) => navigate({ view: "task", taskId, sessionId: "main" })} />);
   if (archiveOpen) return shell(<DesktopArchivePage tasks={shellTasks} onRestored={() => { void load(); }} />);
   if (schedulesOpen) return shell(<DesktopSchedulesPage tasks={shellTasks} onOpenTask={(taskId) => navigate({ view: "task", taskId })} onOpenSession={(taskId, sessionId) => navigate({ view: "task", taskId, sessionId })} />);
   if (usageOpen) return shell(<DesktopUsagePage
@@ -542,15 +555,17 @@ export function DesktopInventory() {
     taskId={usageTaskId}
     onSelectTask={(taskId) => { setActiveTask(null); setUsageTaskId(taskId); }}
   />);
-  // [Pencil T02] #137 / S08: a task opens on its workspace facts (one row per
-  // source, mode badge, per-source verification) with the existing conversation
-  // entry directly below — no invented sessions, no fixture roots.
-  if (activeTask) return shell(<div className="flex h-full min-h-0 flex-col">
-    <DesktopTaskFacts taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge} />
+  // Task facts and conversations are separate destinations; only an explicit
+  // session choice mounts the SDK conversation. Disk identities stay Host-owned.
+  if (activeTask) return shell(conversationOpen ? <div className="flex h-full min-h-0 flex-col">
+    <DesktopTaskFacts compact taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge} onBack={() => setConversationOpen(false)} />
     <div className="min-h-0 flex-1">
-      <DesktopConversation key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
+      <DesktopConversation key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => setConversationOpen(false)} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
     </div>
-  </div>);
+  </div> : <DesktopTaskFacts headerInShell onActiveSession={reportActiveSession} taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge}
+    onOpenSession={(sessionId) => { setSessionFocus(sessionId); setConversationOpen(true); }}
+    onBack={() => { entryEpoch.current++; setActiveTask(null); void load(); }}
+    onRepair={() => { if (activeProject) openEditWorkspace(activeProject.id); }} />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
     <div className="w-full max-w-[620px]">
       {/* A submitted write whose authoritative reread failed must stay visible: dropping
@@ -584,7 +599,7 @@ export function DesktopInventory() {
       associations={data.associations}
       roots={data.inventory.roots}
       projectsInitialized={data.projectsInitialized}
-      onOpenTask={(taskId) => void openTask(taskId)}
+      onOpenTask={(taskId) => navigate({ view: "task", taskId })}
       onManage={() => setManage(true)}
       onManageDirectories={() => openEditWorkspace(target.id)}
       onEdit={() => openEditWorkspace(target.id)}
@@ -608,7 +623,7 @@ export function DesktopInventory() {
     projectsInitialized={data.projectsInitialized}
     busy={busy}
     creationIncompleteTaskId={pendingCreation?.taskId ?? null}
-    onOpenTask={(taskId) => void openTask(taskId)}
+    onOpenTask={(taskId) => navigate({ view: "task", taskId })}
     onClaim={(taskId, projectId) => void operate({ op: "claim", taskId, projectId })}
     onManage={() => { pinned.current = true; setManage(true); }}
   />);
@@ -620,6 +635,7 @@ export function DesktopInventory() {
         if (!(await load())) throw new Error("任务已创建，但本机清单无法核验；请重试读取");
         // Land on the NEW task's facts view (S08), not the project overview.
         setSelection({ kind: "project", id: projectId });
+        setConversationOpen(false);
         await openTask(taskId);
       }} />
       {actionError && <p role="alert" className="mb-3 text-sm text-[#ad4545]">{actionError}</p>}
@@ -640,7 +656,7 @@ export function DesktopInventory() {
             <Sources title="仓库" rows={project.repositories} /><Sources title="普通目录" rows={project.directories} /></> : <h2 className="text-base font-semibold">{data.projectsInitialized ? "未归属任务" : "项目映射未建立"}</h2>}
           <section className="mt-6"><h3 className="border-b border-line pb-2 text-xs font-semibold text-muted">任务 · {shown?.length ?? 0}</h3>
             {!shown?.length && <p className="py-5 text-sm text-muted">{project ? "此项目暂无任务" : "已检查的任务根暂无未归属任务"}</p>}
-            <ul className="divide-y divide-line">{shown?.map((row) => <TaskRow key={row.taskId} row={row} name={taskMap.get(row.taskId)?.name ?? row.taskId} projects={data.projects} choice={choice[row.taskId] ?? ""} setChoice={(value) => setChoice((prev) => ({ ...prev, [row.taskId]: value }))} busy={busy} open={() => void openTask(row.taskId)} act={operate} recovery={{ creation: pendingCreation?.taskId === row.taskId ? pendingCreation : null, notice: creationNotice?.taskId === row.taskId ? creationNotice.message : null, onFinish: (intent, action) => void finishPendingCreation(intent, action) }} />)}</ul>
+            <ul className="divide-y divide-line">{shown?.map((row) => <TaskRow key={row.taskId} row={row} name={taskMap.get(row.taskId)?.name ?? row.taskId} projects={data.projects} choice={choice[row.taskId] ?? ""} setChoice={(value) => setChoice((prev) => ({ ...prev, [row.taskId]: value }))} busy={busy} open={() => navigate({ view: "task", taskId: row.taskId })} act={operate} recovery={{ creation: pendingCreation?.taskId === row.taskId ? pendingCreation : null, notice: creationNotice?.taskId === row.taskId ? creationNotice.message : null, onFinish: (intent, action) => void finishPendingCreation(intent, action) }} />)}</ul>
           </section>
           <DesktopRootErrors roots={data.inventory.roots} busy={busy} retryPending={rootRetryPending} retryError={rootRetryError} onRetry={() => void retryRoots()} className="mt-3 empty:hidden" />
           <p className="mt-5 text-xs text-muted">仅显示默认及已登记任务根；其他位置需明确找回。</p>

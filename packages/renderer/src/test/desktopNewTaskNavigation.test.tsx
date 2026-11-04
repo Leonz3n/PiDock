@@ -48,7 +48,7 @@ it.each([
   ["真实项目", "desktop-project-overview"],
   ["未归属任务", "desktop-unassigned"],
   ["真实任务", "desktop-task-facts"],
-  ["主会话", "desktop-task-facts"],
+  ["主会话", "desktop-conversation"],
   ["能力管理", "management"],
   ["设置", "management"],
 ])("New Task opens after %s and navigation remains usable after cancel", async (destination, page) => {

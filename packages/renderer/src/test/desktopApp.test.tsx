@@ -55,6 +55,7 @@ describe("Desktop production data", () => {
     render(<App />);
     await screen.findByTestId("desktop-sidebar");
     fireEvent.click(await sidebar().findByRole("button", { name: "真实任务" }));
+    fireEvent.click(await screen.findByRole("button", { name: "进入对话 · 主会话" }));
     const message = await screen.findByRole("textbox", { name: "消息" });
     fireEvent.change(message, { target: { value: "保留未发送草稿" } });
     for (const page of ["能力管理", "设置"]) {
@@ -937,6 +938,7 @@ describe("Desktop production data", () => {
     await openManagement();
     fireEvent.click(await managementNav().findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
+    fireEvent.click(await screen.findByRole("button", { name: "进入对话 · 主会话" }));
     expect(await screen.findByText(/尚未开始/)).toBeInTheDocument();
     // The shell keeps the workspace context visible: sidebar, breadcrumb and session tab.
     expect(screen.getByTestId("desktop-sidebar")).toBeInTheDocument();
@@ -946,6 +948,7 @@ describe("Desktop production data", () => {
     expect(shell.listTasks).toHaveBeenCalledTimes(3);
     expect(demoRead).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "返回任务列表" }));
+    fireEvent.click(await screen.findByRole("button", { name: "返回工作空间总览" }));
     expect(await screen.findByRole("heading", { name: "真实项目" })).toBeInTheDocument();
     await waitFor(() => expect(sdkTurn).toHaveBeenCalledWith({ action: "unsubscribe", taskId: "real-1", sessionId: "main" }));
   });
@@ -968,6 +971,7 @@ describe("Desktop production data", () => {
     await openManagement();
     fireEvent.click(await managementNav().findByRole("button", { name: "真实项目" }));
     fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
+    fireEvent.click(await screen.findByRole("button", { name: "进入对话 · 主会话" }));
     const conversation = await screen.findByTestId("desktop-conversation");
 
     const reasoning = await within(conversation).findByTestId("composer-reasoning");

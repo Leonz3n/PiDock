@@ -98,10 +98,12 @@ describe("[Pencil T07] #142 post-create landing", () => {
     expect(await screen.findByText(/任务工作区模式：/)).toHaveTextContent("独立 Worktree（默认）");
     fireEvent.click(screen.getByRole("button", { name: "确认创建 / 恢复" }));
 
-    // Landing: S08 facts AND the conversation entry, both mounted.
+    // Landing: only S08; the real session is opened explicitly.
     expect(await screen.findByTestId("desktop-task-facts")).toBeInTheDocument();
-    expect(await screen.findByTestId("desktop-conversation")).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("task-facts-mode")).toHaveTextContent("独立 Worktree"));
+    fireEvent.click(await screen.findByRole("button", { name: "进入对话 · 主会话" }));
+    expect(await screen.findByTestId("desktop-conversation")).toBeInTheDocument();
     // The Host's own session entry is shown by NAME, and its id is what is subscribed.
     expect(await screen.findByRole("tab", { name: "主会话" })).toBeInTheDocument();
     expect(sdkTurn).toHaveBeenCalledWith(expect.objectContaining({ action: "subscribe", taskId: TASK_ID, sessionId: "main" }));

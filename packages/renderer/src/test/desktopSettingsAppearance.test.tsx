@@ -400,7 +400,7 @@ describe("#149 settings round trip on the production shell", () => {
       projectOp: vi.fn(async (request: { op: string }) => request.op === "list"
         ? { ok: true, payload: { initialized: true, projects: [project] } }
         : { ok: true, payload: { roots, tasks: [{ taskId: TASK_ID, projectId: project.id, state: "assigned" }] } }),
-      taskOp: vi.fn(async (taskId: string, op: string) => op === "task/lifecycleState"
+      taskOp: vi.fn(async (taskId: string, op: string) => op === "task/sessionList" ? { ok: true, payload: ({ activeSessionId: "main", sessions: [{ id: "main", name: "主会话", archived: false, createdAt: "2026-01-01", updatedAt: "2026-01-01", permission: "default", binding: null }], provider: null }) } : op === "task/lifecycleState"
         ? { ok: true, payload: { lifecycle: { taskId, archived: false, archivedAt: null } } }
         : { ok: true, payload: { op } }),
       sdkTurn: vi.fn(async (request: Record<string, unknown>) => ({ ok: true, payload: request["action"] === "subscribe"
@@ -419,6 +419,7 @@ describe("#149 settings round trip on the production shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "项目管理" }));
     fireEvent.click(await within(screen.getByRole("navigation", { name: "项目导航" })).findByRole("button", { name: project.name }));
     fireEvent.click(await screen.findByRole("button", { name: "进入工作区" }));
+  fireEvent.click(await screen.findByRole("button", { name: "进入对话 · 主会话" }));
     await screen.findByTestId("desktop-conversation");
 
     fireEvent.click(within(screen.getByTestId("desktop-sidebar")).getByRole("button", { name: "设置" }));

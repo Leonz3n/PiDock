@@ -28,7 +28,7 @@ export type DesktopView =
   | { view: "project"; projectId: string }
   | { view: "unassigned" }
   // [#139] A task page may name the session it opens; omitting it opens the
-  // task's active session (the Host's own pointer).
+  // task facts. A session id explicitly enters its conversation.
   | { view: "task"; taskId: string; sessionId?: string }
   | { view: "usage" }
   | { view: "schedules" }
@@ -81,6 +81,7 @@ export function DesktopShell({
   breadcrumb,
   onNewTask,
   management,
+  headerActions,
   children,
 }: {
   view: DesktopView;
@@ -103,6 +104,7 @@ export function DesktopShell({
   breadcrumb: { project?: string; task?: string; page?: string };
   onNewTask?: () => void;
   management?: ReactNode;
+  headerActions?: ReactNode;
   children: ReactNode;
 }) {
   const activeTaskId = view.view === "task" ? view.taskId : undefined;
@@ -207,6 +209,7 @@ export function DesktopShell({
           <span className="min-w-0 truncate text-muted">{breadcrumb.project ?? "工作区"}</span>
           {breadcrumb.task && <><span className="text-muted">/</span><span className="min-w-0 truncate font-semibold">{breadcrumb.task}</span></>}
           {breadcrumb.page && <><span className="text-muted">/</span><span className="min-w-0 truncate">{breadcrumb.page}</span></>}
+          {headerActions && <div className="ml-auto flex shrink-0 items-center gap-2">{headerActions}</div>}
         </header>}
         <DesktopRootErrors roots={roots} busy={rootRetry.busy} retryPending={rootRetry.pending} retryError={rootRetry.error} onRetry={rootRetry.run} className="shrink-0 border-b border-line bg-paper px-4 empty:hidden" />
         {lifecycleErrors.length > 0 && <p role="alert" className="shrink-0 border-b border-line bg-paper px-4 py-2 text-[11px] text-destructive">任务归档状态未核验：{lifecycleErrors.join("；")}</p>}

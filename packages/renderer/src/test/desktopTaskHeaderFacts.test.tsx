@@ -26,7 +26,7 @@ const emptySnapshot = { source: "sdk-jsonl", sessionId: "main", messages: [], pe
 function bridge(taskRows: Array<Record<string, unknown>>): PidockBridge {
   return {
     listTasks: vi.fn(async () => ({ ok: true, payload: { tasks: taskRows, roots } })),
-    taskOp: vi.fn(async (taskId: string, op: string) => ({ ok: true, payload: { lifecycle: { taskId, archived: false, archivedAt: null }, op } })),
+    taskOp: vi.fn(async (taskId: string, op: string) => ({ ok: true, payload: op === "task/sessionList" ? ({ activeSessionId: "main", sessions: [{ id: "main", name: "主会话", archived: false, createdAt: "2026-01-01", updatedAt: "2026-01-01", permission: "default", binding: null }], provider: null }) : { lifecycle: { taskId, archived: false, archivedAt: null }, op } })),
     projectOp: vi.fn(async (request: { op: string }) => request.op === "list"
       ? { ok: true, payload: { initialized: true, projects: [project] } }
       : { ok: true, payload: { roots, tasks: [{ taskId: TASK_ID, projectId: PROJECT_ID, state: "assigned" }] } }),
@@ -44,6 +44,7 @@ async function openWorkspace(taskRows: Array<Record<string, unknown>>) {
   fireEvent.click(await screen.findByRole("button", { name: "项目管理" }));
   fireEvent.click(await within(screen.getByRole("navigation", { name: "项目导航" })).findByRole("button", { name: "真实项目" }));
   fireEvent.click(screen.getByRole("button", { name: "进入工作区" }));
+    fireEvent.click(await screen.findByRole("button", { name: "进入对话 · 主会话" }));
   await screen.findByText(/尚未开始/);
   return host;
 }

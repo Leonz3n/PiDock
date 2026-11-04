@@ -6,7 +6,7 @@
  * named.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { DesktopTaskFacts } from "../components/DesktopTaskFacts";
 import type { PidockBridge } from "../data/shellBridge";
 
@@ -51,7 +51,7 @@ describe("task workspace facts (S08)", () => {
     // [#139] The session count is the Host's own read; a fixture that cannot
     // answer names that failure instead of asserting "one session".
     expect(screen.getByTestId("task-facts-sessions")).toHaveTextContent("会话 列表读取失败：会话列表返回异常");
-    fireEvent.click(screen.getByRole("button", { name: /进入活跃对话/ }));
+    expect(screen.queryByRole("button", { name: /进入活跃对话/ })).not.toBeInTheDocument();
   });
 
   it("names a missing source and its repair path instead of hiding it", async () => {

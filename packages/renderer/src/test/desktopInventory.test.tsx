@@ -246,17 +246,8 @@ describe("Desktop inventory pending creation recovery", () => {
     // never assert it synchronously (the section renders while loading).
     expect(await screen.findByTestId("task-facts-mode")).toHaveTextContent("已有 Git 目录 · 共享原检出");
     expect(screen.queryByTestId("desktop-inventory")).not.toBeInTheDocument();
-    // [T19 layout blocker] At 720x560 the facts panel used to keep its full
-    // natural height as a `shrink-0` sibling, collapsing the conversation to
-    // 0px and pushing the composer to y=848-957 (outside the viewport, nothing
-    // scrollable reached it). The structural guard: the facts panel caps itself
-    // and scrolls at short heights, and the conversation sits in a `flex-1
-    // min-h-0` column so it can occupy the rest. The measured proof (geometry at
-    // 720x560 in the real window) lives in the T19 harness assertion.
-    expect(screen.getByTestId("desktop-task-facts").className).toContain("short:max-h-[32vh]");
-    expect(screen.getByTestId("desktop-task-facts").className).toContain("short:overflow-y-auto");
-    const conversationColumn = screen.getByTestId("desktop-conversation").parentElement;
-    expect(conversationColumn?.className).toContain("flex-1");
-    expect(conversationColumn?.className).toContain("min-h-0");
+    // S08 is now a full independent page; S01 is reached by a session choice.
+    expect(screen.queryByTestId("desktop-conversation")).not.toBeInTheDocument();
+
   });
 });
