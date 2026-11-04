@@ -66,6 +66,8 @@ export interface McpServerView {
   exposure: McpExposureValue | string;
   /** Names only; a value was never read out of the file into this shape. */
   credentialRefs: { env: string[]; headers: string[] };
+  /** Configuration metadata only; no token or inferred login state. */
+  oauth: { configured: boolean; clientRegistration: "auto" | "dcr" | "cimd" | "unknown"; explicitClientId: boolean };
 }
 
 /**
@@ -235,6 +237,12 @@ function view(name: string, entry: Record<string, unknown>, env: Record<string, 
     url: typeof entry["url"] === "string" ? entry["url"] : null,
     timeout: typeof timeout === "number" && Number.isFinite(timeout) ? timeout : null,
     exposure: typeof exposure === "string" ? exposure : "codemode",
+    oauth: {
+      configured: object(entry["oauth"]),
+      clientRegistration: !object(entry["oauth"]) || entry["oauth"]["clientRegistration"] === undefined ? "auto"
+        : ["auto", "dcr", "cimd"].includes(String(entry["oauth"]["clientRegistration"])) ? entry["oauth"]["clientRegistration"] as "auto" | "dcr" | "cimd" : "unknown",
+      explicitClientId: object(entry["oauth"]) && typeof entry["oauth"]["clientId"] === "string" && entry["oauth"]["clientId"].length > 0,
+    },
     credentialRefs: {
       env: object(entry["env"]) ? Object.keys(entry["env"] as Record<string, unknown>) : [],
       headers: object(entry["headers"]) ? Object.keys(entry["headers"] as Record<string, unknown>) : [],

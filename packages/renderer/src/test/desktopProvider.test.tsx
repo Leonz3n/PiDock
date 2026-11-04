@@ -81,6 +81,28 @@ describe("S03 capability nav", () => {
     await waitFor(() => expect(screen.getByTestId("native-path")).toHaveTextContent("/Users/test/.pi/agent/models.json"));
   });
 
+  it("filters configured providers by name or model without changing the native list", async () => {
+    const { calls } = bridge({ list: { ...EMPTY_STATUS, profiles: [PROFILE] } });
+    page();
+    await screen.findByTestId(`provider-card-${PROFILE.id}`);
+    const search = screen.getByRole("searchbox", { name: "搜索供应商 / 模型名称" });
+    await userEvent.type(search, "missing-model");
+    expect(screen.queryByTestId(`provider-card-${PROFILE.id}`)).toBeNull();
+    expect(screen.getByText("没有匹配的供应商")).toBeInTheDocument();
+    await userEvent.clear(search);
+    await userEvent.type(search, "GPT-5");
+    expect(screen.getByTestId(`provider-card-${PROFILE.id}`)).toBeInTheDocument();
+    expect(calls).toEqual([{ op: "list", taskId: "task-1" }]);
+  });
+
+  it("distinguishes an unreadable provider list from zero configured profiles", async () => {
+    bridge({ list: () => { throw new Error("models.json unreadable"); } });
+    page();
+    expect(await screen.findByRole("alert")).toHaveTextContent("models.json unreadable");
+    expect(screen.getByRole("heading", { name: "已添加 · —" })).toBeInTheDocument();
+    expect(screen.queryByText("正在读取本机 Provider 配置…")).toBeNull();
+  });
+
   it("renders the real MCP list and keeps Skills honest instead of showing counts or sample rows", async () => {
     const { mcpCalls } = bridge();
     page();
@@ -175,7 +197,7 @@ describe("S03B provider form", () => {
     await waitFor(() => expect(screen.getByTestId(`provider-card-${PROFILE.id}`)).toBeInTheDocument());
     await user.click(within(screen.getByTestId(`provider-card-${PROFILE.id}`)).getByRole("button", { name: "编辑" }));
     const form = await screen.findByTestId("provider-form");
-    expect(within(form).getByRole("heading", { name: /编辑供应商：Local gateway/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /编辑供应商：Local gateway/ })).toBeInTheDocument();
     const key = within(form).getByLabelText("API Key");
     expect(key).toHaveValue("");
     expect(key).toHaveAttribute("placeholder", "已保存的密钥不会显示；留空保留");
@@ -227,6 +249,45 @@ describe("S03B provider form", () => {
     await waitFor(() => expect(screen.getByText("该端点未提供模型列表接口（HTTP 404）")).toBeInTheDocument());
     expect(calls.filter((call) => call.op === "discover").map((call) => call.protocol))
       .toEqual(["openai-completions", "openai-completions", "anthropic-messages"]);
+  });
+
+  it("Escape from a form button returns to the list before leaving management", async () => {
+    bridge();
+    const onBack = vi.fn();
+    render(<DesktopCapabilitiesPage taskId="task-1" onBack={onBack} />);
+    await userEvent.click(screen.getByRole("button", { name: /添加供应商/ }));
+    const cancel = screen.getByRole("button", { name: "取消" });
+    cancel.focus();
+    await userEvent.keyboard("{Escape}");
+    expect(await screen.findByTestId("providers-panel")).toBeInTheDocument();
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it("offers discovered IDs per model while preserving manual input through loading and failure", async () => {
+    let complete!: (reply: unknown) => void;
+    const providerOp = vi.fn(async (request: Record<string, unknown>) => request.op === "discover"
+      ? await new Promise((resolve) => { complete = resolve; })
+      : { ok: true, payload: EMPTY_STATUS });
+    (window as unknown as { pidock: unknown }).pidock = { providerOp };
+    page();
+    await userEvent.click(screen.getByRole("button", { name: /添加供应商/ }));
+    await userEvent.type(screen.getByLabelText("Base URL"), "https://models.example.test/v1");
+    const id = screen.getByLabelText("模型 ID 1");
+    await userEvent.type(id, "manual-model");
+    expect(screen.queryByRole("combobox", { name: "已发现模型 1" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "获取模型列表" }));
+    expect(screen.getByRole("status")).toHaveTextContent("正在获取模型列表");
+    expect(id).toHaveValue("manual-model");
+    complete({ ok: true, payload: { status: "success", candidates: ["discovered-a"], message: "已同步 1 个候选" } });
+    const discovered = await screen.findByRole("combobox", { name: "已发现模型 1" });
+    await userEvent.selectOptions(discovered, "discovered-a");
+    expect(id).toHaveValue("discovered-a");
+    await userEvent.clear(id);
+    await userEvent.type(id, "my-custom-id");
+    await userEvent.click(screen.getByRole("button", { name: "获取模型列表" }));
+    complete({ ok: false, error: "端点暂时不可用" });
+    expect(await screen.findByText("端点暂时不可用")).toBeInTheDocument();
+    expect(id).toHaveValue("my-custom-id");
   });
 
   it("renders the candidates of a successful discovery and quotes main's failure reason verbatim", async () => {

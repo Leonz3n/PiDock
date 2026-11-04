@@ -181,3 +181,14 @@ it("names a missing server and an invalid name instead of inventing a row", asyn
   await expect(mcp.perform({ op: "test", name: "pidock-mcp-00000000-0000-4000-8000-000000000000" })).rejects.toMatchObject({ code: "mcp-not-found" });
   await expect(mcp.perform({ op: "enable", name: "not a valid name" })).rejects.toBeInstanceOf(TrustDomainViolation);
 });
+
+it("projects only OAuth registration metadata and preserves native credentials through managed changes", async () => {
+  const oauth = { clientRegistration: "cimd", clientSecret: "private-secret-never-return", callbackUrl: "http://127.0.0.1/callback", nestedUnknown: { keep: true } };
+  const { mcp, file } = wiring({ mcpServers: { native: { url: "https://example.com/mcp", oauth } } });
+  const before = mcp.list().servers[0]!;
+  expect(before).toMatchObject({ oauth: { configured: true, clientRegistration: "cimd", explicitClientId: false } });
+  expect(JSON.stringify(before)).not.toContain("private-secret-never-return");
+  const added = await mcp.perform({ op: "save", input: { transport: "stdio", command: "node" } }) as { name: string };
+  await mcp.perform({ op: "disable", name: added.name });
+  expect(JSON.parse(readFileSync(file.path, "utf8")).mcpServers.native.oauth).toEqual(oauth);
+});

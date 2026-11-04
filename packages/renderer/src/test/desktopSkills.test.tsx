@@ -1,13 +1,11 @@
 /**
  * [Pencil T16] Pencil T16 · S09 Skills pane states.
  *
- * jsdom has no layout, so the 900/560 contract is asserted on the tier classes
- * the pane uses (`below-mid` = max-width 960px, `below-stack` = max-width
- * 720px): the add row stacks at 560 and the source rows keep their actions
- * visible at 900. Every visible state comes from the injected view — no static
- * card is asserted, and an empty list says it is empty.
+ * Public scan/add/toggle/open seams use the real component and a preload boundary
+ * double. Physical geometry is verified by the production Electron capture.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSkills } from "../components/DesktopSkills";
 import type { PidockBridge } from "../data/shellBridge";
@@ -70,15 +68,27 @@ function harness(initial: SkillSourcesView) {
 }
 
 describe("Skills pane (S09 · Pencil T16)", () => {
+  it("rescans real sources and separates validation warnings from duplicate conflicts", async () => {
+    const initial = view();
+    initial.sources[0]!.diagnostics = [{ message: "description should not contain markup", path: "/Users/me/skills/pdf-tools/SKILL.md" }];
+    const { bridge, skillsOp } = harness(initial);
+    render(<DesktopSkills bridge={bridge} />);
+    expect(await screen.findByText(/验证警告：description should not contain markup/)).toBeInTheDocument();
+    expect(screen.getByTestId(`skill-duplicate-${SOURCE_A}::pdf-tools`)).toHaveTextContent("重名");
+    await userEvent.click(screen.getByRole("button", { name: "重新扫描目录" }));
+    expect(skillsOp.mock.calls.filter(([request]) => request.op === "list")).toHaveLength(2);
+  });
+
   it("renders the real scan: descriptions, source paths, resources, duplicates and named failures", async () => {
     const { bridge } = harness(view());
-    const { container } = render(<DesktopSkills bridge={bridge} />);
+    render(<DesktopSkills bridge={bridge} />);
     const pane = await screen.findByTestId("skills-pane");
 
     await waitFor(() => expect(pane.querySelectorAll("[data-testid^='skill-source-']")).toHaveLength(4));
     // Two rows for one name, each naming the other source instead of substituting it.
     expect(screen.getAllByText("pdf-tools")).toHaveLength(2);
-    expect(screen.getByTestId(`skill-duplicate-${SOURCE_A}::pdf-tools`)).toHaveTextContent("/Users/me/more-skills");
+    await userEvent.click(within(screen.getByTestId(`skill-row-${SOURCE_A}::pdf-tools`)).getByText("来源与资源详情"));
+    expect(within(screen.getByTestId(`skill-row-${SOURCE_A}::pdf-tools`)).getByText(/重名来源/)).toHaveTextContent("/Users/me/more-skills");
     expect(screen.getByTestId(`skill-file-${SOURCE_A}::pdf-tools`)).toHaveTextContent("/Users/me/skills/pdf-tools/SKILL.md");
     expect(screen.getByTestId(`skill-resources-${SOURCE_A}::pdf-tools`)).toHaveTextContent("references/format.md (42 B)");
     expect(screen.getByText("Extract text from PDFs. Use when inspecting a PDF.")).toBeInTheDocument();
@@ -89,12 +99,7 @@ describe("Skills pane (S09 · Pencil T16)", () => {
     expect(screen.getByTestId("skills-counts")).toHaveTextContent("4 个来源 · 3 启用 · 1 异常 · 2 个技能");
     expect(screen.getByText(/技能说明只在会话开始注入一次/)).toBeInTheDocument();
 
-    // 900px: the source row keeps its actions next to the path (`below-mid` tier).
-    const row = screen.getByTestId(`skill-source-${SOURCE_A}`);
-    expect(row.firstElementChild?.className).toContain("flex-wrap");
-    // 560px: the add form stacks to one column (`below-stack` tier).
-    const form = container.querySelector("form");
-    expect(form?.className).toContain("below-stack:grid-cols-1");
+
   });
 
   it("adds a directory and toggles a source through main's named ops", async () => {
@@ -117,7 +122,9 @@ describe("Skills pane (S09 · Pencil T16)", () => {
     const { bridge, skillsOp } = harness(view());
     render(<DesktopSkills bridge={bridge} />);
     const key = `${SOURCE_A}::pdf-tools`;
-    fireEvent.click(await screen.findByTestId(`skill-open-${key}`));
+    await screen.findByTestId(`skill-open-${key}`);
+    await userEvent.click(within(screen.getByTestId(`skill-row-${key}`)).getByText("来源与资源详情"));
+    await userEvent.click(screen.getByTestId(`skill-open-${key}`));
     await waitFor(() => expect(skillsOp).toHaveBeenCalledWith({ op: "open", key }));
   });
 
@@ -131,6 +138,8 @@ describe("Skills pane (S09 · Pencil T16)", () => {
     const corrupt = harness(view({ state: "invalid", sources: [], message: "配置不是合法 JSON" }));
     render(<DesktopSkills bridge={corrupt.bridge} />);
     expect(await screen.findByTestId("skills-config-invalid")).toHaveTextContent("配置不是合法 JSON");
+    expect(screen.getByTestId("skills-counts")).toHaveTextContent("数量未知");
+    expect(screen.getByTestId("skills-counts")).not.toHaveTextContent("0 个来源");
     expect(screen.getByText(/不会用空白配置覆盖/)).toBeInTheDocument();
   });
 

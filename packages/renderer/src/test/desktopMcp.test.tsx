@@ -83,6 +83,17 @@ describe("S09 MCP pane", () => {
     expect(within(nav).getByRole("button", { name: /^MCP/ })).toHaveTextContent("2");
   });
 
+  it("shows a real authentication challenge without inventing an OAuth login state", async () => {
+    await openMcp({ list: { ...STATUS, servers: [{ ...UNMANAGED_ROW, state: "enabled", error: null, oauth: { configured: true, clientRegistration: "cimd", explicitClientId: false } }] }, test: { state: "failed", tools: [], credentialRefs: [], error: { code: "mcp-auth-required", message: "server requires sign-in (HTTP 401)" } } });
+    const row = (await screen.findAllByTestId("mcp-row"))[0]!;
+    expect(row).toHaveTextContent("OAuth · cimd");
+    expect(row).toHaveTextContent("认证状态未知");
+    await userEvent.click(within(row).getByRole("button", { name: "测试" }));
+    expect(await screen.findByTestId("mcp-test-result")).toHaveTextContent("需要认证");
+    expect(screen.queryByRole("button", { name: /登录|授权/ })).toBeNull();
+    expect(screen.queryByText("未登录")).toBeNull();
+  });
+
   it("tests a saved server through the real op and shows the tools it returned", async () => {
     const { calls } = await openMcp({ list: STATUS });
     const row = (await screen.findAllByTestId("mcp-row"))[0]!;

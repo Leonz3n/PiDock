@@ -269,3 +269,62 @@
   .creation-choice-row { padding-left: 130px; }
   .creation-mode-option { padding-inline: 6px; }
 }
+
+/* Issue 160 S03/S03B/S09 management content. Physical geometry is checked in Electron. */
+.capability-input {
+  height: 32px;
+  min-width: 0;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-paper);
+  padding: 4px 10px;
+  color: var(--color-ink);
+  font-size: 11px;
+  outline: none;
+}
+.capability-input:focus-visible {
+  border-color: var(--color-accent);
+  outline: 2px solid var(--color-soft);
+}
+.provider-row { position: relative; }
+.provider-row .provider-details { margin-top: 0; }
+.provider-details > summary {
+  position: absolute;
+  right: 16px;
+  top: 24px;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  color: transparent;
+  list-style: none;
+}
+.provider-details > summary::after {
+  content: '⋯';
+  position: absolute;
+  inset: 0;
+  color: var(--color-muted);
+  font-size: 15px;
+  line-height: 14px;
+}
+.provider-row > div:first-child { padding-right: 28px; }
+.provider-details[open] { padding-top: 10px; }
+.capability-content { scrollbar-gutter: stable; }
+.mcp-details > summary {
+  position: absolute;
+  right: 6px;
+  top: 17px;
+  width: 16px;
+  height: 18px;
+  overflow: hidden;
+  color: transparent;
+  list-style: none;
+}
+.mcp-details > summary::after {
+  content: '⋯';
+  position: absolute;
+  inset: 0;
+  color: var(--color-muted);
+}
+@media (max-width: 850px) {
+  .mcp-row > div > div:first-child { flex-basis: 100%; }
+}

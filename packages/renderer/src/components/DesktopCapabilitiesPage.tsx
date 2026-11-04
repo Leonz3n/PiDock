@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { Icon, type IconName } from "./Icon";
-import { Button } from "./ui/button";
 import { DesktopProvidersPanel } from "./DesktopProvidersPanel";
 import { DesktopSkills } from "./DesktopSkills";
 import { DesktopMcpPanel } from "./DesktopMcpPanel";
@@ -14,12 +13,10 @@ import { parseProviderStatus, providerCall, type ProviderStatus } from "../data/
  * real `models.json` path, and the selected pane on the right. Providers (#138)
  * and MCP (issue 150) are real management surfaces: MCP lists Pi's native
  * `mcp.json`, edits only the `pidock-mcp-<uuid>` namespace, tests the real
- * connection and states that a save applies to the next session. Skills stays an
- * honest "尚未接线" state (issue 151) — no counts, no sample rows. No Extensions page.
+ * connection and states that a save applies to the next session. Skills is the real source scan (issue 151). No Extensions page.
  *
- * The old duplicate 模型与 Provider route is gone: this page is the only place
- * a provider is managed, and the task's 选用 is recorded here for the task the
- * user came from (the page keeps that task as its context, Esc returns to it).
+ * Skills reads the same main-owned real source scan used by new SDK sessions.
+ * Sidebar counts stay unknown until their native list has actually been read.
  */
 
 type Pane = "providers" | "mcp" | "skills";
@@ -39,10 +36,13 @@ export function DesktopCapabilitiesPage({
   taskName?: string | null;
   onBack?: () => void;
 }) {
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const [pane, setPane] = useState<Pane>("providers");
   const [status, setStatus] = useState<ProviderStatus | null>(null);
   const [error, setError] = useState("");
   // `null` = the MCP list could not be read (never rendered as zero).
+  const [skillsCount, setSkillsCount] = useState<number | null>(null);
+  const onSkillsCount = useCallback((count: number | null) => setSkillsCount(count), []);
   const [mcpCount, setMcpCount] = useState<number | null>(null);
   const onMcpCount = useCallback((count: number | null) => setMcpCount(count), []);
 
@@ -60,7 +60,7 @@ export function DesktopCapabilitiesPage({
   useEffect(() => { void reload(); }, [reload]);
 
   useEffect(() => {
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) onBack?.(); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape" && !document.querySelector("[data-form-open=true]") && !event.defaultPrevented && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement)) onBack?.(); };
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [onBack]);
@@ -77,25 +77,25 @@ export function DesktopCapabilitiesPage({
             ? <span className="text-[10px] text-muted">{status === null ? "—" : status.profiles.length}</span>
             : item.key === "mcp"
               ? <span className="text-[10px] text-muted">{mcpCount === null ? "—" : mcpCount}</span>
-              : <span className="text-[10px] text-muted">—</span>}
+              : <span className="text-[10px] text-muted">{skillsCount ?? "—"}</span>}
         </button>
       </li>)}</ul>
       <div className="mt-auto rounded-md bg-bg p-2 text-[10px] leading-4 text-muted">
         <p className="font-medium text-ink">底层配置文件映射</p>
         <p data-testid="native-path" className="mt-0.5 break-all font-mono">{status?.nativePath ?? "未知（main 未提供）"}</p>
-        <Button type="button" disabled title="打开配置目录的操作尚未接入：这里只列出真实路径">打开配置目录 ↗</Button>
         <p className="mt-1">{status === null ? "" : status.secretsAvailable ? "密钥存储：本机加密（safeStorage）" : "密钥存储：不可用，保存密钥会被拒绝"}</p>
       </div>
     </nav>
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg">
       <header data-testid="management-header" className="flex h-[52px] shrink-0 items-center border-b border-line bg-paper px-8 text-[14px] font-semibold">
-        {pane === "providers" ? "模型服务 (Providers)" : pane === "mcp" ? "MCP 工具服务" : "Skills 技能库"}
+        <div ref={setHeaderSlot} className="flex min-w-0 items-center" />
+        {pane === "providers" ? null : pane === "mcp" ? "MCP / Skills 管理 · MCP 工具服务" : "MCP / Skills 管理 · Skills 技能库"}
       </header>
-      <div className="min-h-0 min-w-0 flex-1 overflow-auto px-12 py-6 below-narrow:px-5">
-      {pane === "providers" ? <DesktopProvidersPanel taskId={taskId} taskName={taskName} status={status} error={error}
+      <div data-testid="management-content" className="capability-content min-h-0 min-w-0 flex-1 overflow-auto px-12 py-6 below-narrow:px-5">
+      {pane === "providers" ? <DesktopProvidersPanel headerSlot={headerSlot} taskId={taskId} taskName={taskName} status={status} error={error}
         onReload={reload} onBack={() => onBack?.()} />
         : pane === "mcp" ? <DesktopMcpPanel onCount={onMcpCount} />
-        : <DesktopSkills />}
+        : <DesktopSkills onCount={onSkillsCount} />}
       </div>
     </div>
   </div>;

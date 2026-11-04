@@ -48,6 +48,7 @@ export interface McpServerView {
   timeout: number | null;
   exposure: string;
   credentialRefs: { env: string[]; headers: string[] };
+  oauth?: { configured: boolean; clientRegistration: "auto" | "dcr" | "cimd" | "unknown"; explicitClientId: boolean };
 }
 
 export interface McpStatus {
@@ -119,6 +120,8 @@ function server(value: unknown): McpServerView {
     url: value.url as string | null,
     timeout: value.timeout as number | null,
     exposure: value.exposure as string,
+    ...(object(value.oauth) && typeof value.oauth.configured === "boolean" && ["auto", "dcr", "cimd", "unknown"].includes(String(value.oauth.clientRegistration)) && typeof value.oauth.explicitClientId === "boolean"
+      ? { oauth: { configured: value.oauth.configured, clientRegistration: value.oauth.clientRegistration as "auto" | "dcr" | "cimd" | "unknown", explicitClientId: value.oauth.explicitClientId } } : {}),
     credentialRefs: {
       env: strings((value.credentialRefs as Record<string, unknown>).env, 100),
       headers: strings((value.credentialRefs as Record<string, unknown>).headers, 100),

@@ -1,4 +1,9 @@
+import { createPortal } from "react-dom";
+import { Field, FieldGroup, FieldLabel } from "./ui/field";
+import { Input } from "./ui/input";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type MutableRefObject } from "react";
+import { cn } from "../lib/utils";
+import { Icon } from "./Icon";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import {
@@ -40,8 +45,7 @@ import {
  * and only travels in the one `save` request that sets it.
  */
 
-const field = "min-w-0 w-full border border-line bg-bg px-2 py-1.5 text-xs text-ink";
-const label = "block text-[11px] font-medium text-muted";
+const field = "capability-input min-w-0 w-full";
 const mono = "font-mono text-[11px] break-all";
 
 /** Presets only fill the form; the protocol is always the one shown in the select. */
@@ -64,6 +68,7 @@ const protocolLabel = (protocol: string) => PROVIDER_PROTOCOLS.find((item) => it
 const levelText = (level: string) => LEVEL_TEXT[level] ?? level;
 
 export function DesktopProvidersPanel({
+  headerSlot,
   taskId,
   taskName,
   status,
@@ -71,6 +76,7 @@ export function DesktopProvidersPanel({
   onReload,
   onBack,
 }: {
+  headerSlot?: HTMLElement | null;
   taskId: string | null;
   taskName: string | null;
   status: ProviderStatus | null;
@@ -81,12 +87,14 @@ export function DesktopProvidersPanel({
   /** Esc with no form open leaves 能力管理. */
   onBack: () => void;
 }) {
+  const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<ProviderDraft | null>(null);
   const [presetKey, setPresetKey] = useState<string | null>(null);
   const [issues, setIssues] = useState<FieldIssue[]>([]);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [showKey, setShowKey] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
   const [discovery, setDiscovery] = useState<DiscoveryRead | null>(null);
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [conflict, setConflict] = useState<{ state: string; draft: ProviderDraft } | null>(null);
@@ -185,6 +193,7 @@ export function DesktopProvidersPanel({
     if (draft === null || busy) return;
     setBusy(true);
     setDiscovery(null);
+    setDiscovering(true);
     try {
       const payload = parseDiscovery(await providerCall({
         op: "discover", protocol: draft.protocol, baseUrl: draft.baseUrl.trim(),
@@ -196,7 +205,7 @@ export function DesktopProvidersPanel({
       // Not a main status: the attempt never produced one (bridge refusal or a
       // payload outside the four-status contract). Kept distinct from `failure`.
       setDiscovery({ status: "refused", candidates: [], message: caught instanceof Error ? caught.message : "模型列表获取失败" });
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setDiscovering(false); }
   };
 
   const testConnection = async () => {
@@ -247,7 +256,7 @@ export function DesktopProvidersPanel({
   };
 
   if (draft !== null) return <ProviderForm
-    draft={draft} presetKey={presetKey} issues={issues} notice={notice} conflict={conflict} busy={busy} showKey={showKey}
+    headerSlot={headerSlot} discovering={discovering} draft={draft} presetKey={presetKey} issues={issues} notice={notice} conflict={conflict} busy={busy} showKey={showKey}
     discovery={discovery} probe={probe} formRef={formRef} issueFor={issueFor}
     onPatch={patch} onPatchRow={patchRow} onApplyPreset={applyPreset} onToggleReasoning={(index, reasoning) => patchRow(index, {
       // A newly declared reasoning model declares 关闭 first and nothing else
@@ -277,38 +286,34 @@ export function DesktopProvidersPanel({
     onReconcile={() => { if (conflict) void save({ ...conflict.draft }, true); }}
   />;
 
-  return <div data-testid="providers-panel" className="min-w-0">
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-4">
-      <div className="min-w-0">
-        <p className="text-[10px] uppercase tracking-[1.8px] text-[#95979c]">Providers</p>
-        <h2 className="mt-1.5 text-[24px] font-semibold text-ink">模型供应商</h2>
-        <p className="mt-1.5 max-w-[62ch] text-xs leading-6 text-muted">
-          这里保存的每份配置都会写入 Pi 自己的 <code className={mono}>models.json</code>（<code className={mono}>pidock-&lt;id&gt;</code>），
-          密钥只进入本机加密存储，界面永远不会回显。
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        <span data-testid="providers-state" className="text-[11px] text-muted">{status ? PROVIDER_STATE_TEXT[status.state] : "读取中…"}</span>
+  return <>
+    {headerSlot ? createPortal(<><span>模型服务 (Providers)</span><span className="ml-3 truncate text-[11px] font-normal text-muted">管理与配置 Pi Agent 模型服务商与 API Key</span></>, headerSlot) : null}
+    <div data-testid="providers-panel" className="min-w-0">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <h2 className="text-[18px] font-semibold text-ink">Pi 供应商列表 <span className="text-[11px] font-normal text-muted">（共 {status?.profiles.length ?? "—"} 个配置项）</span></h2>
+      <div className="flex items-center gap-3">
+        <input type="search" aria-label="搜索供应商 / 模型名称" placeholder="搜索供应商 / 模型名称…" className="capability-input w-[240px] below-narrow:w-[180px]" value={query} onChange={(event) => setQuery(event.target.value)} />
         <Button type="button" onClick={openCreate}><span aria-hidden>＋</span>添加供应商</Button>
       </div>
+      <span data-testid="providers-state" className="sr-only">{status ? PROVIDER_STATE_TEXT[status.state] : error ? "读取失败" : "读取中…"}</span>
     </div>
 
-    {error ? <p role="alert" className="mt-3 border border-[#c98a86] bg-[#fdf2f1] px-3 py-2 text-xs text-[#8d3b36]">{error}</p> : null}
-    {notice ? <p role="status" className="mt-3 border border-line bg-soft px-3 py-2 text-xs text-muted">{notice}</p> : null}
+    {error ? <p role="alert" className="mt-3 border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p> : null}
+    {notice ? <p role="status" className="mt-3 text-[11px] text-muted">{notice}</p> : null}
 
-    {taskId === null ? <p data-testid="providers-task-required" className="mt-3 border border-line bg-soft px-3 py-2 text-xs text-muted">
-      尚未打开任务：<strong>选用</strong>会记录在当前任务上，因此先打开一个任务再选用模型。
+    {taskId === null ? <p data-testid="providers-task-required" className="mt-3 text-[11px] text-muted">
+      尚未打开任务：打开任务后可选用模型；配置保存至本机，密钥不回显。
     </p> : <p className="mt-3 text-[11px] text-muted">当前任务：{taskName ?? taskId} · 选用只影响这个任务的会话</p>}
 
     <section className="mt-5" aria-label="已添加">
-      <h2 className="text-xs font-semibold text-muted">已添加 · {status?.profiles.length ?? 0}</h2>
+      <h2 className="text-xs font-semibold text-muted">已添加 · {status?.profiles.length ?? "—"}</h2>
       {status === null
-        ? <p className="mt-2 text-xs text-muted">正在读取本机 Provider 配置…</p>
+        ? <p className="mt-2 text-xs text-muted">{error ? "配置不可用，请检查文件后重试。" : "正在读取本机 Provider 配置…"}</p>
         : status.profiles.length === 0
           ? <p data-testid="providers-empty" className="mt-2 border border-line bg-paper px-4 py-8 text-center text-xs leading-6 text-muted">
             还没有 Provider。添加一份真实端点后，它会同时出现在这里与 Pi 的 models.json 中。
           </p>
-          : <ul className="mt-2 divide-y divide-line border-y border-line bg-paper">{status.profiles.map((view) => {
+          : <ul className="mt-2 flex flex-col gap-2">{status.profiles.filter((view) => `${view.name} ${view.models.map((model) => `${model.id} ${model.name}`).join(" ")}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map((view) => {
               // The level shown is the one a 选用 would send: the user's pick, or
               // main's own default (`high` when declared) — never a guess and
               // never silently the weakest tier.
@@ -319,24 +324,29 @@ export function DesktopProvidersPanel({
               const chosenLevel = chosen.reasoningLevels.includes(level) ? level : defaultLevel;
               const isCurrent = status.profileId === view.id && status.state !== "not-configured";
               return <li key={view.id}
-              data-testid={`provider-card-${view.id}`} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
-            <div className="min-w-0">
+              data-testid={`provider-card-${view.id}`} data-selected={isCurrent} className={cn("provider-row rounded-lg border border-line bg-paper px-4 py-3", isCurrent && "border-accent")}>
+            <div className="flex min-w-0 items-center gap-3">
+            <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-md bg-soft", isCurrent && "text-accent")}><Icon name="server" /></span>
+            <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <strong className="text-sm font-medium text-ink">{view.name}</strong>
+                {isCurrent ? <Badge variant="accent">当前任务已选用</Badge> : null}
+                <span className="truncate text-[10px] text-muted">{view.models.length} 个模型 · {view.models.map((model) => model.id).join("、")}</span>
+              </div>
+              <p className="truncate font-mono text-[10px] text-muted" title={view.baseUrl}>{view.baseUrl}</p>
+            </div>
+            <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(view)}>编辑</Button>
+            </div>
+            <details className="provider-details mt-1">
+              <summary className="cursor-pointer text-[10px] text-muted">模型选择与配置操作</summary>
+              <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted">
                 <Badge variant="soft">{protocolLabel(view.protocol)}</Badge>
                 <Badge variant="soft">{CREDENTIAL_TEXT[view.credentialSource]}</Badge>
-                <Badge variant={view.credentialAvailable ? "soft" : "outline"}>
-                  {view.credentialAvailable ? "密钥可用" : "密钥缺失"}
-                </Badge>
-                <span className={`text-[10px] ${view.native.state === "synced" ? "text-muted" : "text-[#8d3b36]"}`}>
-                  {NATIVE_STATE_TEXT[view.native.state]}
-                </span>
-                {isCurrent ? <span data-testid={`provider-current-${view.id}`} className="text-[10px] text-muted">
-                  当前任务已选用 · {status.modelId} · 推理 {status.thinkingLevel ? levelText(status.thinkingLevel) : "无"}
-                </span> : null}
+                <Badge variant="outline">{view.credentialAvailable ? "密钥可用" : "密钥缺失"}</Badge>
+                <span>{NATIVE_STATE_TEXT[view.native.state]}</span>
+                {isCurrent ? <span data-testid={`provider-current-${view.id}`}>当前任务已选用 · {status.modelId} · 推理 {status.thinkingLevel ? levelText(status.thinkingLevel) : "无"}</span> : null}
               </div>
               {view.notes ? <p className="mt-1 text-[11px] text-muted">{view.notes}</p> : null}
-              <p className={`mt-1 text-muted ${mono}`}>{view.baseUrl}</p>
               <p className="mt-1 flex flex-wrap gap-1 text-[11px] text-muted">
                 {view.models.slice(0, 4).map((model) => <span key={model.id} className="border border-line px-1.5">
                   {model.id}{model.reasoning ? " · 推理" : ""}{
@@ -346,8 +356,7 @@ export function DesktopProvidersPanel({
                 {view.models.length > 4 ? <span>+{view.models.length - 4}</span> : null}
               </p>
               <p className="mt-1 text-[10px] text-muted">默认模型：{view.modelId} · 上下文 {view.contextWindow.toLocaleString("en-US")} tokens · 最大输出 {view.maxTokens.toLocaleString("en-US")} · 默认推理档位：{defaultThinkingLevel(view.models.find((model) => model.id === view.modelId)?.reasoningLevels ?? []) === null ? "无可用档位" : levelText(defaultThinkingLevel(view.models.find((model) => model.id === view.modelId)?.reasoningLevels ?? [])!)}</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <select aria-label={`选用模型（${view.name}）`} className={field} value={chosenModelId}
                 onChange={(event) => {
                   const model = view.models.find((row) => row.id === event.target.value);
@@ -359,7 +368,7 @@ export function DesktopProvidersPanel({
                 {view.models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
               </select>
               {chosen.reasoningLevels.length === 0
-                ? <span data-testid={`provider-levels-missing-${view.id}`} className="text-[10px] text-[#8d3b36]">无可用档位</span>
+                ? <span data-testid={`provider-levels-missing-${view.id}`} className="text-[10px] text-destructive">无可用档位</span>
                 : <select aria-label={`推理档位（${view.name}）`} className={field} value={chosenLevel ?? ""}
                     onChange={(event) => setChoice((current) => ({ ...current, [view.id]: { modelId: chosenModelId, level: event.target.value } }))}>
                     {chosen.reasoningLevels.map((option) => <option key={option} value={option}>{levelText(option)}</option>)}
@@ -370,7 +379,6 @@ export function DesktopProvidersPanel({
                   ...(chosenLevel === null ? {} : { thinkingLevel: chosenLevel }) }, "Provider 选用失败")}>
                 选用
               </Button>
-              <Button type="button" onClick={() => openEdit(view)}>编辑</Button>
               {pendingDelete === view.id
                 ? <>
                   <Button type="button" disabled={busy} onClick={() => void confirmDelete(view, false)}>确认删除</Button>
@@ -378,7 +386,7 @@ export function DesktopProvidersPanel({
                 </>
                 : <Button type="button" onClick={() => requestDelete(view)}>删除</Button>}
             </div>
-            {deleteConflict?.id === view.id ? <div role="alert" className="mt-2 basis-full border border-[#c9a486] bg-[#fdf7f1] px-3 py-2 text-[11px] text-[#7a4b25]">
+            {deleteConflict?.id === view.id ? <div role="alert" className="mt-2 basis-full border border-attention/40 bg-attention-soft px-3 py-2 text-[11px] text-attention">
               <p>models.json 里的 <code className={mono}>pidock-{view.id}</code> 已被外部{NATIVE_STATE_TEXT[deleteConflict.state as keyof typeof NATIVE_STATE_TEXT] ?? "修改"}：
                 确认删除会连同外部版本一起移除。</p>
               <div className="mt-2 flex gap-2">
@@ -386,27 +394,30 @@ export function DesktopProvidersPanel({
                 <Button type="button" onClick={() => setDeleteConflict(null)}>保留它</Button>
               </div>
             </div> : null}
+            </details>
           </li>; })}</ul>}
+      {status && status.profiles.length > 0 && !status.profiles.some((view) => `${view.name} ${view.models.map((model) => `${model.id} ${model.name}`).join(" ")}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) ? <p className="py-6 text-xs text-muted">没有匹配的供应商</p> : null}
     </section>
 
     <section className="mt-6" aria-label="可添加">
       <h2 className="text-xs font-semibold text-muted">可添加 · 预设</h2>
-      <p className="mt-1 text-[11px] text-muted">预设只填入表单，协议与地址在保存前都可以改；不存在的端点会给出真实失败。</p>
-      <ul className="mt-2 divide-y divide-line border-y border-line bg-paper">{PRESETS.filter((preset) => !occupied.has(preset.baseUrl)).map((preset) =>
-        <li key={preset.key} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
+      <p className="mt-1 text-[11px] text-muted">预设填入地址、协议与模型，保存前可修改。</p>
+      <ul className="mt-2 flex flex-col gap-2">{PRESETS.filter((preset) => !occupied.has(preset.baseUrl)).map((preset) =>
+        <li key={preset.key} className="flex min-h-[62px] flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-paper px-4 py-2">
           <span className="min-w-0"><strong className="text-xs font-medium">{preset.name}</strong>
-            <span className={`ml-2 text-muted ${mono}`}>{preset.baseUrl}</span></span>
+            <span className={`mt-0.5 block text-muted ${mono}`}>{preset.baseUrl}</span></span>
           <Button type="button" onClick={() => applyPreset(preset)}>激活</Button>
         </li>)}</ul>
     </section>
-  </div>;
+  </div></>;
 }
 
 function ProviderForm({
-  draft, presetKey, issues, notice, conflict, busy, showKey, discovery, probe, formRef, issueFor,
+  headerSlot, discovering, draft, presetKey, issues, notice, conflict, busy, showKey, discovery, probe, formRef, issueFor,
   onPatch, onPatchRow, onApplyPreset, onToggleReasoning, onToggleLevel, onAddRow, onRemoveRow, onAddCandidate,
   onToggleKey, onDiscover, onProbe, onSubmit, onCancel, onReconcile,
 }: {
+  headerSlot?: HTMLElement | null; discovering: boolean;
   draft: ProviderDraft; presetKey: string | null; issues: FieldIssue[]; notice: string;
   conflict: { state: string; draft: ProviderDraft } | null; busy: boolean; showKey: boolean;
   discovery: DiscoveryRead | null; probe: ProbeResult | null;
@@ -420,7 +431,7 @@ function ProviderForm({
 }) {
   const error = (name: string) => {
     const message = issueFor(name);
-    return message ? <p className="mt-1 text-[10px] text-[#8d3b36]">{message}</p> : null;
+    return message ? <p className="mt-1 text-[10px] text-destructive">{message}</p> : null;
   };
   // Ids the last successful listing did not contain: informational only.
   const misses = discoveryMisses(draft, discovery);
@@ -432,87 +443,65 @@ function ProviderForm({
   const keys = (event: KeyboardEvent) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSubmit(); }
   };
-  return <form ref={formRef} data-testid="provider-form" data-form-open="true" onSubmit={submit} onKeyDown={keys} className="min-w-0">
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
-      <div className="min-w-0">
-        <button type="button" onClick={onCancel} className="text-[11px] text-muted hover:text-ink">← 返回供应商列表 · Esc</button>
-        <h2 className="mt-1.5 text-[22px] font-semibold text-ink">
-          {draft.id === undefined ? "添加供应商" : `编辑供应商：${draft.name}`}
-          <span className="ml-2 text-[11px] font-normal text-muted">保存后写入 models.json</span>
-        </h2>
-      </div>
-      <p className="text-[11px] text-muted">⌘↵ 保存</p>
-    </div>
+  const heading = <><Button type="button" size="sm" onClick={onCancel}>← 返回供应商列表 · Esc</Button><h2 className="ml-3 truncate text-[14px] font-semibold">{draft.id === undefined ? "添加供应商" : `编辑供应商：${draft.name}`}</h2><span className="ml-3 text-[11px] font-normal text-muted">写入 models.json</span></>;
+  return <>
+    {headerSlot ? createPortal(heading, headerSlot) : heading}
+    <form ref={formRef} data-testid="provider-form" data-form-open="true" onSubmit={submit} onKeyDown={keys} className="provider-form min-w-0 rounded-lg border border-line bg-paper p-5">
 
-    {presetKey === null ? <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border border-line bg-soft px-3 py-2">
-      <p className="text-xs text-muted">手动填写：接口格式、Base URL 与模型都由你决定，PiDock 不会从域名推断协议。</p>
+    {presetKey === null ? <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-sidebar px-3 py-2">
+      <p className="text-xs text-muted">手动配置协议、地址与模型，或使用供应商预设。</p>
       <Button type="button" onClick={nextPreset}>使用预设</Button>
-    </div> : <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border border-line bg-soft px-3 py-2">
+    </div> : <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-sidebar px-3 py-2">
       <p className="text-xs text-muted">已载入预设 <strong>{PRESETS.find((preset) => preset.key === presetKey)?.name}</strong>：协议与地址已填入，仍可修改。</p>
       <div className="flex gap-2"><Button type="button" onClick={nextPreset}>更换预设</Button>
         <Button type="button" onClick={() => onPatch({ name: "", notes: "", baseUrl: "", models: [{ id: "", name: "", contextWindow: "128000", maxTokens: "8192", reasoning: false, levels: [], cost: { ...EMPTY_COST } }], modelId: "" })}>清空</Button></div>
     </div>}
 
-    {notice ? <p role="alert" className="mt-3 border border-[#c98a86] bg-[#fdf2f1] px-3 py-2 text-xs text-[#8d3b36]">{notice}</p> : null}
-    {conflict ? <div role="alert" className="mt-3 border border-[#c9a486] bg-[#fdf7f1] px-3 py-2 text-xs text-[#7a4b25]">
+    {notice ? <p role="alert" className="mt-3 border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">{notice}</p> : null}
+    {conflict ? <div role="alert" className="mt-3 border border-attention/40 bg-attention-soft px-3 py-2 text-xs text-attention">
       <p>models.json 里的 <code className={mono}>pidock-{conflict.draft.id}</code> 已被外部改动（{NATIVE_STATE_TEXT[conflict.state as keyof typeof NATIVE_STATE_TEXT] ?? "已修改"}），PiDock 没有覆盖它。</p>
       <div className="mt-2 flex gap-2"><Button type="button" disabled={busy} onClick={onReconcile}>用这份表单覆盖外部修改</Button>
         <Button type="button" onClick={onCancel}>保留外部版本</Button></div>
     </div> : null}
 
-    <div className="mt-4 grid gap-3 below-mid:grid-cols-2">
-      <label className="block"><span className={label}>名称</span>
-        <input aria-label="名称" className={field} value={draft.name} data-invalid={issueFor("name") ? "true" : undefined}
-          onChange={(event) => onPatch({ name: event.target.value })} placeholder="例如 DeepSeek 官方" />{error("name")}</label>
-      <label className="block"><span className={label}>备注（可选）</span>
-        <input aria-label="备注" className={field} value={draft.notes} onChange={(event) => onPatch({ notes: event.target.value })} />{error("notes")}</label>
-      <label className="block"><span className={label}>接口格式</span>
-        <select aria-label="接口格式" className={field} value={draft.protocol}
-          onChange={(event) => onPatch({ protocol: event.target.value as ProviderDraft["protocol"] })}>
-          {PROVIDER_PROTOCOLS.map((protocol) => <option key={protocol.id} value={protocol.id}>{protocol.label} · {protocol.hint}</option>)}
-        </select>{error("protocol")}</label>
-      <label className="block"><span className={label}>Base URL</span>
-        <input aria-label="Base URL" className={`${field} font-mono`} value={draft.baseUrl} data-invalid={issueFor("baseUrl") ? "true" : undefined}
-          onChange={(event) => onPatch({ baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />{error("baseUrl")}
-        <p className="mt-1 text-[10px] text-muted">{PROVIDER_PROTOCOLS.find((protocol) => protocol.id === draft.protocol)?.baseHint}</p></label>
-    </div>
-
-    <fieldset className="mt-4 border border-line bg-paper px-3 py-3">
-      <legend className="px-1 text-[11px] font-medium text-muted">凭据</legend>
-      <div className="flex flex-wrap items-center gap-3 text-xs">
-        <label className="flex items-center gap-1.5"><input type="radio" name="credential-kind" checked={draft.credentialKind === "store"}
-          onChange={() => onPatch({ credentialKind: "store" })} />密钥保存在本机（safeStorage 加密）</label>
-        <label className="flex items-center gap-1.5"><input type="radio" name="credential-kind" checked={draft.credentialKind === "env"}
-          onChange={() => onPatch({ credentialKind: "env" })} />从环境变量读取引用</label>
-      </div>
-      {draft.credentialKind === "store" ? <div className="mt-3 grid gap-3 below-mid:grid-cols-2">
-        <label className="block"><span className={label}>API Key</span>
-          <div className="flex gap-2">
-            <input aria-label="API Key" className={`${field} font-mono`} type={showKey ? "text" : "password"} autoComplete="off" spellCheck={false}
-              value={draft.apiKey} data-invalid={issueFor("apiKey") ? "true" : undefined}
-              placeholder={draft.hasStoredKey ? "已保存的密钥不会显示；留空保留" : "sk-…"}
-              onChange={(event) => onPatch({ apiKey: event.target.value })} />
-            <Button type="button" onClick={onToggleKey} aria-label={showKey ? "隐藏密钥" : "显示密钥"}>{showKey ? "隐藏" : "显示"}</Button>
-          </div>{error("apiKey")}
-          <p className="mt-1 text-[10px] text-muted">密钥只随这一次保存请求发送，写入后界面与列表都不再读取它。</p></label>
-        <p className="self-end text-[10px] leading-5 text-muted">
-          {draft.hasStoredKey ? "已保存一份密钥：留空表示继续使用它。" : "第一次保存需要填写密钥；平台无法加密时保存会被拒绝，不会退化成明文。"}
-        </p>
-      </div> : <label className="mt-3 block max-w-[320px]"><span className={label}>环境变量名</span>
-        <input aria-label="环境变量名" className={`${field} font-mono`} value={draft.authRef} data-invalid={issueFor("authRef") ? "true" : undefined}
-          onChange={(event) => onPatch({ authRef: event.target.value })} />{error("authRef")}
-        <p className="mt-1 text-[10px] text-muted">models.json 只写入 <code className={mono}>$引用名</code>，从不写值。</p></label>}
-    </fieldset>
+    <FieldGroup className="provider-fields mt-4 grid grid-cols-2 gap-x-4 gap-y-3 below-narrow:grid-cols-1">
+      <Field data-invalid={Boolean(issueFor("name"))}>
+        <FieldLabel htmlFor="provider-name">名称 *</FieldLabel>
+        <Input id="provider-name" aria-label="名称" value={draft.name} aria-invalid={Boolean(issueFor("name"))} data-invalid={issueFor("name") ? "true" : undefined} onChange={(event) => onPatch({ name: event.target.value })} placeholder="例如 DeepSeek 官方" />{error("name")}
+      </Field>
+      <Field><FieldLabel htmlFor="provider-notes">备注（可选）</FieldLabel><Input id="provider-notes" aria-label="备注" value={draft.notes} onChange={(event) => onPatch({ notes: event.target.value })} />{error("notes")}</Field>
+      <Field><FieldLabel htmlFor="provider-protocol">接口格式 *</FieldLabel>
+        <select id="provider-protocol" aria-label="接口格式" className={field} value={draft.protocol} onChange={(event) => onPatch({ protocol: event.target.value as ProviderDraft["protocol"] })}>
+          {PROVIDER_PROTOCOLS.map((protocol) => <option key={protocol.id} value={protocol.id}>{protocol.label}</option>)}
+        </select>{error("protocol")}
+      </Field>
+      <Field data-invalid={Boolean(issueFor("baseUrl"))}><FieldLabel htmlFor="provider-base">Base URL *</FieldLabel>
+        <Input id="provider-base" aria-label="Base URL" value={draft.baseUrl} aria-invalid={Boolean(issueFor("baseUrl"))} data-invalid={issueFor("baseUrl") ? "true" : undefined} onChange={(event) => onPatch({ baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />{error("baseUrl")}
+      </Field>
+      <Field><FieldLabel htmlFor="credential-kind">凭据来源</FieldLabel><select id="credential-kind" className={field} value={draft.credentialKind} onChange={(event) => onPatch({ credentialKind: event.target.value === "env" ? "env" : "store" })}>
+        <option value="store">密钥保存在本机（safeStorage 加密）</option><option value="env">从环境变量读取引用</option>
+      </select></Field>
+      {draft.credentialKind === "store" ? <Field data-invalid={Boolean(issueFor("apiKey"))}>
+        <FieldLabel htmlFor="provider-key">API Key *</FieldLabel>
+        <div className="flex gap-2"><Input id="provider-key" aria-label="API Key" type={showKey ? "text" : "password"} autoComplete="off" spellCheck={false} value={draft.apiKey} aria-invalid={Boolean(issueFor("apiKey"))} data-invalid={issueFor("apiKey") ? "true" : undefined} placeholder={draft.hasStoredKey ? "已保存的密钥不会显示；留空保留" : "sk-…"} onChange={(event) => onPatch({ apiKey: event.target.value })} />
+        <Button type="button" onClick={onToggleKey} aria-label={showKey ? "隐藏密钥" : "显示密钥"}>{showKey ? "隐藏" : "显示"}</Button></div>{error("apiKey")}
+        <p className="text-[10px] text-muted">{draft.hasStoredKey ? "已保存一份密钥：留空表示继续使用它。" : "密钥仅存本机加密存储，不回显。"}</p>
+      </Field> : <Field data-invalid={Boolean(issueFor("authRef"))}><FieldLabel htmlFor="provider-env">环境变量名</FieldLabel>
+        <Input id="provider-env" aria-label="环境变量名" value={draft.authRef} aria-invalid={Boolean(issueFor("authRef"))} data-invalid={issueFor("authRef") ? "true" : undefined} onChange={(event) => onPatch({ authRef: event.target.value })} />{error("authRef")}
+      </Field>}
+    </FieldGroup>
 
     <section className="mt-4" aria-label="模型">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xs font-semibold text-muted">模型 · {draft.models.length}</h2>
+        <label className="flex min-w-0 items-center gap-2 text-[10px] text-muted">默认模型<select aria-label="默认模型" className="capability-input max-w-[240px]" value={draft.modelId} onChange={(event) => onPatch({ modelId: event.target.value })}><option value="">请选择</option>{draft.models.filter((row) => row.id.trim() !== "").map((row) => <option key={row.id} value={row.id}>{row.id}</option>)}</select>{error("modelId")}</label>
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={onAddRow}>手动添加</Button>
           <Button type="button" disabled={busy || draft.baseUrl.trim() === ""} onClick={onDiscover}>获取模型列表</Button>
         </div>
       </div>
       {error("models")}
+      {discovering ? <p role="status" className="mt-2 text-[11px] text-muted">正在获取模型列表；已保留手动输入…</p> : null}
       {discovery ? <div className="mt-2 border border-line bg-soft px-3 py-2 text-[11px]">
         <p className="text-muted">{discovery.message}</p>
         {discovery.status === "success" ? <ul aria-label="可选模型" className="mt-2 flex flex-wrap gap-1">
@@ -524,48 +513,30 @@ function ProviderForm({
           以下模型 ID 不在这次列表里，仍可手动保存：{misses.join("、")}
         </p> : null}
       </div> : null}
-      <div className="mt-2 overflow-x-auto">
-        <table className="w-full min-w-[720px] border-y border-line text-[11px]">
-          <thead><tr className="text-left text-muted">
-            <th className="py-1.5 pr-2 font-medium">模型 ID</th><th className="py-1.5 pr-2 font-medium">显示名称</th>
-            <th className="py-1.5 pr-2 font-medium">上下文</th><th className="py-1.5 pr-2 font-medium">最大输出</th>
-            <th className="py-1.5 pr-2 font-medium">思维链</th><th className="py-1.5 pr-2 font-medium">推理档位</th>
-            <th className="py-1.5 pr-2 font-medium">输入价格</th><th className="py-1.5" />
-          </tr></thead>
-          <tbody>{draft.models.map((row, index) => <tr key={index} className="border-t border-line align-top">
-            <td className="py-1.5 pr-2"><input aria-label={`模型 ID ${index + 1}`} className={`${field} font-mono`} value={row.id}
-              data-invalid={issueFor(`models.${index}.id`) ? "true" : undefined}
-              onChange={(event) => onPatchRow(index, { id: event.target.value })} />{error(`models.${index}.id`)}</td>
-            <td className="py-1.5 pr-2"><input aria-label={`显示名称 ${index + 1}`} className={field} value={row.name}
-              onChange={(event) => onPatchRow(index, { name: event.target.value })} />{error(`models.${index}.name`)}</td>
-            <td className="py-1.5 pr-2"><input aria-label={`上下文窗口 ${index + 1}`} className={field} inputMode="numeric" value={row.contextWindow}
-              onChange={(event) => onPatchRow(index, { contextWindow: event.target.value })} />{error(`models.${index}.contextWindow`)}</td>
-            <td className="py-1.5 pr-2"><input aria-label={`最大输出 ${index + 1}`} className={field} inputMode="numeric" value={row.maxTokens}
-              onChange={(event) => onPatchRow(index, { maxTokens: event.target.value })} />{error(`models.${index}.maxTokens`)}</td>
-            <td className="py-1.5 pr-2"><input type="checkbox" aria-label={`思维链推理 ${index + 1}`} checked={row.reasoning}
-              onChange={(event) => onToggleReasoning(index, event.target.checked)} />{error(`models.${index}.reasoning`)}</td>
-            <td className="py-1.5 pr-2">{row.reasoning ? <div className="flex flex-wrap gap-1">{REASONING_LEVELS.map((level) =>
-              <label key={level} className={`cursor-pointer border px-1 ${row.levels.includes(level) ? "border-[#5773ae] text-ink" : "border-line text-muted"}`}>
-                <input type="checkbox" className="sr-only" aria-label={`${levelText(level)}档位 ${index + 1}`} checked={row.levels.includes(level)}
-                  onChange={() => onToggleLevel(index, level)} />{levelText(level)}</label>)}
-              {row.levels.length === 0 ? <p className="mt-1 text-[10px] text-[#8d3b36]">无可用档位</p> : null}</div>
-              : <span className="text-muted">仅关闭</span>}</td>
-            <td className="py-1.5 pr-2"><div className="grid grid-cols-2 gap-1">
-              {COST_FIELDS.map((key) => <input key={key} aria-label={`${COST_LABELS[key]} ${index + 1}`} className={field} value={row.cost[key]}
-                placeholder={COST_LABELS[key]}
-                onChange={(event) => onPatchRow(index, { cost: { ...row.cost, [key]: event.target.value } })} />)}
-            </div>{error(`models.${index}.cost`)}</td>
-            <td className="py-1.5"><Button type="button" disabled={draft.models.length === 1} onClick={() => onRemoveRow(index)}>移除</Button></td>
-          </tr>)}</tbody>
-        </table>
+      <div className="mt-2 flex flex-col gap-2">
+        {draft.models.map((row, index) => <div key={index} className="model-row rounded-md bg-sidebar p-3">
+          <FieldGroup className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)] gap-3 below-narrow:grid-cols-1">
+            <Field data-invalid={Boolean(issueFor(`models.${index}.id`))}><FieldLabel htmlFor={`model-id-${index}`}>模型 ID *（手动输入 + 下拉选择）</FieldLabel>
+              <Input id={`model-id-${index}`} aria-label={`模型 ID ${index + 1}`} value={row.id} aria-invalid={Boolean(issueFor(`models.${index}.id`))} data-invalid={issueFor(`models.${index}.id`) ? "true" : undefined} onChange={(event) => onPatchRow(index, { id: event.target.value })} />{error(`models.${index}.id`)}
+              {discovery?.status === "success" ? <select aria-label={`已发现模型 ${index + 1}`} className={field} value="" onChange={(event) => { if (event.target.value) onPatchRow(index, { id: event.target.value }); }}><option value="">下拉选择模型</option>{discovery.candidates.map((id) => <option key={id} value={id}>{id}</option>)}</select> : null}
+            </Field>
+            <Field><FieldLabel htmlFor={`model-name-${index}`}>显示名称</FieldLabel><Input id={`model-name-${index}`} aria-label={`显示名称 ${index + 1}`} value={row.name} onChange={(event) => onPatchRow(index, { name: event.target.value })} />{error(`models.${index}.name`)}</Field>
+            <Field><FieldLabel htmlFor={`model-reasoning-${index}`}>思维链推理</FieldLabel><label className="flex h-8 items-center gap-2 text-[11px]"><input id={`model-reasoning-${index}`} type="checkbox" aria-label={`思维链推理 ${index + 1}`} checked={row.reasoning} onChange={(event) => onToggleReasoning(index, event.target.checked)} />{row.reasoning ? "开启" : "仅关闭"}</label>{error(`models.${index}.reasoning`)}
+              {row.reasoning ? <div className="flex flex-wrap gap-1">{REASONING_LEVELS.map((level) => <label key={level} className={cn("cursor-pointer rounded border px-1 text-[10px]", row.levels.includes(level) ? "border-accent text-ink" : "border-line text-muted")}><input type="checkbox" className="sr-only" aria-label={`${levelText(level)}档位 ${index + 1}`} checked={row.levels.includes(level)} onChange={() => onToggleLevel(index, level)} />{levelText(level)}</label>)}{row.levels.length === 0 ? <p className="text-[10px] text-destructive">无可用档位</p> : null}</div> : null}
+            </Field>
+          </FieldGroup>
+          <details className="mt-2"><summary className="cursor-pointer text-[10px] text-muted">窗口、输出与价格声明</summary>
+            <FieldGroup className="mt-2 grid grid-cols-2 gap-3 below-narrow:grid-cols-1">
+              <Field><FieldLabel htmlFor={`model-context-${index}`}>上下文窗口</FieldLabel><Input id={`model-context-${index}`} aria-label={`上下文窗口 ${index + 1}`} inputMode="numeric" value={row.contextWindow} onChange={(event) => onPatchRow(index, { contextWindow: event.target.value })} />{error(`models.${index}.contextWindow`)}</Field>
+              <Field><FieldLabel htmlFor={`model-output-${index}`}>最大输出</FieldLabel><Input id={`model-output-${index}`} aria-label={`最大输出 ${index + 1}`} inputMode="numeric" value={row.maxTokens} onChange={(event) => onPatchRow(index, { maxTokens: event.target.value })} />{error(`models.${index}.maxTokens`)}</Field>
+              {COST_FIELDS.map((key) => <Field key={key}><FieldLabel htmlFor={`cost-${index}-${key}`}>{COST_LABELS[key]}</FieldLabel><Input id={`cost-${index}-${key}`} aria-label={`${COST_LABELS[key]} ${index + 1}`} value={row.cost[key]} placeholder={COST_LABELS[key]} onChange={(event) => onPatchRow(index, { cost: { ...row.cost, [key]: event.target.value } })} /></Field>)}
+            </FieldGroup>{error(`models.${index}.cost`)}
+          </details>
+          {draft.models.length > 1 ? <Button type="button" size="sm" variant="ghost" onClick={() => onRemoveRow(index)}>移除</Button> : null}
+        </div>)}
       </div>
-      <p className="mt-1 text-[10px] text-muted">价格四项全部填写才会写入，任一未填就保持「未声明」——不会有任何一栏被当成 0；推理档位来自模型自己声明的能力。
-        上下文窗口与最大输出同样是本机声明值：Pi 不会向端点探测模型能力，端点拒绝时会在会话里给出真实错误。</p>
-      <label className="mt-3 block max-w-[320px]"><span className={label}>默认模型</span>
-        <select aria-label="默认模型" className={field} value={draft.modelId} onChange={(event) => onPatch({ modelId: event.target.value })}>
-          <option value="">请选择</option>
-          {draft.models.filter((row) => row.id.trim() !== "").map((row) => <option key={row.id} value={row.id}>{row.id}</option>)}
-        </select>{error("modelId")}</label>
+      <p className="mt-1 text-[10px] text-muted">窗口、推理与价格是本机声明；价格四项未填全则保持未知。模型 ID 可继续手动编辑。</p>
+
     </section>
 
     <section className="mt-4 flex flex-wrap items-start justify-between gap-3 border-t border-line pt-3">
@@ -573,7 +544,7 @@ function ProviderForm({
         <Button type="button" disabled={busy || draft.baseUrl.trim() === "" || draft.modelId.trim() === ""} onClick={onProbe}>
           {busy ? "测试中…" : "测试连通性"}
         </Button>
-        {probe ? <p data-testid="probe-result" className={`mt-1 text-[11px] ${probe.ok ? "text-ink" : "text-[#8d3b36]"}`}>
+        {probe ? <p data-testid="probe-result" className={`mt-1 text-[11px] ${probe.ok ? "text-ink" : "text-destructive"}`}>
           {probe.ok ? `连通 · ${probe.latencyMs ?? "?"} ms` : `失败 · ${probe.message}`}{probe.status === null ? "" : ` · HTTP ${probe.status}`}
         </p> : null}
       </div>
@@ -582,8 +553,8 @@ function ProviderForm({
         <Button type="button" onClick={onCancel}>取消</Button>
       </div>
     </section>
-    {issues.length > 0 ? <p role="alert" className="mt-2 text-[11px] text-[#8d3b36]">
+    {issues.length > 0 ? <p role="alert" className="mt-2 text-[11px] text-destructive">
       还有 {issues.length} 项需要修正：{issues.slice(0, 3).map((issue) => issue.message).join("；")}
     </p> : null}
-  </form>;
+  </form></>;
 }
