@@ -123,7 +123,13 @@ export class McpOAuth {
   async auth(name: string) {
     const { entry, url } = this.entry(name), native = await nativeOAuth();
     const store = await privateCredentials(this.binding, name), settings = await this.settings(name, entry);
-    return native.createMcpAuthProvider({ serverUrl: url, store: store.forServer(name, url), settings: () => settings, onChallenge: () => { this.attempts.delete(name); } });
+    return native.createMcpAuthProvider({ serverUrl: url, store: store.forServer(name, url), settings: () => settings,
+      // A connection challenge belongs to that transport, not the independent
+      // browser login. Keep its controller/done owned for cancel, config edits
+      // and shutdown, including challenges from older transports. Durable token
+      // state remains the source of truth for completed sign-ins.
+      onChallenge: () => {},
+    });
   }
   resume(): void { this.closing = false; }
   async close(): Promise<void> {

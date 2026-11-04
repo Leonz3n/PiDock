@@ -222,10 +222,18 @@ async function run() {
     await capture(`${theme}-oauth-signing-in`);
     check(`${theme}: native browser opener invoked with HTTP URL`,String(browserUrl).startsWith(authorizationServer.base));
     const staleBrowser=String(browserUrl);
+    const tokensBeforeCancel=authorizationServer.requests.filter(request=>request.kind === "token").length;
+    await click("测试");
+    await until("document.querySelector('[data-testid=mcp-test-result]')?.innerText.includes('需要认证')", "challenge during pending login");
+    check(`${theme}: connection challenge preserves active browser login`,(await oauth.status(name)).state === "signing-in");
+    await capture(`${theme}-oauth-signing-in-after-challenge`);
     await click("取消登录");
     await until("document.querySelector('[data-testid=mcp-oauth][data-state=cancelled]')", "cancelled state");
     await capture(`${theme}-oauth-cancelled`);
-    await fetch(staleBrowser).catch(()=>undefined);
+    let lateCallbackRefused=false;
+    try { await fetch(staleBrowser); } catch { lateCallbackRefused=true; }
+    check(`${theme}: cancelled callback listener is closed`,lateCallbackRefused);
+    check(`${theme}: cancelled challenged login installs no tokens`,authorizationServer.requests.filter(request=>request.kind === "token").length === tokensBeforeCancel);
     check(`${theme}: late callback cannot log in`,(await oauth.status(name)).state === "cancelled");
     authorizationServer.mode("failure");browserMode="complete";
     await click("登录");

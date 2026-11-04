@@ -181,3 +181,116 @@ it("refuses unavailable encryption and corrupt private state without a plaintext
   expect(readFileSync(path, "utf8")).toBe('{"unexpected":"private-plaintext"}');
   await oauth.close();
 });
+
+
+it("keeps a challenged browser login cancellable and rejects its late callback before a fresh login", async () => {
+  const { oauthFixture } = await import("../../scripts/fixtures/mcp-oauth-server.mjs");
+  const server = await oauthFixture(), dir = mkdtempSync(join(tmpdir(), "pidock-oauth-")); dirs.push(dir);
+  writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: { native: { url: `${server.base}/mcp`, oauth: { clientRegistration: "dcr" } } } }));
+  let browser: string | undefined;
+  const file = new NativeMcpFile(dir), cipher = createTestSafeStorage();
+  const oauth = await McpOAuth.create(file, dir, cipher, async url => { browser = url; });
+  const wiring = new McpWiring(file, {}, undefined, oauth);
+  try {
+    await wiring.perform({ op: "oauth-start", name: "native" });
+    await expect.poll(() => browser).toBeTruthy();
+    const stale = browser!;
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ state: "failed", error: { code: "mcp-auth-required" } });
+    expect(await wiring.perform({ op: "oauth-cancel", name: "native" })).toEqual({ state: "cancelled", error: null });
+    await expect(fetch(stale)).rejects.toThrow();
+    expect(server.requests.filter((request: { kind: string }) => request.kind === "token")).toHaveLength(0);
+    const restarted = await McpOAuth.create(file, dir, cipher, async () => undefined);
+    try { expect(await restarted.status("native")).toEqual({ state: "signed-out", error: null }); }
+    finally { await restarted.close(); }
+    browser = undefined;
+    await wiring.perform({ op: "oauth-start", name: "native" });
+    await expect.poll(() => browser).toBeTruthy();
+    expect((await fetch(browser!)).status).toBe(200);
+    await expect.poll(async () => (await oauth.status("native")).state).toBe("signed-in");
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ state: "connected" });
+  } finally { await oauth.close(); await server.close(); }
+});
+
+
+it("shutdown drains a challenged login and closes its callback without installing credentials", async () => {
+  const { oauthFixture } = await import("../../scripts/fixtures/mcp-oauth-server.mjs");
+  const server = await oauthFixture(), dir = mkdtempSync(join(tmpdir(), "pidock-oauth-")); dirs.push(dir);
+  writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: { native: { url: `${server.base}/mcp` } } }));
+  let browser: string | undefined;
+  const file = new NativeMcpFile(dir), cipher = createTestSafeStorage();
+  const oauth = await McpOAuth.create(file, dir, cipher, async url => { browser = url; });
+  const wiring = new McpWiring(file, {}, undefined, oauth);
+  try {
+    await wiring.perform({ op: "oauth-start", name: "native" });
+    await expect.poll(() => browser).toBeTruthy();
+    expect(await wiring.perform({ op: "test", name: "native" })).toMatchObject({ error: { code: "mcp-auth-required" } });
+    await oauth.close();
+    await expect(fetch(browser!)).rejects.toThrow();
+    expect(server.requests.filter((request: { kind: string }) => request.kind === "token")).toHaveLength(0);
+    const restarted = await McpOAuth.create(file, dir, cipher, async () => undefined);
+    try { expect(await restarted.status("native")).toEqual({ state: "signed-out", error: null }); }
+    finally { await restarted.close(); }
+    await expect(oauth.start("native")).rejects.toThrow("mcp-oauth-closing");
+    oauth.resume(); browser = undefined;
+    await oauth.start("native");
+    await expect.poll(() => browser).toBeTruthy();
+    expect((await fetch(browser!)).status).toBe(200);
+    await expect.poll(async () => (await oauth.status("native")).state).toBe("signed-in");
+  } finally { await oauth.close(); await server.close(); }
+});
+
+
+it("an older transport challenge cannot orphan a newer browser login", async () => {
+  const { oauthFixture } = await import("../../scripts/fixtures/mcp-oauth-server.mjs");
+  const { testMcpConnection } = await import("./mcp-connection-test.js");
+  const server = await oauthFixture(), dir = mkdtempSync(join(tmpdir(), "pidock-oauth-")); dirs.push(dir);
+  writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: { native: { url: `${server.base}/mcp` } } }));
+  let browser: string | undefined;
+  const file = new NativeMcpFile(dir), oauth = await McpOAuth.create(file, dir, createTestSafeStorage(), async url => { browser = url; });
+  const oldTransportAuth = await oauth.auth("native");
+  try {
+    await oauth.start("native");
+    await expect.poll(() => browser).toBeTruthy();
+    const first = browser!;
+    await oauth.cancel("native"); browser = undefined;
+    await oauth.start("native");
+    await expect.poll(() => browser).toBeTruthy();
+    const second = browser!;
+    expect(await testMcpConnection(file.entry("native"), { authProvider: oldTransportAuth })).toMatchObject({ error: { code: "mcp-auth-required" } });
+    expect(await oauth.status("native")).toEqual({ state: "signing-in", error: null });
+    expect(await oauth.cancel("native")).toEqual({ state: "cancelled", error: null });
+    await expect(fetch(first)).rejects.toThrow();
+    await expect(fetch(second)).rejects.toThrow();
+    expect(server.requests.filter((request: { kind: string }) => request.kind === "token")).toHaveLength(0);
+  } finally { await oldTransportAuth.settled(); await oauth.close(); await server.close(); }
+});
+
+
+it.each(["save", "disable", "remove"] as const)("%s cancels and drains a challenged login before mutating managed configuration", async op => {
+  const { oauthFixture } = await import("../../scripts/fixtures/mcp-oauth-server.mjs");
+  const server = await oauthFixture(), dir = mkdtempSync(join(tmpdir(), "pidock-oauth-")); dirs.push(dir);
+  const file = new NativeMcpFile(dir), cipher = createTestSafeStorage();
+  const { name } = file.add({ transport: "http", url: `${server.base}/mcp` });
+  let browser: string | undefined;
+  const oauth = await McpOAuth.create(file, dir, cipher, async url => { browser = url; });
+  const wiring = new McpWiring(file, {}, undefined, oauth);
+  try {
+    const original = readFileSync(file.path, "utf8");
+    await wiring.perform({ op: "oauth-start", name });
+    await expect.poll(() => browser).toBeTruthy();
+    expect(await wiring.perform({ op: "test", name })).toMatchObject({ error: { code: "mcp-auth-required" } });
+    await wiring.perform(op === "save" ? { op, name, input: { transport: "http", url: `${server.base}/other-target` } } : { op, name });
+    await expect(fetch(browser!)).rejects.toThrow();
+    expect(server.requests.filter((request: { kind: string }) => request.kind === "token")).toHaveLength(0);
+    const servers = wiring.list().servers;
+    if (op === "save") expect(servers).toMatchObject([{ name, url: `${server.base}/other-target` }]);
+    else if (op === "disable") expect(servers).toMatchObject([{ name, enabled: false }]);
+    else expect(servers).toEqual([]);
+    // Restore only this temporary managed entry to its original URL to verify
+    // durable credential absence independently of the in-memory login status.
+    writeFileSync(file.path, original);
+    const restarted = await McpOAuth.create(file, dir, cipher, async () => undefined);
+    try { expect(await restarted.status(name)).toEqual({ state: "signed-out", error: null }); }
+    finally { await restarted.close(); }
+  } finally { await oauth.close(); await server.close(); }
+});
