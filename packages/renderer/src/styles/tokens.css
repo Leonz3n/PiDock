@@ -189,4 +189,5 @@
 @media (max-width: 960px) {
   .workspace-sidebar > label { order: 3; }
   .workspace-sidebar[data-expanded="true"] .shell-task-picker { display: none; }
+  .workspace-sidebar[data-expanded="true"] .shell-brand > div.shell-nav-label { display: block; }
 }

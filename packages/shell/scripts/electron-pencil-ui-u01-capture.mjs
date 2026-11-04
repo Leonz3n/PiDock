@@ -157,6 +157,7 @@ async function run() {
     await until("document.querySelector('[aria-label=消息]')", "selected conversation");
     await evaluate(`(() => { const input=document.querySelector('[aria-label=消息]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'U01 草稿 · 布局切换不发送'); input.dispatchEvent(new Event('input',{bubbles:true})); input.dataset.u01identity='retained'; })()`);
     await wait(700);
+    check("tree selection subscribes to the selected real session", calls.some((call) => call.op === "task/sdkProjection" && call.payload?.sessionId === sessionId));
     const before = await registry.routeTaskOp({ taskId: "task-aaaa1111", op: "task/sessionList", payload: {}, origin });
     const mutationStart = calls.length;
     for (const page of ["能力管理", "设置"]) {
@@ -172,7 +173,7 @@ async function run() {
     }
     const after = await registry.routeTaskOp({ taskId: "task-aaaa1111", op: "task/sessionList", payload: {}, origin });
     check("layout switch retains session identity/count", JSON.stringify({ active: before.payload.activeSessionId, sessions: before.payload.sessions }) === JSON.stringify({ active: after.payload.activeSessionId, sessions: after.payload.sessions }));
-    check("layout switch creates no sessions or model/tool requests", !calls.slice(mutationStart).some((call) => /sessionCreate|sdkTurnStart|toolExecute|exec\/run/.test(call.op)), calls.slice(mutationStart).map((call) => call.op));
+    check("layout switch creates no sessions or model/tool requests", calls.slice(mutationStart).every((call) => call.op === "task/sessionList"), calls.slice(mutationStart).map((call) => call.op));
     await capture(`${theme}-returned-expanded`);
     if (width < 960) await click("收起导航");
     await click("新建任务");
