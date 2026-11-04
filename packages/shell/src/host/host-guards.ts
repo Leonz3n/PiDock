@@ -1,3 +1,4 @@
+import { validatePrivateBinding } from "../mcp-oauth-native.js";
 /**
  * Shared per-op payload guards for `host/task` routing ([PiDock 02] #5).
  *
@@ -486,7 +487,8 @@ export function validateHostTaskOp(
     // model's declared capability). Main sends it, so the envelope must accept
     // it — otherwise every real install fails as an invalid payload.
     if (!isRecord(provider)) return { ok: false, error: "invalid-sdk-provider" };
-    const providerShape = Object.keys(provider).sort().join(",");
+    if (provider["mcpPrivate"] !== undefined) { try { validatePrivateBinding(provider["mcpPrivate"]); } catch { return { ok: false, error: "invalid-mcp-private-binding" }; } }
+    const providerShape = Object.keys(provider).filter(key => key !== "mcpPrivate").sort().join(",");
     if (providerShape !== "config,credential" && providerShape !== "config,credential,thinkingLevel") {
       return { ok: false, error: "invalid-sdk-provider" };
     }

@@ -1,3 +1,4 @@
+import type { McpPrivateBinding } from "../mcp-oauth-native.js";
 /**
  * [Pencil T15] #150: the task session's MCP binding.
  *
@@ -90,7 +91,7 @@ function entryError(name: string, entry: unknown): string | null {
  * Read the one file main edits. `agentDir` is not consulted: a session loads
  * the path the Host was given, so it cannot drift to a second copy.
  */
-export function readManagedMcpConfig(path: string): ManagedMcpConfig {
+export function readManagedMcpConfig(path: string, binding?: McpPrivateBinding): ManagedMcpConfig {
   if (!isAbsolute(path) || path.includes("\0")) throw new Error("mcp-config-path-invalid");
   const errors: string[] = [];
   let parsed: unknown = {};
@@ -114,7 +115,17 @@ export function readManagedMcpConfig(path: string): ManagedMcpConfig {
       if (name === null) { errors.push("a server name is not a safe identifier"); continue; }
       const invalid = entryError(name, entry);
       if (invalid !== null) { errors.push(invalid); continue; }
-      servers.push({ name, config: { ...(entry as Record<string, unknown>) }, source: path, scope: "global" });
+      const config = { ...(entry as Record<string, unknown>) };
+      const oauth = config["oauth"];
+      if (record(oauth) && typeof oauth["clientSecret"] === "string") {
+        const secret = oauth["clientSecret"];
+        if (secret.startsWith("!") || secret.includes("$")) {
+          const resolved = binding?.secrets?.find(row => row.name === name && row.url === String(new URL(String(config["url"]))));
+          if (!resolved || secret.startsWith("!")) { errors.push(`server "${name}": OAuth secret reference unavailable`); continue; }
+          config["oauth"] = { ...oauth, clientSecret: resolved.value };
+        }
+      }
+      servers.push({ name, config, source: path, scope: "global" });
     }
   }
   return {
@@ -139,7 +150,7 @@ export interface McpBinding {
   close(): Promise<void>;
 }
 
-export function mcpExtension(sessionId: string, call: SdkAgentToolCaller, loadConfig: LoadConfig, logPath?: string): McpBinding {
+export function mcpExtension(sessionId: string, call: SdkAgentToolCaller, loadConfig: LoadConfig, logPath?: string, credentials?: McpExtensionOptions["credentials"]): McpBinding {
   const readOnly = new Map<string, boolean>();
   const shutdown: Array<() => Promise<void> | void> = [];
   const factory: ExtensionFactory = (pi: ExtensionAPI) => {
@@ -156,7 +167,7 @@ export function mcpExtension(sessionId: string, call: SdkAgentToolCaller, loadCo
     // `loadConfig` is pinned to the exact file main manages. Without it Pi would
     // read the process-wide agent directory, which is a different file (and
     // would ignore `PIDOCK_AGENT_DIR` / a test's task-local agent dir).
-    const mcp = createMcpExtension({ loadConfig, ...(logPath === undefined ? {} : { logPath }) });
+    const mcp = createMcpExtension({ loadConfig, ...(credentials ? { credentials } : {}), ...(logPath === undefined ? {} : { logPath }) });
     const register = pi.registerTool.bind(pi);
     pi.registerTool = ((tool: ToolDefinition) => {
       if (typeof tool.name === "string" && tool.name.startsWith("mcp__")) {

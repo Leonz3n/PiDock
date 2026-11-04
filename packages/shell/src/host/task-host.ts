@@ -1,3 +1,4 @@
+import { validatePrivateBinding, type McpPrivateBinding } from "../mcp-oauth-native.js";
 /**
  * Per-task-workspace Host orchestration for [PiDock 02] (#5), S2 slice.
  *
@@ -964,7 +965,7 @@ export class TaskWorkspaceHost {
    * and it is only kept when that open succeeded: a failed install must leave the
    * task unconfigured (fail closed), never pointing at a dead context.
    */
-  configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; thinkingLevel?: ModelThinkingLevel; workspaceId?: string } | null): Promise<{ generation: number }> {
+  configureSdkProvider(provider: { config: ExplicitTextProvider; credential: string; mcpPrivate?: McpPrivateBinding; thinkingLevel?: ModelThinkingLevel; workspaceId?: string } | null): Promise<{ generation: number }> {
     if (this.sdkShutdown) return Promise.reject(Error("sdk-host-closing"));
     if (this.executionClosing) return Promise.reject(Error("task-host-closing"));
     if (this.sdkDisposalFailed) return Promise.reject(Error("sdk-host-shutdown-unconfirmed"));
@@ -978,7 +979,7 @@ export class TaskWorkspaceHost {
     try { await shutdownDeadline(context.dispose(), 35_000, "sdk-host-shutdown-timeout"); }
     catch { this.sdkDisposalFailed = true; throw Error("sdk-host-shutdown-unconfirmed"); }
   }
-  private async installSdkProvider(provider: { config: ExplicitTextProvider; credential: string; thinkingLevel?: ModelThinkingLevel; workspaceId?: string } | null): Promise<{ generation: number }> {
+  private async installSdkProvider(provider: { config: ExplicitTextProvider; credential: string; mcpPrivate?: McpPrivateBinding; thinkingLevel?: ModelThinkingLevel; workspaceId?: string } | null): Promise<{ generation: number }> {
     const previous = this.sdkContext;
     this.sdkContext = null;
     this.sdkRouter = null;
@@ -994,6 +995,7 @@ export class TaskWorkspaceHost {
         task: { taskId: this.taskId, taskDir: this.taskDir },
         config: provider.config,
         credential: provider.credential,
+        ...(provider.mcpPrivate === undefined ? {} : { mcpPrivate: validatePrivateBinding(provider.mcpPrivate) }),
         ...(provider.thinkingLevel === undefined ? {} : { thinkingLevel: provider.thinkingLevel }),
         // [PiDock 02m] #5: the Agent's tool calls are executed and decided by
         // this Host, never inside the isolated model context.

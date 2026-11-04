@@ -1,3 +1,4 @@
+import { validatePrivateBinding, type McpPrivateBinding } from "../mcp-oauth-native.js";
 /**
  * Host-side handle for the isolated SDK model context ([PiDock 02m] #46).
  *
@@ -73,6 +74,7 @@ export interface SdkContextOptions {
   task: SdkContextTaskBinding;
   config: ExplicitTextProvider;
   credential: string;
+  mcpPrivate?: McpPrivateBinding;
   /**
    * The reasoning level the user selected for the bound model. Validated by
    * main against the model's declared capability; the SDK clamps anything the
@@ -164,6 +166,7 @@ export class SdkContextClient implements SdkTextKernelPort {
       const workerData = {
         task: this.options.task, config: this.options.config, credential: this.options.credential,
         toolsEnabled: this.options.toolHost !== undefined,
+        ...(this.options.toolHost === undefined || this.options.mcpPrivate === undefined ? {} : { mcpPrivate: validatePrivateBinding(this.options.mcpPrivate) }),
         ...(this.options.thinkingLevel === undefined ? {} : { thinkingLevel: this.options.thinkingLevel }),
         // Only a Host that wired a broker gets the MCP path too: MCP tools are
         // decided by that broker, so advertising them without it would be a

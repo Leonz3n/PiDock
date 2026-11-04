@@ -190,11 +190,12 @@ export function DesktopMcpPanel({ onCount }: { onCount?: (count: number | null) 
               {view.timeout === null ? "" : ` · 超时 ${view.timeout}s`}
               {view.managed ? "" : " · 文件中的值原样保留"}
             </p>
-            <p>{view.transport === "http" ? `${view.oauth?.configured ? `OAuth · ${view.oauth.clientRegistration}${view.oauth.explicitClientId ? " · 显式 clientId" : ""} · ` : ""}认证状态未知；此处未接入 OAuth 登录。` : "stdio 不使用 OAuth"} · {view.exposure}</p>
+            <p>{view.transport === "http" ? `${view.oauth?.configured ? `OAuth · ${view.oauth.clientRegistration}${view.oauth.explicitClientId ? " · 显式 clientId" : ""} · ` : ""}认证由本机私有存储管理。` : "stdio 不使用 OAuth"} · {view.exposure}</p>
             </details>
             {view.error && <p role="alert" className="mt-0.5 text-[10px] text-destructive">{view.error.code}：{view.error.message}</p>}
           </div>
           <div className="flex flex-wrap justify-end gap-1 pr-5">
+            {view.transport === "http" && view.enabled && <OAuthControls name={view.name} url={view.url} refresh={tested?.key === view.name ? tested.result : null} onChange={() => setTested(null)} />}
             <Button type="button" size="sm" variant="outline" disabled={busy !== ""} onClick={() => void testSaved(view)}>{busy === `test:${view.name}` ? "测试中…" : "测试"}</Button>
             {view.managed && <>
               <Button type="button" size="sm" variant="ghost" disabled={busy !== ""} onClick={() => { setDraft(draftFromView(view)); setDraftError(""); setTested(null); setError(""); }}>编辑</Button>
@@ -216,6 +217,42 @@ export function DesktopMcpPanel({ onCount }: { onCount?: (count: number | null) 
       <p>保存后在新会话生效；不支持 legacy SSE。</p>
     </div>
   </section>;
+}
+
+
+const OAUTH_TEXT: Record<string, string> = {
+  "signed-out": "未登录", "signing-in": "等待系统浏览器授权", "signed-in": "已登录 · 新会话生效",
+  expired: "登录已过期", cancelled: "登录已取消", failed: "登录失败，请重试", unknown: "认证状态未知",
+};
+function OAuthControls({ name, url, refresh, onChange }: { name: string; url: string | null; refresh: McpTestResult | null; onChange(): void }) {
+  const [state, setState] = useState("unknown");
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const apply = (result: unknown) => {
+    if (!result || typeof result !== "object" || !("state" in result) || typeof result.state !== "string" || !Object.hasOwn(OAUTH_TEXT, result.state)) throw Error("OAuth 状态不可用");
+    setState(result.state);
+    setError("error" in result && typeof result.error === "string" ? result.error : "");
+  };
+  useEffect(() => {
+    let active = true;
+    const read = async () => { try { const result = await mcpCall(window.pidock, { op: "oauth-status", name }); if (active) apply(result); } catch { if (active) setState("unknown"); } };
+    void read();
+    const timer = setInterval(() => { void read(); }, state === "signing-in" ? 400 : 10_000);
+    return () => { active = false; clearInterval(timer); };
+  }, [name, url, state, refresh]);
+  const act = async (op: string) => {
+    setPending(true); setError("");
+    try { apply(await mcpCall(window.pidock, { op, name })); onChange(); }
+    catch (caught) { setState("failed"); setError(caught instanceof Error ? caught.message : "登录失败"); }
+    finally { setPending(false); }
+  };
+  return <div className="flex flex-wrap items-center justify-end gap-1" data-testid="mcp-oauth" data-state={state}>
+    <span role="status" className="text-[10px] text-muted">{OAUTH_TEXT[state]}</span>
+    <Button size="sm" variant="outline" disabled={pending} onClick={() => void act(state === "signing-in" ? "oauth-cancel" : "oauth-start")}>
+      {state === "signing-in" ? "取消登录" : state === "signed-in" || state === "expired" ? "重新登录" : "登录"}
+    </Button>
+    {error && <span role="alert" className="basis-full text-[10px] text-destructive">{error}</span>}
+  </div>;
 }
 
 function TestResult({ result }: { result: McpTestResult }) {

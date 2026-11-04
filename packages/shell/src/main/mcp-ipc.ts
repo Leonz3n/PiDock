@@ -36,12 +36,14 @@ import {
   type McpServerInput,
   type McpTransportKind,
 } from "./native-mcp-config.js";
-import { testMcpConnection, transportFor, type McpTestResult, type McpToolSummary } from "./mcp-connection-test.js";
+import { testMcpConnection, transportFor, type McpTestResult, type McpToolSummary, type McpTestOptions } from "./mcp-connection-test.js";
+import type { McpOAuth } from "./mcp-oauth.js";
 import { TrustDomainViolation } from "./trust-domain.js";
 
 /** The one surface the renderer may name; no path, file or credential field exists. */
 export type McpOp =
   | { op: "list" }
+  | { op: "oauth-status" | "oauth-start" | "oauth-cancel"; name: string }
   | { op: "save"; name?: string; input: McpServerInput }
   | { op: "remove"; name: string }
   | { op: "enable"; name: string }
@@ -88,6 +90,8 @@ export interface McpStatus {
 }
 
 export const MCP_FAILURE_TEXT: Record<string, string> = {
+  "mcp-oauth-unavailable": "OAuth 登录不可用：需要已启用的 HTTP Server 和本机加密凭据存储",
+  "mcp-oauth-config-invalid": "OAuth 原生配置无效：请检查注册模式、Client ID 与 loopback 回调组合",
   "mcp-agent-dir-invalid": "Pi 的 Agent 目录配置无效：PIDOCK_AGENT_DIR 必须是绝对路径",
   "mcp-unreadable": "Pi 的 mcp.json 无法解析，已停止写入以免破坏现有配置",
   "mcp-name-invalid": "Server 名称不合法：只允许字母、数字、下划线和连字符",
@@ -254,7 +258,8 @@ export class McpWiring {
   constructor(
     private readonly file: NativeMcpFile,
     private readonly env: Record<string, string | undefined> = process.env,
-    private readonly tester: (entry: unknown, options: { env: Record<string, string | undefined> }) => Promise<McpTestResult> = testMcpConnection,
+    private readonly tester: (entry: unknown, options: McpTestOptions) => Promise<McpTestResult> = testMcpConnection,
+    private readonly oauth?: McpOAuth,
   ) {}
 
   /** The managed file Pi reads; named for the UI's config footer. */
@@ -284,6 +289,14 @@ export class McpWiring {
   async perform(request: unknown): Promise<unknown> {
     if (!object(request) || typeof request["op"] !== "string") throw new TrustDomainViolation("invalid-payload", "invalid mcp operation");
     switch (request["op"]) {
+      case "oauth-status":
+      case "oauth-start":
+      case "oauth-cancel": {
+        const args = shape(request, request["op"], ["name"]);
+        const name = nameOf(args["name"]);
+        if (!this.oauth) throw new McpFailure("mcp-oauth-unavailable", "private credential store unavailable");
+        return request["op"] === "oauth-start" ? this.oauth.start(name) : request["op"] === "oauth-cancel" ? this.oauth.cancel(name) : this.oauth.status(name);
+      }
       case "list":
         shape(request, "list", []);
         return this.list();
@@ -315,12 +328,14 @@ export class McpWiring {
             else throw new McpFailure("mcp-servers-invalid", `${field}.${key} 需要一个引用值`);
           }
         }
+        await this.oauth?.cancel(name);
         const updated = this.file.update(name, input);
         return { name: updated.name, path: updated.path, server: this.row(updated.name) };
       }
       case "remove": {
         const args = shape(request, "remove", ["name"]);
         const name = nameOf(args["name"]);
+        await this.oauth?.cancel(name);
         if (!this.file.remove(name)) throw new McpFailure("mcp-not-found", name);
         return { removed: name, path: this.file.path };
       }
@@ -328,6 +343,7 @@ export class McpWiring {
       case "disable": {
         const args = shape(request, request["op"], ["name"]);
         const name = nameOf(args["name"]);
+        await this.oauth?.cancel(name);
         this.file.setEnabled(name, request["op"] === "enable");
         return { server: this.row(name) };
       }
@@ -340,7 +356,10 @@ export class McpWiring {
           const name = nameOf(args["name"]);
           const entry = this.file.entry(name);
           if (!entry) throw new McpFailure("mcp-not-found", name);
-          const result = await this.test(entry);
+          const auth = this.oauth && typeof entry["url"] === "string" && entry["enabled"] !== false ? await this.oauth.auth(name) : undefined;
+          let result: McpTestResult;
+          try { result = await this.tester(entry, { env: this.env, ...(auth ? { authProvider: auth } : {}) }); }
+          finally { await auth?.settled(); }
           return { ...result, tools: result.tools as McpToolSummary[], name };
         }
         const input = inputOf(args["input"]);

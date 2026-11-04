@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { app, powerMonitor, safeStorage } from "electron";
+import { app, powerMonitor, safeStorage, shell } from "electron";
 import { resolveShellCommand } from "./command.js";
 import {
   DEFAULT_WORKSPACE_ID,
@@ -34,6 +34,7 @@ import { ProviderProfileStore } from "./provider-profile-store.js";
 import { ProviderSecretStore } from "./provider-secret-store.js";
 import { NativeModelsFile, resolveAgentDir } from "./native-models-config.js";
 import { NativeMcpFile, resolveMcpAgentDir } from "./native-mcp-config.js";
+import { McpOAuth } from "./mcp-oauth.js";
 import { McpWiring } from "./mcp-ipc.js";
 import { ProviderWiring } from "./provider-ipc.js";
 import { CreationIntentStore, ProjectTaskCreation } from "./project-task-creation.js";
@@ -201,7 +202,10 @@ async function run(): Promise<void> {
   // namespace; the exact file path is also what every task Host receives, so a
   // session loads the file the manager edits instead of a second copy.
   const nativeMcp = new NativeMcpFile(resolveMcpAgentDir(process.env, homedir()));
-  const mcp = new McpWiring(nativeMcp, process.env);
+  let oauth: McpOAuth | undefined;
+  try { oauth = await McpOAuth.create(nativeMcp, userData, safeStorage, url => shell.openExternal(url)); }
+  catch { console.error("[main] MCP private credential store unavailable; sign-in disabled"); }
+  const mcp = new McpWiring(nativeMcp, process.env, undefined, oauth);
   const tasks = new PerTaskHostRegistry(
     workspaceId,
     // A task Host gets the exact MCP config path; each SDK session binds the MCP
@@ -251,6 +255,7 @@ async function run(): Promise<void> {
           provider: {
             config: providerProfiles.config(provider.profileId, provider.modelId),
             credential: provider.credential,
+            ...(oauth ? { mcpPrivate: await oauth.hostBinding() } : {}),
             thinkingLevel: provider.thinkingLevel,
           },
         };
@@ -294,11 +299,13 @@ async function run(): Promise<void> {
   const gatedStopHosts = async (): Promise<boolean> => {
     gate.beginQuit();
     schedules.stop();
+    await oauth?.close();
     const stopped = await stopHosts();
     if (stopped) {
       gate.completeQuit();
       quitReports.clear();
     } else {
+      oauth?.resume();
       gate.abortQuit({ at: new Date().toISOString(), hosts: stopHosts.unsatisfiedHosts() });
       schedules.start();
     }

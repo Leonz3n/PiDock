@@ -22,9 +22,10 @@
  * scrubbed of every resolved value before it is returned.
  */
 
+import { McpOAuthAuthorizationRequiredError } from "@earendil-works/pi-mcp/oauth";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { McpAuthRequiredError, McpClient, McpHttpError, McpTimeoutError, StdioTransport, StreamableHttpTransport, type McpTransport } from "@earendil-works/pi-mcp";
+import { McpAuthRequiredError, McpClient, McpHttpError, McpTimeoutError, StdioTransport, StreamableHttpTransport, type McpTransport, type AuthProvider } from "@earendil-works/pi-mcp";
 
 export const MCP_TEST_FAILURES = [
   "mcp-transport-unsupported",
@@ -54,6 +55,7 @@ export interface McpTestResult {
 }
 
 export interface McpTestOptions {
+  authProvider?: AuthProvider;
   /** Session/project directory `cwd` resolves against (same rule as Pi). */
   cwd?: string;
   /** Environment used for `$NAME` / `${NAME}`; defaults to `process.env`. */
@@ -132,7 +134,7 @@ export function transportFor(entry: unknown, options: McpTestOptions = {}): { tr
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new TestFailure("mcp-config-invalid", "url must be http(s)");
     if (type === "stdio") throw new TestFailure("mcp-transport-unsupported", "type stdio with a url");
     const headers = interpolate(record(entry["headers"]) ? entry["headers"] : undefined, env, "headers", refs);
-    return { transport: new StreamableHttpTransport({ url, ...(headers ? { headers } : {}) }), credentialRefs: [...refs], child: false };
+    return { transport: new StreamableHttpTransport({ url, ...(options.authProvider ? { authProvider: options.authProvider } : {}), ...(headers ? { headers } : {}) }), credentialRefs: [...refs], child: false };
   }
   const command = entry["command"];
   if (typeof command !== "string" || command.trim().length === 0) {
@@ -163,6 +165,7 @@ export function transportFor(entry: unknown, options: McpTestOptions = {}): { tr
 
 function classify(error: unknown, phase: "connect" | "tools"): { code: McpTestFailureCode; message: string } {
   if (error instanceof TestFailure) return { code: error.code, message: error.detail };
+  if (error instanceof McpOAuthAuthorizationRequiredError) return { code: "mcp-auth-required", message: "server requires sign-in" };
   if (error instanceof McpAuthRequiredError) return { code: "mcp-auth-required", message: `server requires sign-in (HTTP ${error.status})` };
   if (error instanceof McpTimeoutError) return { code: "mcp-timeout", message: "the server did not answer within the timeout" };
   if (error instanceof McpHttpError) {

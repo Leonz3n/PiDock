@@ -83,14 +83,14 @@ describe("S09 MCP pane", () => {
     expect(within(nav).getByRole("button", { name: /^MCP/ })).toHaveTextContent("2");
   });
 
-  it("shows a real authentication challenge without inventing an OAuth login state", async () => {
+  it("shows an authentication challenge and exposes main-owned login without guessing state", async () => {
     await openMcp({ list: { ...STATUS, servers: [{ ...UNMANAGED_ROW, state: "enabled", error: null, oauth: { configured: true, clientRegistration: "cimd", explicitClientId: false } }] }, test: { state: "failed", tools: [], credentialRefs: [], error: { code: "mcp-auth-required", message: "server requires sign-in (HTTP 401)" } } });
     const row = (await screen.findAllByTestId("mcp-row"))[0]!;
     expect(row).toHaveTextContent("OAuth · cimd");
     expect(row).toHaveTextContent("认证状态未知");
     await userEvent.click(within(row).getByRole("button", { name: "测试" }));
     expect(await screen.findByTestId("mcp-test-result")).toHaveTextContent("需要认证");
-    expect(screen.queryByRole("button", { name: /登录|授权/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
     expect(screen.queryByText("未登录")).toBeNull();
   });
 
@@ -136,7 +136,7 @@ describe("S09 MCP pane", () => {
     const row = (await screen.findAllByTestId("mcp-row"))[0]!;
     await userEvent.click(within(row).getByRole("button", { name: "停用" }));
     await waitFor(() => expect(calls).toContainEqual({ op: "disable", name: MANAGED }));
-    expect(await screen.findByRole("status")).toHaveTextContent(`已停用 ${MANAGED}`);
+    expect(await screen.findByText(`已停用 ${MANAGED}；新会话不再加载它`)).toBeInTheDocument();
   });
 
   it("removes only after a confirmation that names the managed server and sends no other field", async () => {
@@ -157,4 +157,24 @@ describe("S09 MCP pane", () => {
     const nav = screen.getByRole("navigation", { name: "能力管理" });
     expect(within(nav).getByRole("button", { name: /^MCP/ })).toHaveTextContent("—");
   });
+});
+
+
+it("offers explicit native login and cancellation, then explains the cancelled state", async () => {
+  const handle = bridge({ list: { ...STATUS, servers: [{ ...UNMANAGED_ROW, state: "enabled", error: null }] } });
+  let state = "signed-out";
+  const fallback = handle.mcpOp.getMockImplementation()!;
+  handle.mcpOp.mockImplementation(async request => {
+    if (request.op === "oauth-start") { state = "signing-in"; return { ok: true, payload: { state, error: null } }; }
+    if (request.op === "oauth-cancel") { state = "cancelled"; return { ok: true, payload: { state, error: null } }; }
+    if (request.op === "oauth-status") return { ok: true, payload: { state, error: null } };
+    return fallback(request);
+  });
+  render(<DesktopCapabilitiesPage taskId="task-1" taskName="task" onBack={vi.fn()} />);
+  await userEvent.click(await screen.findByRole("button", { name: /^MCP/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "登录" }));
+  expect(await screen.findByText("等待系统浏览器授权")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "取消登录" }));
+  expect(await screen.findByText("登录已取消")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "登录" })).toBeInTheDocument();
 });

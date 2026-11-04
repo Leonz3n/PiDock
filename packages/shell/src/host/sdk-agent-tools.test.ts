@@ -198,6 +198,7 @@ async function harness(options: { templates?: () => ServiceTemplateEditPort | un
       if (!caller) throw new Error("tool-host-missing");
       const kernel = new PiSdkTextKernel("task-aaaaaaaa", parts.taskDir, {
         model, modelRuntime: runtime,
+        ...(contextOptions.mcpPrivate ? { mcpPrivate: contextOptions.mcpPrivate } : {}),
         callTool: (sessionId, request) => caller.call(sessionId, request),
         ...(options.mcp ? { mcpConfigPath: join(parts.taskDir, ".pidock-sdk-agent", "mcp.json") } : {}),
       });
@@ -1398,4 +1399,38 @@ it("stop/cancel withdraws a parked MCP approval and recycles the real child proc
   await pidGone(pid);
   expect(readFileSync(files.log, "utf8")).not.toContain("mutated: parked");
   await h.host.shutdownSdk();
+});
+
+
+it("uses native OAuth credentials in a real Host session while retaining approval and read-only refusal", async () => {
+  const { oauthFixture } = await import("../../scripts/fixtures/mcp-oauth-server.mjs");
+  const { NativeMcpFile } = await import("../main/native-mcp-config.js");
+  const { McpOAuth } = await import("../main/mcp-oauth.js");
+  const { createTestSafeStorage } = await import("../main/provider-secret-store.js");
+  const h = await harness({ mcp: true }), server = await oauthFixture();
+  const agentDir = join(h.fixture.taskDir, ".pidock-sdk-agent");
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { oauth_native: { url: `${server.base}/mcp`, exposure: "direct", oauth: { clientId: "explicit-fixture-client", clientSecret: "${MCP_NATIVE_SECRET}", clientRegistration: "dcr" } } } }));
+  server.requireSecret("private-native-secret");
+  const oauth = await McpOAuth.create(new NativeMcpFile(agentDir), h.fixture.profileDir, createTestSafeStorage(), async url => { await fetch(url); }, { MCP_NATIVE_SECRET: "private-native-secret" });
+  try {
+    await oauth.start("oauth_native");
+    await expect.poll(async () => (await oauth.status("oauth_native")).state).toBe("signed-in");
+    await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key", mcpPrivate: await oauth.hostBinding() });
+    server.revoke();
+    await h.host.setPermission("main", "read");
+    const refused = await h.prompt("mcp__oauth_native__echo", { message: "must-not-run" });
+    expect(refused.text).toContain("tool-refused");
+    expect(server.requests.filter((request: { method?: string }) => request.method === "tools/call")).toHaveLength(0);
+    await h.host.setPermission("main", "default");
+    const pending = h.prompt("mcp__oauth_native__echo", { message: "approved-oauth" });
+    await vi.waitFor(() => expect(h.host.listApprovals("main")).toHaveLength(1));
+    const approval = h.host.listApprovals("main")[0]!;
+    expect(approval.operation).toContain("approved-oauth");
+    h.host.approve("main", approval.id);
+    expect((await pending).text).toContain("OAuth echo: approved-oauth");
+    expect(server.requests.filter((request: { method?: string }) => request.method === "tools/call")).toHaveLength(1);
+    expect(await h.transcript()).not.toMatch(/private-access|private-native-secret/);
+    expect(server.requests.some((request: { grant?: string }) => request.grant === "refresh_token")).toBe(true);
+  } finally { await h.host.shutdownSdk(); await oauth.close(); await server.close(); }
 });

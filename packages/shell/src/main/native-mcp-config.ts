@@ -77,6 +77,8 @@ export interface McpServerInput {
 }
 
 export type McpFailureCode =
+  | "mcp-oauth-unavailable"
+  | "mcp-oauth-config-invalid"
   | "mcp-agent-dir-invalid"
   | "mcp-unreadable"
   | "mcp-name-invalid"

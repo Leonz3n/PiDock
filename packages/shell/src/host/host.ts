@@ -1,3 +1,4 @@
+import { validatePrivateBinding } from "../mcp-oauth-native.js";
 /**
  * utilityProcess entry: per-task-workspace Node Host ([PiDock 02] #5).
  *
@@ -1222,6 +1223,7 @@ async function performTaskOp(
         const result = await host.configureSdkProvider({
           config: validateExplicitTextProvider(binding["config"]),
           credential: binding["credential"] as string,
+          ...(binding["mcpPrivate"] === undefined ? {} : { mcpPrivate: validatePrivateBinding(binding["mcpPrivate"]) }),
           ...(binding["thinkingLevel"] === undefined ? {} : { thinkingLevel: binding["thinkingLevel"] as ModelThinkingLevel }),
           workspaceId: boundWorkspaceId(),
         });

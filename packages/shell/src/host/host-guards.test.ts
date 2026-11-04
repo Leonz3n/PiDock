@@ -1262,3 +1262,9 @@ describe("file and terminal ops", () => {
     expect(validateHostTaskOp("task/remoteGatewayEvent", {}).ok).toBe(false);
   });
 });
+
+it("accepts a bounded main-only MCP private binding on provider installation and rejects malformed key material", () => {
+  const config = { profileId: "p-aaaaaaaa", modelId: "test", protocol: "openai-chat", baseUrl: "http://127.0.0.1:9999/v1", authRef: "PIDOCK_PROVIDER_TEST", models: [] };
+  expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "synthetic-key", mcpPrivate: { directory: "/tmp/private-mcp", key: "ab".repeat(32) } } }).ok).toBe(true);
+  expect(validateHostTaskOp("task/sdkProvider", { provider: { config, credential: "synthetic-key", mcpPrivate: { directory: "relative", key: "plaintext" } } }).ok).toBe(false);
+});

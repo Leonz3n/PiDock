@@ -1,3 +1,4 @@
+import { validatePrivateBinding, type McpPrivateBinding } from "../mcp-oauth-native.js";
 /**
  * Isolated SDK model context ([PiDock 02m] #46).
  *
@@ -27,6 +28,7 @@ export interface SdkContextInput {
   config: ExplicitTextProvider;
   /** Resolved credential value. Never logged, persisted or returned. */
   credential: string;
+  mcpPrivate?: McpPrivateBinding;
   /**
    * True only when the Host wired a tool broker. Without one the worker must
    * declare NO tools (fail closed): a model that could call a tool this context
@@ -164,6 +166,7 @@ function input(value: unknown): SdkContextInput {
     task: { taskId: binding["taskId"], taskDir: binding["taskDir"] },
     config: validateExplicitTextProvider(record["config"]),
     credential: record["credential"],
+    ...(record["mcpPrivate"] === undefined ? {} : { mcpPrivate: validatePrivateBinding(record["mcpPrivate"]) }),
     // Anything but an explicit `true` disables tools: a missing marker is a
     // context nobody wired a broker to, and must not advertise one.
     toolsEnabled: record["toolsEnabled"] === true,
@@ -201,6 +204,7 @@ async function main(): Promise<void> {
     // one credential, one declared model list, several per-session bindings.
     modelById: (modelId) => runtime.getModel(`pidock-${parsed.config.profileId}`, modelId),
     bindingIdentity,
+    ...(parsed.mcpPrivate === undefined ? {} : { mcpPrivate: parsed.mcpPrivate }),
     ...(parsed.thinkingLevel === undefined ? {} : { thinkingLevel: parsed.thinkingLevel }),
     ...(tools ? { callTool: (sessionId, request) => tools.callTool(sessionId, request) } : {}),
     ...(parsed.mcpConfigPath === undefined ? {} : { mcpConfigPath: parsed.mcpConfigPath }),

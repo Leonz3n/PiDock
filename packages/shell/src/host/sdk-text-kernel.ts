@@ -1,3 +1,4 @@
+import { extensionCredentials, type McpPrivateBinding } from "../mcp-oauth-native.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
@@ -192,6 +193,7 @@ export class PiSdkTextKernel {
        * fail-closed default for a Host that was not given one).
        */
       mcpConfigPath?: string;
+      mcpPrivate?: McpPrivateBinding;
       /**
        * [#151] The app-private Skills source document
        * (`skill-sources.json` under `userData`). Read once per session creation:
@@ -386,8 +388,9 @@ export class PiSdkTextKernel {
     if (callTool && mcpPath !== undefined) {
       // The file is read HERE, once per session start. That is the session
       // boundary: a manager save applies to the next session, never this one.
-      const managed = readManagedMcpConfig(mcpPath);
-      mcpBinding = mcpExtension(sessionId, callTool, managed.loadConfig, join(this.agentDir, "mcp.log"));
+      const managed = readManagedMcpConfig(mcpPath, this.selection.mcpPrivate);
+      const credentials = this.selection.mcpPrivate ? await extensionCredentials(this.selection.mcpPrivate, managed.names()) : undefined;
+      mcpBinding = mcpExtension(sessionId, callTool, managed.loadConfig, join(this.agentDir, "mcp.log"), credentials);
       const loader = new DefaultResourceLoader({
         cwd: this.taskDir,
         agentDir: this.agentDir,
