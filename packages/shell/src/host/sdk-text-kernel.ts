@@ -30,6 +30,8 @@ function isMcpToolName(name: string): boolean {
 
 type SdkTextEventData =
   | { type: "delta"; text: string }
+  | { type: "tool_preview"; callId: string; tool: string; text: string }
+  | { type: "tool_result"; callId: string; tool: string; text: string; failed: boolean }
   | { type: "message_end"; text: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number } | null; error?: string }
   | { type: "agent_settled"; aborted?: boolean };
 
@@ -537,9 +539,28 @@ export class PiSdkTextKernel {
       events.push(event);
       try { deliver?.(event); } catch { deliveryError = true; }
     };
+    // Display-only observations. Approval continues to bind the broker's final,
+    // validated execution payload, never these incomplete SDK arguments.
+    const previews = new Map<string, number>();
+    const previewText = (value: unknown): string => {
+      try { const text = JSON.stringify(value) ?? ""; return text.length > 4096 ? `${text.slice(0, 4096)}…（预览截断）` : text; }
+      catch { return "参数无法显示"; }
+    };
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         emit({ type: "delta", text: event.assistantMessageEvent.delta });
+      } else if (event.type === "message_update" && ["toolcall_delta", "toolcall_end"].includes(event.assistantMessageEvent.type)) {
+        const update = event.assistantMessageEvent;
+        if (update.type === "toolcall_delta" || update.type === "toolcall_end") {
+          const part = update.type === "toolcall_end" ? update.toolCall : update.partial.content[update.contentIndex];
+          if (part?.type === "toolCall" && (previews.get(part.id) ?? 0) < 8) {
+            previews.set(part.id, (previews.get(part.id) ?? 0) + 1);
+            emit({ type: "tool_preview", callId: part.id.slice(0, 160), tool: part.name.slice(0, 256), text: previewText(part.arguments) });
+          }
+        }
+      } else if (event.type === "tool_execution_end") {
+        const result = event.result as { content?: { type?: string; text?: string }[] } | null;
+        emit({ type: "tool_result", callId: event.toolCallId.slice(0, 160), tool: event.toolName.slice(0, 256), text: previewText(result?.content?.filter(part => part.type === "text").map(part => part.text ?? "").join("\n") ?? "Host 未报告文本结果"), failed: event.isError });
       } else if (event.type === "message_end" && event.message.role === "assistant") {
         textResult = event.message.content.filter((part) => part.type === "text").map((part) => part.text).join("");
         responseError = event.message.errorMessage ?? (event.message.stopReason === "length" ? "sdk-output-truncated" : undefined);

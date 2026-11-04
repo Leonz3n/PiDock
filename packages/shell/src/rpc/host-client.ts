@@ -120,7 +120,7 @@ export class HostClient {
       const value = event as Record<string, unknown>;
       if (typeof value["taskId"] !== "string" || typeof value["sessionId"] !== "string" ||
           typeof value["turnId"] !== "string" || !Number.isSafeInteger(value["sequence"]) ||
-          (value["sequence"] as number) < 1 || !["delta", "message_end", "agent_settled"].includes(String(value["type"])) ||
+          (value["sequence"] as number) < 1 || !["delta", "message_end", "agent_settled", "tool_preview", "tool_result"].includes(String(value["type"])) ||
           JSON.stringify(event).length > 16_500) {
         if (typeof value["taskId"] === "string" && typeof value["sessionId"] === "string" && typeof value["turnId"] === "string") {
           for (const listener of this.turnListeners) {

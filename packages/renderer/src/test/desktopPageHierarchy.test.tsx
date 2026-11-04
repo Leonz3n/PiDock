@@ -67,8 +67,8 @@ it("explicit session navigation keeps that identity when Host active points else
   render(<App />);
   await screen.findByTestId("desktop-project-overview");
   fireEvent.click(await sidebar().findByRole("button", { name: "复核会话" }));
-  const conversation = await screen.findByTestId("desktop-conversation");
-  await waitFor(() => expect(within(conversation).getByRole("tab", { name: "复核会话" })).toHaveAttribute("aria-selected", "true"));
+  await screen.findByTestId("desktop-conversation");
+  await waitFor(() => expect(screen.getByRole("tab", { name: "复核会话" })).toHaveAttribute("aria-selected", "true"));
   expect(sdkTurn).not.toHaveBeenCalledWith(expect.objectContaining({ action: "subscribe", sessionId: "main" }));
 });
 

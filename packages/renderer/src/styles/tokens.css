@@ -43,6 +43,8 @@
   --color-accent: #4b638d; /* accent-primary · 雾蓝 */
   --color-soft: #e1e7f0; /* accent-soft */
   --color-sidebar: #eae7e1; /* bg-sidebar */
+  --color-attention: #805c28;
+  --color-attention-soft: #f0e6d4;
   --color-orange: #805c28; /* status-attention */
 
   --font-sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
@@ -83,6 +85,8 @@
  * utility that reads `var(--color-…)` follows automatically.
  */
 :root[data-theme="dark"] {
+  --color-attention: #d7b578;
+  --color-attention-soft: #3b3226;
   --color-bg: #202226;
   --color-paper: #282b30;
   --color-ink: #dddcd7;
@@ -190,4 +194,25 @@
   .workspace-sidebar > label { order: 3; }
   .workspace-sidebar[data-expanded="true"] .shell-task-picker { display: none; }
   .workspace-sidebar[data-expanded="true"] .shell-brand > div.shell-nav-label { display: block; }
+}
+
+/* S01: the message column and floating Composer share the 768px design measure. */
+.conversation-actions-menu { z-index: 30; }
+.conversation-markdown { font-size: 13px; line-height: 1.65; }
+.conversation-markdown > * + * { margin-top: 8px; }
+.conversation-markdown h1, .conversation-markdown h2, .conversation-markdown h3 { font-size: 14px; font-weight: 600; }
+.conversation-markdown ul { list-style: disc; padding-left: 20px; }
+.conversation-markdown ol { list-style: decimal; padding-left: 20px; }
+.conversation-markdown pre { overflow-x: auto; border: 1px solid var(--color-line); border-radius: 6px; background: var(--color-soft); padding: 8px 10px; font-size: 11px; }
+.conversation-markdown code { font-family: var(--font-mono); }
+.conversation-markdown :not(pre) > code { border-radius: 3px; background: var(--color-soft); padding: 1px 4px; font-size: 11px; }
+.conversation-markdown blockquote { border-left: 2px solid var(--color-line); padding-left: 12px; color: var(--color-muted); }
+[data-testid="desktop-composer"] [data-testid="composer-model"] { height: 24px; }
+[data-testid="desktop-composer"] [aria-label^="权限（"] { padding-inline: 4px; font-size: 10px; height: 24px; }
+@media (max-width: 960px) {
+  [data-testid="desktop-composer-container"] { padding-bottom: 12px; }
+  [data-testid="desktop-conversation-scroll"] > [data-slot="message-scroller-content"] { padding-top: 12px; gap: 10px; }
+  .conversation-markdown { font-size: 11px; }
+  [data-testid="desktop-session-identity"] { max-width: 60px; }
+  [data-testid="desktop-composer"] [data-testid="composer-model-name"] { max-width: 110px; }
 }

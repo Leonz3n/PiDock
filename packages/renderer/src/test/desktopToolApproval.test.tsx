@@ -107,6 +107,18 @@ function mount() {
 afterEach(() => { cleanup(); localStorage.clear(); delete window.pidock; vi.restoreAllMocks(); });
 
 describe("ticket 140 会话内审批卡", () => {
+  it("supports approval shortcuts once and ignores IME confirmation keys", async () => {
+    let status = "pending";
+    const fixture = setup({ approvals: () => ({ ok: true, payload: { approvals: [approvalRow({status})] } }), resolve: () => { status = "approved"; return {ok:true,payload:{}}; } });
+    mount();
+    await screen.findByTestId("desktop-approval-approve");
+    fireEvent.keyDown(window, {key:"Enter",metaKey:true,isComposing:true});
+    expect(fixture.calls().filter(row=>row.op === "task/approve")).toHaveLength(0);
+    fireEvent.keyDown(screen.getByLabelText("消息"), {key:"Enter",metaKey:true});
+    fireEvent.keyDown(screen.getByLabelText("消息"), {key:"Enter",metaKey:true});
+    await waitFor(() => expect(fixture.calls().filter(row=>row.op === "task/approve")).toHaveLength(1));
+    expect(fixture.calls().find(row=>row.op === "task/approve")?.payload).toEqual({sessionId:"main",approvalId:"approval-1"});
+  });
   it("says 等待确认 while an executing turn is parked on a real pending approval, then 执行中 after the decision", async () => {
     // [Pencil T05] #140 real Electron evidence: the Host's execution ledger
     // still reports `executing` while the tool call is parked on a pending

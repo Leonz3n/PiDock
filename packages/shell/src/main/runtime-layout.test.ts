@@ -235,6 +235,28 @@ describe("trusted Electron view modes", () => {
     expect(deliver).toBeUndefined();
   });
 
+  it.each(["task-a", "task-b"])("keeps pending SDK authority only for its own task while reading %s", async (readTask) => {
+    const views = await createTrustedWindow("workspace-a", "production");
+    await loadTrustedViews(views);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let first = true;
+    const routeTaskOp = vi.fn(async ({op}: {op:string}) => {
+      if (op === "task/sdkProjection" && first) { first = false; await held; }
+      return {ok:true,payload:{source:"sdk-jsonl",messages:[]}};
+    });
+    registerIpc({} as never, views.registry, {routeTaskOp,entryForTaskId:()=>({client:{onTurnEvent:()=>()=>{}}})} as never);
+    const sdk = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/sdkTurn")![1];
+    const taskOp = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/taskOp")![1];
+    const shell = {sender:views.shellView.webContents,senderFrame:views.shellView.webContents.mainFrame} as never;
+    const pending = sdk(shell,{action:"subscribe",taskId:"task-a",sessionId:"main"});
+    await vi.waitFor(() => expect(routeTaskOp).toHaveBeenCalledWith(expect.objectContaining({op:"task/sdkProjection"})));
+    await taskOp(shell,{taskId:readTask,op:"task/sessionList",payload:{}});
+    release();
+    expect(await pending).toMatchObject({ok:readTask === "task-a"});
+    await sdk(shell,{action:"unsubscribe",taskId:"task-a",sessionId:"main"});
+  });
+
   it("scopes SDK bridge to subscribed shell main frame and revokes on navigation or task switch", async () => {
     const views = await createTrustedWindow("workspace-a", "production");
     await loadTrustedViews(views);

@@ -490,10 +490,12 @@ it("offers no tools even when a local provider emits a write tool call", async (
   const dir = task("task-a");
   const source = join(dir, "source.txt");
   writeFileSync(source, "original");
-  const fake = await kernel(dir, (texts) => texts.includes("assistant") ? "write unavailable" : "attempt-tool");
+  let requests = 0;
+  const fake = await kernel(dir, () => ++requests === 1 ? "attempt-tool" : "write unavailable");
   expect((await fake.instance.open("main")).tools).toEqual([]);
   const result = await fake.instance.prompt("main", "write source.txt");
   expect(result.events.some((event) => event.type === "agent_settled")).toBe(true);
+  expect(result.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "tool_preview", callId: "fake-call", tool: "write", text: '{"path":"source.txt","content":"modified"}' })]));
   expect(readFileSync(source, "utf8")).toBe("original");
   await fake.instance.dispose();
 });

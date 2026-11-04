@@ -19,7 +19,7 @@
  *    no `off` is fabricated for a model without reasoning.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DesktopConversation } from "../components/DesktopConversation";
 import { DesktopShell } from "../components/DesktopShell";
 import type { PidockBridge } from "../data/shellBridge";
@@ -162,7 +162,7 @@ function setup(options: { sessions?: SessionRow[]; activeSessionId?: string | nu
 }
 
 /** The model name a menu row starts with (the window/levels span follows it directly). */
-const rowName = (row: HTMLElement) => row.textContent?.replace(/(\d|·).*$/, "") ?? "";
+const rowName = (row: HTMLElement) => row.querySelector("[data-model-name]")?.textContent ?? "";
 
 function mount(fixture: ReturnType<typeof setup>) {
   window.pidock = fixture.bridge;
@@ -233,6 +233,26 @@ describe("[#139] task sessions in the conversation", () => {
     expect(fixture.sdkCalls.some((call) => call["action"] === "start")).toBe(false);
   });
 
+  it("finishes a previous in-flight subscription before connecting the selected session", async () => {
+    const fixture = setup();
+    const original = fixture.bridge.sdkTurn!;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    fixture.bridge.sdkTurn = async request => {
+      const result = await original(request);
+      if (request.action === "subscribe" && request.sessionId === "s-1a2b3c4d") await held;
+      return result;
+    };
+    mount(fixture);
+    await waitFor(() => expect(fixture.sdkCalls.filter(row => row.action === "subscribe")).toHaveLength(1));
+    await act(async () => { fireEvent.click(screen.getByRole("tab", {name:"主会话"})); });
+    expect(screen.getByTestId("desktop-session-identity")).toHaveTextContent("主会话");
+    expect(fixture.sdkCalls.filter(row => row.action === "subscribe")).toHaveLength(1);
+    await act(async () => { release(); });
+    expect(await screen.findByText("main 会话的回答")).toBeInTheDocument();
+    expect(fixture.sdkCalls.filter(row => ["subscribe","unsubscribe"].includes(String(row.action))).map(row => `${row.action}:${row.sessionId}`)).toEqual(["subscribe:s-1a2b3c4d","unsubscribe:s-1a2b3c4d","subscribe:main"]);
+  });
+
   it("switches the model through the session op, keeping the same session subscribed", async () => {
     const fixture = setup();
     mount(fixture);
@@ -240,7 +260,7 @@ describe("[#139] task sessions in the conversation", () => {
     expect(screen.getByTestId("composer-model-name")).toHaveTextContent("Large");
     const before = fixture.sdkCalls.filter((call) => call["action"] === "subscribe").length;
     fireEvent.click(screen.getByTestId("composer-model"));
-    fireEvent.click(within(screen.getByRole("menu", { name: "会话模型" })).getByRole("menuitemradio", { name: /Fast/ }));
+    await act(async () => { fireEvent.click(within(screen.getByRole("menu", { name: "会话模型" })).getByRole("menuitemradio", { name: /Fast/ })); });
     await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionModel" && entry.payload["modelId"] === "model-fast")).toBe(true));
     // Same session identity: switching the model is a binding change, not a new
     // conversation, so no re-subscribe and no history reset happened.
@@ -391,7 +411,7 @@ describe("[#139] task sessions in the conversation", () => {
     mount(fixture);
     await screen.findByRole("tab", { name: "重构认证" });
     fireEvent.click(screen.getByTestId("composer-model"));
-    fireEvent.click(within(screen.getByRole("menu", { name: "会话模型" })).getByRole("menuitemradio", { name: /Fast/ }));
+    await act(async () => { fireEvent.click(within(screen.getByRole("menu", { name: "会话模型" })).getByRole("menuitemradio", { name: /Fast/ })); });
     expect(await screen.findByText("sdk-session-busy: 该会话正在执行回合，稍后再切换模型")).toBeInTheDocument();
     // The pill still names the OLD model: a refused switch is not applied.
     expect(screen.getByTestId("composer-model-name")).toHaveTextContent("Large");
