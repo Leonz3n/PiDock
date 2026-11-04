@@ -307,6 +307,7 @@ async function run() {
     await until("!document.querySelector('[role=dialog]')",'real edit saved');
     check('source edit persisted',projects.list().projects.find(row=>row.name===`U04 ${theme} 新工作空间`).repositories[0].name==='已编辑真实 Git 来源');
   }
+  if (scenario === 'repair-focus') renameSync(source + '-moved', source);
   check('source repository unchanged',readFileSync(join(source,'README.md'),'utf8')==='U04 real Git source\n');
   check('original uncommitted file preserved',readFileSync(join(source,'original-uncommitted.txt'),'utf8')==='original dirty checkout must remain unchanged\n');
   check('original checkout branch and dirty state preserved',execFileSync('git',['status','--porcelain'],{cwd:source,encoding:'utf8'}).trim()==='?? original-uncommitted.txt'&&execFileSync('git',['branch','--show-current'],{cwd:source,encoding:'utf8'}).trim()==='main');
