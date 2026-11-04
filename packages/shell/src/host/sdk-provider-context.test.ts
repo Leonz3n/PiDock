@@ -49,6 +49,26 @@ function host(dir: string, contexts: SdkContextClient[]) {
     () => contexts[Math.min(contexts.length - 1, index++)]!);
 }
 
+it("keeps the isolated context abortable until the live turns were aborted (explicit quit order)", async () => {
+  const dir = task("task-a");
+  const installed = fakeContext();
+  const taskHost = host(dir, [installed.client]);
+  await taskHost.configureSdkProvider({ config: CONFIG, credential: "synthetic-key" });
+  expect(installed.calls).toEqual(["open"]);
+  // `task/quit` seals execution BEFORE it aborts the live turns. A sealed
+  // context client refuses every call (`sdk-context-closing`), so sealing it
+  // here would make the abort a silent no-op and the quit would wait out the
+  // model stream instead of stopping it.
+  taskHost.sealExecution({ deferSdkContextSeal: true });
+  expect(installed.client.seal).not.toHaveBeenCalled();
+  await taskHost.sdkTextKernel().cancel("main");
+  expect(installed.calls).toEqual(["open", "cancel"]);
+  expect(installed.client.cancel).toHaveBeenCalledWith("main");
+  // Only after the abort stage may the context refuse further calls.
+  taskHost.sealSdkContext();
+  expect(installed.client.seal).toHaveBeenCalledTimes(1);
+});
+
 it("keeps a successfully opened context installed and routes model turns to it", async () => {
   const dir = task("task-a");
   const first = fakeContext();
