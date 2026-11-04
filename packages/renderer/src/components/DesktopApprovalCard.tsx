@@ -118,7 +118,7 @@ export function DesktopApprovalCard({ read, onResolve }: ApprovalCardProps) {
           </div>
           <p data-testid="desktop-approval-target" className="mt-0.5 break-all text-[11px] text-ink">目标：{approval.target || "（Host 未记录目标）"}</p>
           {approval.operation !== null && (
-            <p data-testid="desktop-approval-operation" className="my-2 rounded border border-line bg-paper px-2 py-1.5 font-mono text-[11px] break-all text-ink">实际执行参数：{approval.operation}</p>
+            <p data-testid="desktop-approval-operation" className="my-2 whitespace-pre-wrap rounded border border-line bg-paper px-2 py-1.5 font-mono text-[11px] break-all text-ink">实际执行参数：{approval.operation}</p>
           )}
           <p data-testid="desktop-approval-real-target" className="mt-0.5 break-all text-[11px] text-ink">{approvalRealTargetText(approval)}</p>
           <details className="mt-1 text-[10px] text-muted"><summary className="cursor-pointer">安全边界与拒绝原因</summary>
