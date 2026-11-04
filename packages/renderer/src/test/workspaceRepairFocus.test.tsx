@@ -3,12 +3,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DesktopWorkspaceDialog } from "../components/DesktopWorkspaceDialog";
-import { projectDraft } from "../data/desktopProjects";
+import { projectDraft, type ProjectInput } from "../data/desktopProjects";
 afterEach(cleanup);
 it("contains focus after removing the source selected for repair on open", () => {
   function Harness() {
-    const [draft, setDraft] = useState({ ...projectDraft(), name: "Repair workspace", repositories: [{ id: "missing-source", name: "Gone", path: "/missing/repo" }] });
-    return <><button>Background action</button><DesktopWorkspaceDialog mode="edit" draft={draft} onChange={setDraft} onCancel={vi.fn()} onSubmit={vi.fn()} busy={false} focusSourceId="missing-source" sourceStatus={{ "missing-source": { status: "missing" } }} /></>;
+    const [draft, setDraft] = useState<ProjectInput>({ ...projectDraft(), name: "Repair workspace", repositories: [{ id: "missing-source", name: "Gone", path: "/missing/repo" }] });
+    return <><button>Background action</button><DesktopWorkspaceDialog mode="edit" draft={draft} onChange={setDraft} onCancel={vi.fn()} onSubmit={vi.fn()} busy={false} focusSourceId="missing-source" sourceStatus={{ "missing-source": { id: "missing-source", kind: "repository", status: "missing" } }} /></>;
   }
   render(<Harness />);
   expect(screen.getByLabelText("仓库路径 1")).toHaveFocus();
@@ -48,7 +48,7 @@ it.each(["Escape", "cancel"])("cycles focus after repair removal and restores th
   const onSubmit = vi.fn();
   function Host() {
     const [open, setOpen] = useState(false);
-    const [draft, setDraft] = useState({ ...projectDraft(), name: "Repair workspace", repositories: [{ id: "missing-source", name: "Gone", path: "/missing/repo" }] });
+    const [draft, setDraft] = useState<ProjectInput>({ ...projectDraft(), name: "Repair workspace", repositories: [{ id: "missing-source", name: "Gone", path: "/missing/repo" }] });
     return <><button onClick={() => setOpen(true)}>Repair opener</button><button>Other background action</button>{open && <DesktopWorkspaceDialog mode="edit" draft={draft} onChange={setDraft} onCancel={() => setOpen(false)} onSubmit={onSubmit} busy={false} focusSourceId="missing-source" />}</>;
   }
   render(<Host />);
