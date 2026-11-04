@@ -126,6 +126,9 @@ async function run() {
   const escape = () => evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
   const expand = async () => { if (width < 960) await click("展开导航"); };
   const capture = async (state, appearance = false) => {
+    if (!appearance) await evaluate(state.includes('error')
+      ? "document.querySelector('[role=alert]')?.scrollIntoView({block:'center'})"
+      : "document.querySelector('.settings-content').scrollTop=0");
     views.window.show(); app.focus({ steal: true }); views.window.moveTop(); views.window.focus(); await wait(180);
     const metrics = await evaluate(`(() => {
       const box = el => { if (!el) return null; const r=el.getBoundingClientRect(); return { x:r.x,y:r.y,width:r.width,height:r.height }; };
