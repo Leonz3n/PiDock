@@ -112,6 +112,7 @@ async function run() {
   creation.saveDeliverySettings({ branchTemplate: "feature/{taskId}", remote: "origin" });
   await loadTrustedViews(views);
   const wc = views.shellView.webContents;
+  wc.setBackgroundThrottling(false);
   wc.on("console-message", (_event, level, message) => { if (level >= 3) consoleErrors.push(message); });
   wc.debugger.attach();
   const evaluate = async (expression) => {
@@ -124,7 +125,10 @@ async function run() {
     throw Error(`timeout ${label}: ${await evaluate("document.body.innerText")}`);
   };
   const click = async (label) => {
-    const point = await evaluate(`(() => { const el = [...document.querySelectorAll('button')].find(el => (el.getAttribute('aria-label') ?? el.textContent.trim()).startsWith(${JSON.stringify(label)}) && el.getBoundingClientRect().width > 0 && !el.closest('[hidden]')); if (!el || el.disabled) return null; el.scrollIntoView({block:'nearest'});const r=el.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    views.window.show(); views.window.focus(); wc.focus();
+    await evaluate(`(() => { const el = [...document.querySelectorAll('button')].find(el => (el.getAttribute('aria-label') ?? el.textContent.trim()).startsWith(${JSON.stringify(label)}) && el.getBoundingClientRect().width > 0 && !el.closest('[hidden]')); el?.scrollIntoView({block:'nearest',behavior:'instant'}); return true; })()`);
+    // Measure after scrolling/layout, and verify the native pointer will hit the intended control.
+    const point = await evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const el = [...document.querySelectorAll('button')].find(el => (el.getAttribute('aria-label') ?? el.textContent.trim()).startsWith(${JSON.stringify(label)}) && el.getBoundingClientRect().width > 0 && !el.closest('[hidden]')); if (!el || el.disabled) return resolve(null);const r=el.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;resolve(el.contains(document.elementFromPoint(x,y))?{x,y}:null); })))`);
     check(`control reachable: ${label}`,point&&point.y>0&&point.y<height,point);
     await wc.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});
     await wc.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});

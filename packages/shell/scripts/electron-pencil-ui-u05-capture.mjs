@@ -274,7 +274,7 @@ async function run() {
     check(`${theme}: MCP disabled persisted on disk`, nativeMcp.entry(managed.name).enabled === false);
     await evaluate("[...document.querySelectorAll('[data-testid=mcp-row]')].find(el=>el.innerText.includes('本地文档工具')).querySelectorAll('button')[2].click();true");
     await until("!document.querySelector('[data-testid=mcp-row][data-state=disabled]')", "MCP enabled");
-    await evaluate("[...document.querySelectorAll('[data-testid=mcp-row]')].find(el=>el.innerText.includes('native_oauth')).querySelector('details').open=true; [...document.querySelectorAll('[data-testid=mcp-row]')].find(el=>el.innerText.includes('native_oauth')).querySelector('button').click();true");
+    await evaluate("[...document.querySelectorAll('[data-testid=mcp-row]')].find(el=>el.innerText.includes('native_oauth')).querySelector('details').open=true; [...[...document.querySelectorAll('[data-testid=mcp-row]')].find(el=>el.innerText.includes('native_oauth')).querySelectorAll('button')].find(el=>el.textContent.trim()==='测试').click();true");
     await until("document.querySelector('[data-testid=mcp-test-result]')?.innerText.includes('需要认证')", "real HTTP challenge");
     await capture(`${theme}-mcp-auth-required`);
     check(`${theme}: original native OAuth preserved`, JSON.stringify(nativeMcp.entry("native_oauth").oauth) === JSON.stringify({clientRegistration:"cimd"}));
