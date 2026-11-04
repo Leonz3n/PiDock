@@ -184,6 +184,12 @@ async function run() {
     await until("document.querySelector('[role=dialog]')",'workspace reopened after cancel');
     await evaluate("document.querySelector('button[aria-label=新建任务]').focus()");
     check('workspace constrains attempted background focus',await evaluate("document.querySelector('[role=dialog]').contains(document.activeElement)"));
+    if(scenario==='focus-return') {
+      await capture(`${theme}-workspace-focus-return`);
+      await keyboard('Escape','Escape');
+      continue;
+    }
+
 
     await keyboard('Tab','Tab',8);
     check('workspace shift-tab wraps to submit',await evaluate("document.activeElement?.textContent.includes('创建工作区并保存配置')"));
