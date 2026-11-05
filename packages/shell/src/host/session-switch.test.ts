@@ -74,6 +74,13 @@ describe("[#139] per-session model switch policy", () => {
     await expect(switchSessionModel(undeclared, { sessionId: "main", modelId: "model-z" })).rejects.toThrow("sdk-model-unknown");
     expect(undeclared.written).toEqual([]);
     expect(undeclared.bound).toEqual([]);
+    // [#167] The same model id under a profile main did not install is a
+    // different configuration; it is refused before anything is written.
+    const wrongProfile = ports({ sessions: { main: {} } });
+    await expect(switchSessionModel(wrongProfile, { sessionId: "main", modelId: "model-a", profileId: "p-2" }))
+      .rejects.toThrow("provider-profile-mismatch");
+    expect(wrongProfile.written).toEqual([]);
+    expect(wrongProfile.bound).toEqual([]);
   });
 
   it("refuses while a turn is running instead of queueing the switch", async () => {

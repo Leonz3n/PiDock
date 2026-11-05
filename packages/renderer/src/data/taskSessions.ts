@@ -300,9 +300,18 @@ async function readoutMutation(taskId: string, op: Parameters<typeof shellTaskOp
   }
 }
 
-/** Switch this session's model (and optionally its reasoning level), keeping its history. */
-export const switchSessionModel = (taskId: string, sessionId: string, modelId: string, thinkingLevel?: SessionThinkingLevel) =>
-  readoutMutation(taskId, "task/sessionModel", { sessionId, modelId, ...(thinkingLevel === undefined ? {} : { thinkingLevel }) });
+/**
+ * Switch this session's model (and optionally its reasoning level), keeping its
+ * history. [#167] `profileId` names the global profile that owns `modelId`; the
+ * Host refuses a pair whose profile is not the one main installed, so a stale
+ * renderer cannot bind the same model id under the wrong profile.
+ */
+export const switchSessionModel = (taskId: string, sessionId: string, modelId: string, thinkingLevel?: SessionThinkingLevel, profileId?: string) =>
+  readoutMutation(taskId, "task/sessionModel", {
+    sessionId, modelId,
+    ...(profileId === undefined ? {} : { profileId }),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+  });
 
 export const setSessionReasoning = (taskId: string, sessionId: string, level: SessionThinkingLevel) =>
   readoutMutation(taskId, "task/sessionReasoning", { sessionId, level });

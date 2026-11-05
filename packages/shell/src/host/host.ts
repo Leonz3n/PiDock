@@ -1124,8 +1124,12 @@ function sessionReadoutOf(host: TaskWorkspaceHost, sessionId: string): Record<st
   if (!session) throw new Error("session-unknown");
   const digest = host.sdkTextKernel().digest(sessionId);
   const installed = host.sdkProviderConfig();
+  // [#167] A binding is a profile+model pair. The readout may only resolve the
+  // row when the binding names the profile this task actually installed; the
+  // same model id in another profile is a different configuration.
+  const bindingProfileMatches = session.binding === null || installed === null || session.binding.profileId === installed.config.profileId;
   const boundModelId = session.binding?.modelId ?? installed?.config.modelId ?? null;
-  const row = boundModelId === null ? undefined : installed?.config.models.find((model) => model.id === boundModelId);
+  const row = !bindingProfileMatches || boundModelId === null ? undefined : installed?.config.models.find((model) => model.id === boundModelId);
   const busy = host.currentSdkTurnTransport()?.busy(sessionId) ?? false;
   return {
     session,
@@ -1166,6 +1170,7 @@ function sessionReadoutOf(host: TaskWorkspaceHost, sessionId: string): Record<st
 async function applySessionBinding(
   host: TaskWorkspaceHost, sessionId: string,
   modelId: string, level: SessionThinkingLevel | undefined,
+  profileId?: string,
 ): Promise<Record<string, unknown>> {
   const previous = host.sessionIndex();
   const installed = host.sdkProviderConfig();
@@ -1181,7 +1186,7 @@ async function applySessionBinding(
     persist: (binding) => { host.bindTaskSession(sessionId, binding); },
     bind: (id, binding) => host.sdkTextKernel().bind(id, binding),
     rollback: () => { host.store.writeSessionIndex(host.taskDir, previous); },
-  }, { sessionId, modelId, ...(level === undefined ? {} : { thinkingLevel: level }) });
+  }, { sessionId, modelId, ...(profileId === undefined ? {} : { profileId }), ...(level === undefined ? {} : { thinkingLevel: level }) });
   return sessionReadoutOf(host, sessionId);
 }
 
@@ -2141,6 +2146,7 @@ async function performTaskOp(
         const sessionId = record["sessionId"];
         const modelId = record["modelId"];
         const level = record["thinkingLevel"];
+        const profileId = record["profileId"];
         if (typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(sessionId)) {
           return { ok: false, error: "invalid-payload: task/sessionModel requires sessionId" };
         }
@@ -2152,7 +2158,8 @@ async function performTaskOp(
         }
         try {
           const readout = await applySessionBinding(host, sessionId, modelId,
-            level === null || level === undefined ? undefined : level as SessionThinkingLevel);
+            level === null || level === undefined ? undefined : level as SessionThinkingLevel,
+            profileId === undefined ? undefined : String(profileId));
           return { ok: true, payload: readout };
         } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
       }

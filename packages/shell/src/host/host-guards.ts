@@ -1410,6 +1410,10 @@ export function validateHostTaskOp(
     if (level !== undefined && level !== null && typeof level !== "string") {
       return { ok: false, error: "invalid-payload: task/sessionModel.thinkingLevel must be a string" };
     }
+    const profileId = payload["profileId"];
+    if (profileId !== undefined && (typeof profileId !== "string" || profileId.trim().length === 0)) {
+      return { ok: false, error: "invalid-payload: task/sessionModel.profileId must be a non-empty string" };
+    }
     return { ok: true };
   }
   if (op === "task/sessionReasoning") {

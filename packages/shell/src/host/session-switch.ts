@@ -102,12 +102,18 @@ export function defaultThinkingLevel(row: SwitchModelRow): SessionThinkingLevel 
  */
 export async function switchSessionModel(
   ports: SessionSwitchPorts,
-  input: { sessionId: string; modelId: string; thinkingLevel?: SessionThinkingLevel | null },
+  input: { sessionId: string; modelId: string; profileId?: string; thinkingLevel?: SessionThinkingLevel | null },
 ): Promise<SessionSwitchResult> {
   const session = ports.session(input.sessionId);
   if (session.archived) throw new Error("session-archived");
   const provider = ports.provider();
   if (!provider) throw new Error("provider-not-configured");
+  // [#167] A model id is only unique inside its profile. The caller may name
+  // the profile explicitly; a pair whose profile main did not install is
+  // refused by name instead of binding the same id under another profile.
+  if (input.profileId !== undefined && input.profileId !== provider.profileId) {
+    throw new Error(`provider-profile-mismatch: ${input.modelId} 属于 ${input.profileId}，但当前安装的是 ${provider.profileId}`);
+  }
   const row = provider.models.find((model) => model.id === input.modelId);
   if (!row) throw new Error(`sdk-model-unknown: ${input.modelId} 不在当前 Provider 声明的模型列表中`);
   if (ports.busy(input.sessionId)) throw new Error("sdk-session-busy: 本会话有回合正在执行，请等待其结束或先停止");

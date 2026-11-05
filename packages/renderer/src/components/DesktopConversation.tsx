@@ -13,7 +13,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
-import { PROVIDER_STATE_TEXT, parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
+import { parseProviderStatus, providerCall, type ProviderStatus } from "../data/providerProfile";
 import { SDK_SESSION_ID, parseSdkSnapshot, type SdkMessage } from "../data/sdkSession";
 import { readHostDraft, saveHostDraft } from "../data/draftStore";
 import { executionStateThroughShell, fileStatThroughShell, listApprovalsThroughShell, resolveApprovalThroughShell, setTaskArchivedThroughShell, shellTaskOp } from "../data/shellBridge";
@@ -27,7 +27,8 @@ import { TurnStream } from "../data/turnStream";
 import {
   activateSession, archiveSession, createSession, deleteSession, formatWindow, mergeSessionList, readSessionReadout, readTaskSessions,
   REASONING_LEVEL_TEXT, renameSession, restoreSession, sessionActionRows, setSessionReasoning, stopSession, switchSessionModel,
-  type SessionActionId, type SessionLifecycleReply, type SessionList, type SessionReadout, type SessionThinkingLevel, type TaskSession,
+  type SessionActionId, type SessionLifecycleReply, type SessionList, type SessionReadout, type SessionProvider, type SessionProviderModel,
+  type SessionThinkingLevel, type TaskSession,
 } from "../data/taskSessions";
 import { definiteTurnRefusal } from "../data/turnRefusal";
 import { parseLifecycle } from "./DesktopArchivePage";
@@ -710,6 +711,26 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
     try {
       await verify();
       if (epoch !== generation.current) return;
+      // [#167] A session may be bound to a profile that is not the one this task
+      // last installed (switching between conversations of different profiles).
+      // Main installs the ACTIVE session's pair before the turn starts; otherwise
+      // the SDK kernel would look for the session's model under the wrong
+      // profile and refuse it as `sdk-model-unknown`.
+      const activeBinding = sessionList.phase === "read"
+        ? sessionList.list.sessions.find((entry) => entry.id === sessionId)?.binding ?? null
+        : null;
+      if (activeBinding && installedProvider?.profileId !== activeBinding.profileId) {
+        const status = parseProviderStatus(await providerCall({
+          taskId, op: "select", profileId: activeBinding.profileId, modelId: activeBinding.modelId,
+          ...(activeBinding.thinkingLevel === null ? {} : { thinkingLevel: activeBinding.thinkingLevel }),
+        }));
+        setProvider(status);
+        if (status.state !== "configured" || status.profileId !== activeBinding.profileId || status.modelId !== activeBinding.modelId) {
+          setNotice(`无法发送：Provider ${activeBinding.profileId} 未安装（${status.state}）`);
+          return;
+        }
+        void loadSessions();
+      }
       const current: Attempt = reuse && attemptRef.current
         ? { ...attemptRef.current, phase: "starting" }
         : { requestId: crypto.randomUUID(), text, phase: "starting", ...(carriesContext ? { context } : {}) };
@@ -873,16 +894,20 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
   // Prototype A keeps the model entry in the composer, not in a strip above the
   // history, so this is read-only summary text plus a way into the real
   // 模型与 Provider page. Sending still fails closed with the Host's own reason.
+  // [#167] The Composer's choices come from the GLOBAL Provider catalog, not
+  // from whatever profile this task happens to have installed. Asking with a
+  // task would `ensure()` (and install) a task selection; the catalog is task
+  // independent, so the read names no task.
   useEffect(() => {
     let live = true;
     void (async () => {
       try {
-        const status = parseProviderStatus(await providerCall({ taskId, op: "list" }));
+        const status = parseProviderStatus(await providerCall({ op: "list" }));
         if (live) setProvider(status);
       } catch { if (live) setProvider(null); }
     })();
     return () => { live = false; };
-  }, [taskId]);
+  }, []);
   // #24 the execution-status read. `task/executionState` is a read only — no
   // write right, no session and no approval — and the page owns no timer for it:
   // it is re-read once per attempt phase this page already observes
@@ -1189,14 +1214,40 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
   // the list answers there is no session to read.
   useEffect(() => { if (sessionList.phase === "reading") return; void loadReadout(); }, [loadReadout, sessionList.phase]);
   const readout = readoutRead.phase === "read" ? readoutRead.readout : null;
-  /** The model this session is actually bound to: its own binding, else the installed default. */
-  const boundModelId = readout?.session.binding?.modelId
-    ?? (sessionList.phase === "read" ? sessionList.list.provider?.modelId : undefined)
-    ?? null;
-  const providerModels = sessionList.phase === "read" ? sessionList.list.provider?.models ?? [] : [];
-  const boundModel = readout?.model ?? providerModels.find((row) => row.id === boundModelId) ?? null;
+  /**
+   * [#167] The model this session is actually bound to. A binding is a
+   * (profile, model) PAIR: the same model id can exist in several profiles, so
+   * matching by id alone could name the wrong row.
+   */
+  const installedProvider = sessionList.phase === "read" ? sessionList.list.provider : null;
+  const boundProfileId = readout?.session.binding?.profileId ?? installedProvider?.profileId ?? null;
+  const boundModelId = readout?.session.binding?.modelId ?? installedProvider?.modelId ?? null;
+  /**
+   * The global catalog, grouped by stable profile identity. When the catalog is
+   * unavailable (or an older shell answers with none), fall back to the profile
+   * the Host reports as installed, so the menu still works rather than claiming
+   * no model can be switched.
+   */
+  type ComposerModel = SessionProviderModel & { profileId: string; profileName: string; credentialAvailable: boolean };
+  const catalog: ComposerModel[] = (provider?.profiles.length ?? 0) > 0
+    ? provider!.profiles.flatMap((profile) => profile.models.map((model) => ({
+        ...model,
+        reasoningLevels: model.reasoningLevels as SessionThinkingLevel[],
+        profileId: profile.id,
+        profileName: profile.name,
+        credentialAvailable: profile.credentialAvailable,
+      })))
+    : (installedProvider?.models ?? []).map((model) => ({
+        ...model,
+        profileId: installedProvider!.profileId,
+        profileName: "当前任务 Provider",
+        credentialAvailable: true,
+      }));
+  const boundRow = boundProfileId === null ? undefined
+    : catalog.find((row) => row.profileId === boundProfileId && row.id === boundModelId);
+  const boundModel = readout?.model ?? boundRow ?? null;
   /** Only the levels THIS model declares; a model without reasoning offers none (never a fake `off`). */
-  const reasoningLevels = readout?.reasoningLevels ?? providerModels.find((row) => row.id === boundModelId)?.reasoningLevels ?? [];
+  const reasoningLevels = readout?.model ? readout.reasoningLevels : boundRow?.reasoningLevels ?? [];
   const thinkingLevel = readout?.session.binding?.thinkingLevel ?? null;
   const thinkingLabel = readoutRead.phase === "reading"
     ? "正在读取推理档位"
@@ -1207,13 +1258,61 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
     : reasoningLevels.length === 0 ? "该模型不支持推理档位"
     : `推理 · ${thinkingLevel === null ? "跟随模型" : REASONING_LEVEL_TEXT[thinkingLevel] ?? thinkingLevel}`;
 
-  const chooseModel = async (modelId: string, level?: SessionThinkingLevel) => {
+  /**
+   * Put back the task-level install this page found. Selecting a global profile
+   * is a real install; if the session binding is then refused (busy, context
+   * window, stale pair), leaving the new profile installed would make the next
+   * turn run under a context the session never bound. The original refusal is
+   * what the user sees; a failed restore is not allowed to mask it.
+   */
+  const restoreProvider = async (previous: SessionProvider | null): Promise<void> => {
+    try {
+      const status = parseProviderStatus(await providerCall(previous === null
+        ? { taskId, op: "clear" }
+        : {
+            taskId, op: "select", profileId: previous.profileId, modelId: previous.modelId,
+            ...(readout?.session.binding?.profileId === previous.profileId && readout.session.binding.thinkingLevel
+              ? { thinkingLevel: readout.session.binding.thinkingLevel } : {}),
+          }));
+      setProvider(status);
+    } catch { /* the session refusal is the error the caller reports */ }
+  };
+  /**
+   * [#167] A conversation may use any GLOBAL profile/model pair, not only the
+   * one this task previously installed. Before binding the session, install the
+   * target profile for this task when it is not already the live one. The Host
+   * still validates the pair against the configuration main actually installed;
+   * the renderer only names the identity, never a credential.
+   */
+  const installProviderFor = async (profileId: string, modelId: string, level?: SessionThinkingLevel): Promise<{ issue: string | null; restore: () => Promise<void> }> => {
+    const previous = installedProvider;
+    if (previous?.profileId === profileId) return { issue: null, restore: async () => {} };
+    const restore = () => restoreProvider(previous);
+    try {
+      const status = parseProviderStatus(await providerCall({
+        taskId, op: "select", profileId, modelId,
+        ...(level === undefined ? {} : { thinkingLevel: level }),
+      }));
+      setProvider(status);
+      if (status.state !== "configured" || status.profileId !== profileId || status.modelId !== modelId) {
+        await restore();
+        return { issue: `无法切换到该 Provider（${status.state}）：请检查它的凭据与配置`, restore: async () => {} };
+      }
+      return { issue: null, restore };
+    } catch (error) {
+      await restore();
+      return { issue: error instanceof Error ? error.message : String(error), restore: async () => {} };
+    }
+  };
+  const chooseModel = async (row: ComposerModel, level?: SessionThinkingLevel) => {
     if (thinkingBusy) return;
     setThinkingBusy(true);
     setThinkingError(null);
-    const result = await switchSessionModel(taskId, sessionId, modelId, level);
+    const install = await installProviderFor(row.profileId, row.id, level);
+    if (install.issue !== null) { setThinkingBusy(false); setThinkingError(install.issue); return; }
+    const result = await switchSessionModel(taskId, sessionId, row.id, level, row.profileId);
     setThinkingBusy(false);
-    if (!result.ok) { setThinkingError(result.error); return; }
+    if (!result.ok) { await install.restore(); setThinkingError(result.error); return; }
     readoutAttempt.current += 1;
     setReadoutRead({ phase: "read", readout: result.readout });
     setModelOpen(false);
@@ -1223,11 +1322,18 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
     if (thinkingBusy) return;
     setThinkingBusy(true);
     setThinkingError(null);
+    // A session restored from another profile needs that profile installed
+    // before its reasoning level can be validated by the Host.
+    const install = boundProfileId === null || boundModelId === null
+      ? { issue: null as string | null, restore: async () => {} }
+      : await installProviderFor(boundProfileId, boundModelId, level);
+    if (install.issue !== null) { setThinkingBusy(false); setThinkingError(install.issue); return; }
     const result = await setSessionReasoning(taskId, sessionId, level);
     setThinkingBusy(false);
-    if (!result.ok) { setThinkingError(result.error); return; }
+    if (!result.ok) { await install.restore(); setThinkingError(result.error); return; }
     readoutAttempt.current += 1;
     setReadoutRead({ phase: "read", readout: result.readout });
+    void loadSessions();
   };
   /** `used` is the prompt size of this session's last request; `null` is unknown, never 0. */
   const contextLabel = readout === null
@@ -1322,12 +1428,12 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
         even when no Provider/model is configured. The entry names that missing
         configuration and routes to 能力管理 → Providers; it never picks a
         profile, never sends a turn and never calls a model on its own. */}
-    {provider !== null && provider.state !== "configured" && (
+    {provider !== null && catalog.length === 0 && sessionList.phase === "read" && (
       <div role="status" data-testid="provider-requirement"
         className="shrink-0 border-b border-line bg-soft px-4 py-2 text-[11px] leading-5 text-[#9a6032] below-mid:px-3">
         <p>
-          尚未配置可用的 Provider / 模型（{PROVIDER_STATE_TEXT[provider.state]}）：任务已创建，但本任务不会自动选择或调用模型。
-          请先在「能力管理 → Providers」完成配置后，再在此会话开始对话。
+          Provider 设置中还没有可用模型（未配置）：任务已创建，但本会话不会自动选择或调用模型。
+          请先在「能力管理 → Providers」添加或启用一个 Provider；会话选择模型不再需要预先为本任务安装 Provider。
         </p>
         <Button type="button" size="sm" variant="outline" className="mt-1" onClick={onOpenProviders} aria-label="前往能力管理 · Providers 配置模型">
           前往能力管理 · Providers
@@ -1403,6 +1509,7 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
       {/* [Pencil T10] #145 S01/S06 的浮动 Composer：S01 内联对话里与紧凑窗口共用
           这一个输入区（同一份文字、引用、模型与推理、权限、发送/停止逻辑），没有
           第二份实现；它就是该列底部钉住的最后一格，900 与 560 高度都可达。 */}
+      {thinkingError && <p role="alert" data-testid="composer-thinking-error" className="mb-2 break-words text-xs text-[#ad4545]">{thinkingError}</p>}
       <form onSubmit={submit} data-testid="desktop-composer" data-surface="floating" className="min-w-0 rounded-[10px] border border-line bg-paper px-3 py-2 shadow-xs">
         {references.length > 0 && <div className="mb-2 min-w-0" data-testid="composer-file-references">
           <ul className="flex min-w-0 flex-wrap gap-1.5">
@@ -1453,16 +1560,29 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
           <div className="relative min-w-0">
             <Button type="button" variant="ghost" size="sm" data-testid="composer-model" aria-haspopup="menu" aria-expanded={modelOpen}
               title={boundModel === null ? "本会话尚未绑定模型：先在「能力管理 → Providers」完成配置" : `${boundModel.name} · ID ${boundModel.id} · 窗口 ${boundModel.contextWindow} tokens · 切换模型保留本会话历史`}
-              onClick={() => { setThinkingError(null); setModelOpen((open) => !open); }}>
+              onClick={() => setModelOpen((open) => !open)}>
               <span data-testid="composer-model-name" className="max-w-36 truncate">{boundModel === null ? (sessionList.phase === "read" ? "未绑定模型" : "正在读取模型") : boundModel.name}</span><Icon name="down" />
             </Button>
-            {modelOpen && <div role="menu" aria-label="会话模型" className="absolute right-0 bottom-full z-30 mb-1 w-[280px] rounded-[7px] border border-line bg-paper p-2 text-left shadow-md">
-              {providerModels.length === 0 ? <p className="px-1 text-[10px] leading-5 text-muted">Host 未返回当前 Provider 的模型列表；切换模型不可用。</p> : <>
+            {modelOpen && <div role="menu" aria-label="会话模型" className="absolute right-0 bottom-full z-30 mb-1 max-h-[min(420px,70vh)] w-[320px] overflow-y-auto rounded-[7px] border border-line bg-paper p-2 text-left shadow-md">
+              {catalog.length === 0 ? <p className="px-1 text-[10px] leading-5 text-muted">Provider 设置中没有可用模型；请先在「能力管理 · Providers」添加或启用一个 Provider。</p> : <>
                 <p className="px-1 pb-1 text-[10px] leading-5 text-muted">切换只改本会话的绑定：历史与 JSONL 不变，后续回合用新模型。窗口装不下本会话上下文或回合进行中时，Host 会按名字拒绝。</p>
-                {providerModels.map((row) => <Button key={row.id} type="button" role="menuitemradio" aria-checked={row.id === boundModelId} variant="ghost" size="sm" className="w-full justify-start" disabled={thinkingBusy} onClick={() => void chooseModel(row.id)}><span className="min-w-0 flex-1 truncate" title={`${row.name} · ${row.id}`}><span data-model-name>{row.name}</span><span className="block truncate text-[10px] text-muted">{row.id}</span></span><span className="ml-auto text-muted">{formatWindow(row.contextWindow)} · {row.reasoningLevels.length === 0 ? "无推理档位" : `${row.reasoningLevels.length} 档`}</span></Button>)}
+                {[...new Set(catalog.map((row) => row.profileId))].map((profileId) => {
+                  const rows = catalog.filter((row) => row.profileId === profileId);
+                  const group = rows[0]!;
+                  return <div key={profileId} role="group" aria-label={group.profileName} data-profile-id={profileId} className="border-t border-line/60 pt-1 first:border-t-0">
+                    <p className="px-1 py-0.5 text-[10px] font-medium text-ink">{group.profileName}<span className="ml-1 font-mono text-[9px] font-normal text-muted">{profileId}</span></p>
+                    {rows.map((row) => <Button key={`${row.profileId}:${row.id}`} type="button" role="menuitemradio"
+                      aria-checked={row.profileId === boundProfileId && row.id === boundModelId}
+                      variant="ghost" size="sm" className="w-full justify-start" disabled={thinkingBusy || !row.credentialAvailable}
+                      title={row.credentialAvailable ? `${row.name} · ${row.id}` : `${row.name} · ${row.id}：该 Provider 的凭据不可用`}
+                      onClick={() => void chooseModel(row)}>
+                      <span className="min-w-0 flex-1 truncate" title={`${row.name} · ${row.id}`}><span data-model-name>{row.name}</span><span className="block truncate text-[10px] text-muted">{row.id}</span></span>
+                      <span className="ml-auto max-w-24 truncate text-right text-muted">{!row.credentialAvailable ? "凭据不可用" : `${formatWindow(row.contextWindow)} · ${row.reasoningLevels.length === 0 ? "无推理档位" : `${row.reasoningLevels.length} 档`}`}</span>
+                    </Button>)}
+                  </div>;
+                })}
                 <Button type="button" variant="ghost" size="sm" className="mt-1 w-full justify-start" onClick={() => { setModelOpen(false); onOpenProviders(); }}><Icon name="settings" />能力管理 · Providers</Button>
               </>}
-              {thinkingError && <p role="alert" className="mt-1 border border-[#e0b4b4] bg-[#fdf3f3] p-1.5 text-[10px] leading-5 break-words text-[#ad4545]">{thinkingError}</p>}
             </div>}
           </div>
           <div data-testid="composer-reasoning" role="group" aria-label="推理档位" title={thinkingLabel} className="min-w-0">
@@ -1474,7 +1594,6 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
               </ToggleGroup>}
           </div>
           </div>
-          {thinkingError && !modelOpen && <span role="alert" className="min-w-0 break-words text-[10px] text-[#ad4545]">{thinkingError}</span>}
           <span data-testid="composer-context" title={contextTitle} className="min-w-0 truncate text-[10px]">{contextLabel}</span>
           <span data-testid="composer-usage" title={`${usageDetail} 本会话 SDK 累计：${readout?.usage ? `输入 ${readout.usage.input} / 输出 ${readout.usage.output} / 缓存读 ${readout.usage.cacheRead} / 写 ${readout.usage.cacheWrite}（${readout.turns} 条回复）` : "SDK 未报告"}`} className="sr-only">
             {!usageSnapshot ? "近期用量未核验" : reportedMessages.length ? `近期已报告输入+输出 ${recentTokens} tokens` : "近期用量未报告"}
