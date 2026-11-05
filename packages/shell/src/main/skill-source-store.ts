@@ -4,7 +4,9 @@
  *
  * Pi keeps *its* resource list in `<agent-dir>/settings.json`, but PiDock's
  * source rows also need stable ids, an order and an `enabled` flag that Pi's
- * plain `skills: string[]` cannot carry, and the list must never be written
+ * plain `skills: string[]` cannot carry. Existing native user sources are read
+ * on demand through a nativeAgentDir reference and a PiDock-only enable overlay;
+ * native settings and source files are never rewritten. The list must never be written
  * into a user's project. So the list is PiDock's own document under Electron's
  * `userData` (`skill-sources.json`), and the *effective* list is handed to a
  * new SDK session as explicit skill paths (see `sdk-text-kernel.ts`). Pi still
@@ -58,8 +60,15 @@ function emptyConfig(): SkillConfig {
 export class SkillSourceStore {
   readonly file: string;
 
-  constructor(userData: string, file?: string) {
+  constructor(userData: string, file?: string, nativeAgentDir?: string) {
     this.file = file ?? join(userData, SKILL_CONFIG_FILE);
+    if (nativeAgentDir) {
+      const existing = readSkillConfig(this.file, false);
+      if (existing.state !== "invalid" && (existing.state === "missing" || existing.config.nativeAgentDir !== nativeAgentDir)) {
+        const result = this.write({ ...(existing.state === "ok" ? existing.config : emptyConfig()), nativeAgentDir });
+        if (!result.ok) throw new Error(result.error);
+      }
+    }
   }
 
   private read(): SkillConfigRead {
@@ -88,12 +97,12 @@ export class SkillSourceStore {
     const config = this.mutable();
     if (!config.ok) return { ok: false, error: config.error };
     const key = sourcePathKey(path);
-    if (config.config.sources.some((source) => sourcePathKey(source.path) === key)) {
+    if (this.view().sources.some((source) => sourcePathKey(source.path) === key)) {
       return { ok: false, error: "该目录已在来源列表中" };
     }
     if (config.config.sources.length >= 32) return { ok: false, error: "来源数量已达上限" };
     const source: SkillConfigSource = { id: `src-${randomUUID().replace(/-/g, "").slice(0, 8)}`, path, enabled: true };
-    const next: SkillConfig = { version: SKILL_CONFIG_VERSION, sources: [...config.config.sources, source] };
+    const next: SkillConfig = { ...config.config, sources: [...config.config.sources, source] };
     const written = this.write(next);
     if (!written.ok) return written;
     return { ok: true, source, config: next };
@@ -102,8 +111,9 @@ export class SkillSourceStore {
   remove(id: string): { ok: true; config: SkillConfig } | { ok: false; error: string } {
     const config = this.mutable();
     if (!config.ok) return config;
+    if (this.view().config.sources.some((source) => source.id === id && source.ownership === "native")) return { ok: false, error: "原生来源保留原始所有权；可停用，不能从此删除" };
     if (!config.config.sources.some((source) => source.id === id)) return { ok: false, error: "来源不存在，可能已被移除" };
-    const next: SkillConfig = { version: SKILL_CONFIG_VERSION, sources: config.config.sources.filter((source) => source.id !== id) };
+    const next: SkillConfig = { ...config.config, sources: config.config.sources.filter((source) => source.id !== id) };
     const written = this.write(next);
     if (!written.ok) return written;
     return { ok: true, config: next };
@@ -112,9 +122,17 @@ export class SkillSourceStore {
   setEnabled(id: string, enabled: boolean): { ok: true; config: SkillConfig } | { ok: false; error: string } {
     const config = this.mutable();
     if (!config.ok) return config;
+    const native = this.view().config.sources.find((source) => source.id === id && source.ownership === "native");
+    if (native) {
+      const disabled = new Set(config.config.nativeDisabled ?? []);
+      if (enabled) disabled.delete(id); else disabled.add(id);
+      const next = { ...config.config, nativeDisabled: [...disabled] };
+      const written = this.write(next);
+      return written.ok ? { ok: true, config: next } : written;
+    }
     if (!config.config.sources.some((source) => source.id === id)) return { ok: false, error: "来源不存在，可能已被移除" };
     const next: SkillConfig = {
-      version: SKILL_CONFIG_VERSION,
+      ...config.config,
       sources: config.config.sources.map((source) => (source.id === id ? { ...source, enabled } : source)),
     };
     const written = this.write(next);
@@ -124,7 +142,7 @@ export class SkillSourceStore {
 
   /** A corrupt document is a refusal, never a silent reset. */
   private mutable(): { ok: true; config: SkillConfig } | { ok: false; error: string } {
-    const read = this.read();
+    const read = readSkillConfig(this.file, false);
     if (read.state === "invalid") return { ok: false, error: `skill-config-invalid: ${read.message}` };
     return { ok: true, config: read.state === "missing" ? emptyConfig() : read.config };
   }

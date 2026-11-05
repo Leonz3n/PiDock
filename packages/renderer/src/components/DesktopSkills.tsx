@@ -180,6 +180,8 @@ export function DesktopSkills({ bridge, onCount }: { bridge?: PidockBridge; onCo
         </p>
       ) : null}
 
+      {view?.config?.nativeAgentDir ? <p className="text-xs text-muted">原生用户来源：{view.config.nativeAgentDir}。来源保持用户所有；启停只改变 PiDock 的加载许可。刷新重新扫描，新会话读取最新列表；停用立即撤销来源读取权限。项目 Skills、glob/排除规则与单文件配置暂不支持。</p> : null}
+      {view?.config?.nativeWarnings?.map((warning, index) => <p role="status" key={index} className="text-xs text-muted">{warning}</p>)}
       <ul aria-label="本地技能来源" className="grid grid-cols-2 items-start gap-3 below-narrow:grid-cols-1">
         {(view?.sources ?? []).map((source) => (
           <li key={source.id} data-testid={`skill-source-${source.id}`} className="rounded-lg border border-line bg-paper p-4">
@@ -187,7 +189,7 @@ export function DesktopSkills({ bridge, onCount }: { bridge?: PidockBridge; onCo
               <div className="min-w-0 flex-1 basis-[150px]">
                 <p className="truncate font-mono text-[11px] text-ink" title={source.path}>{source.path}</p>
                 <p className="text-[10px] text-muted">
-                  {source.status === "ok" ? `${source.skills.length} 个技能` : source.message ?? skillSourceStatusLabel(source.status)}
+                  {source.ownership === "native" ? "原生用户来源 · " : ""}{source.status === "ok" ? `${source.skills.length} 个技能` : source.message ?? skillSourceStatusLabel(source.status)}
                   {source.diagnostics.length > 0 ? ` · ${source.diagnostics.length} 条警告` : ""}
                 </p>
               </div>
@@ -197,7 +199,7 @@ export function DesktopSkills({ bridge, onCount }: { bridge?: PidockBridge; onCo
                   onClick={() => void run(() => setSkillSourceEnabled(bridge, source.id, !source.enabled))}>
                   {source.enabled ? "停用" : "启用"}
                 </Button>
-                <Button size="sm" variant="outline" data-testid={`skill-remove-${source.id}`} type="button" disabled={busy}
+                <Button size="sm" variant="outline" data-testid={`skill-remove-${source.id}`} type="button" disabled={busy || source.ownership === "native"}
                   onClick={() => void run(() => removeSkillSource(bridge, source.id))}>
                   移除
                 </Button>

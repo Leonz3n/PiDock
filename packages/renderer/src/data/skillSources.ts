@@ -27,6 +27,7 @@ export type SkillEntryView = {
 };
 
 export type SkillSourceScanView = {
+  ownership?: "native";
   id: string;
   path: string;
   enabled: boolean;
@@ -39,6 +40,7 @@ export type SkillSourceScanView = {
 export type SkillSourcesView = {
   state: "ok" | "empty" | "invalid";
   file: string;
+  config?: { nativeAgentDir?: string; nativeWarnings?: string[] };
   sources: SkillSourceScanView[];
   message?: string;
 };

@@ -50,7 +50,7 @@ function directoryRefusal(path: unknown): { ok: true; path: string } | { ok: fal
   return { ok: true, path: resolved };
 }
 
-export function performSkillSourcesOperation(payload: unknown, userData: string): SkillSourcesResult {
+export function performSkillSourcesOperation(payload: unknown, userData: string, nativeAgentDir?: string): SkillSourcesResult {
   if (!isRecord(payload)) return { ok: false, error: "Skills 操作参数无效" };
   const op = payload["op"];
   if (typeof op !== "string" || !(OPS as readonly string[]).includes(op)) return { ok: false, error: "未知的 Skills 操作" };
@@ -66,7 +66,7 @@ export function performSkillSourcesOperation(payload: unknown, userData: string)
   if (Object.keys(payload).some((key) => !allowed[op as SkillSourcesOp].includes(key))) {
     return { ok: false, error: "Skills 操作包含多余字段" };
   }
-  const store = new SkillSourceStore(userData);
+  const store = new SkillSourceStore(userData, undefined, nativeAgentDir);
   if (op === "list") return { ok: true, view: store.view() };
   if (op === "open") {
     const key = payload["key"];

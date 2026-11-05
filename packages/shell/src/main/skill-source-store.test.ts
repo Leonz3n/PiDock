@@ -78,3 +78,51 @@ describe("skill source store", () => {
     expect(statSync(join(source, "pdf-tools", "SKILL.md")).isFile()).toBe(true);
   });
 });
+
+it("projects existing native skill directories without copying or rewriting their settings", () => {
+  const { userData, source } = app();
+  const agentDir = join(userData, "native-agent");
+  mkdirSync(agentDir);
+  const native = JSON.stringify({ skills: [source], unknown: { kept: true } });
+  writeFileSync(join(agentDir, "settings.json"), native);
+  const store = new SkillSourceStore(userData, undefined, agentDir);
+  expect(store.view().sources.some((row) => row.path === source && row.skills.some((skill) => skill.name === "pdf-tools"))).toBe(true);
+  expect(readFileSync(join(agentDir, "settings.json"), "utf8")).toBe(native);
+});
+
+it("re-reads native external edits while keeping native toggles as an app-only overlay", () => {
+  const { userData, source } = app();
+  const agentDir = join(userData, "native-agent");
+  mkdirSync(agentDir);
+  const nativePath = join(agentDir, "settings.json");
+  const original = JSON.stringify({ skills: [source], unknown: 17 });
+  writeFileSync(nativePath, original);
+  const store = new SkillSourceStore(userData, undefined, agentDir);
+  const native = store.view().sources[0]!;
+  expect(store.setEnabled(native.id, false).ok).toBe(true);
+  expect(store.sessionPaths()).toEqual([]);
+  expect(readFileSync(nativePath, "utf8")).toBe(original);
+  expect(store.remove(native.id).ok).toBe(false);
+  expect(store.setEnabled(native.id, true).ok).toBe(true);
+  expect(store.sessionPaths()).toEqual([source]);
+  writeFileSync(nativePath, JSON.stringify({ skills: [], unknown: 17 }));
+  expect(store.view().sources).toEqual([]);
+  expect(store.sessionPaths()).toEqual([]);
+  writeFileSync(nativePath, "{ malformed");
+  expect(store.view().config.nativeWarnings).toHaveLength(1);
+  expect(readFileSync(nativePath, "utf8")).toBe("{ malformed");
+});
+
+it("fails closed for unsupported native exclusions instead of loading skills the user excluded", () => {
+  const { userData, source } = app();
+  const nativeDir = join(userData, "native-agent");
+  mkdirSync(nativeDir);
+  const path = join(nativeDir, "settings.json");
+  const original = JSON.stringify({ skills: [source, "!**/pdf-tools"] });
+  writeFileSync(path, original);
+  const store = new SkillSourceStore(userData, undefined, nativeDir);
+  expect(store.view().sources).toEqual([]);
+  expect(store.view().config.nativeWarnings).toHaveLength(1);
+  expect(store.sessionPaths()).toEqual([]);
+  expect(readFileSync(path, "utf8")).toBe(original);
+});

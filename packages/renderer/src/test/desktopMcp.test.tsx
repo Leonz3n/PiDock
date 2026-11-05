@@ -56,7 +56,7 @@ async function openMcp(options: Parameters<typeof bridge>[0] = {}) {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("S09 MCP pane", () => {
-  it("lists real state, transport and reference names, and marks a hand-written server read-only", async () => {
+  it("lists real state, transport and reference names, and marks native ownership without offering a destructive edit", async () => {
     const { calls } = await openMcp({ list: STATUS });
     const rows = await screen.findAllByTestId("mcp-row");
     expect(rows).toHaveLength(2);
@@ -70,7 +70,7 @@ describe("S09 MCP pane", () => {
     // A hand-written HTTP server keeps its real error state and has no write path.
     expect(rows[1]).toHaveAttribute("data-state", "error");
     expect(rows[1]).toHaveTextContent("mcp-config-invalid");
-    expect(rows[1]).toHaveTextContent("Pi 直接管理 · 只读");
+    expect(rows[1]).toHaveTextContent("用户原生配置 · 保留所有权");
     expect(within(rows[1]!).queryByRole("button", { name: "编辑" })).toBeNull();
     expect(within(rows[1]!).queryByRole("button", { name: "停用" })).toBeNull();
     expect(within(rows[1]!).queryByRole("button", { name: "删除" })).toBeNull();

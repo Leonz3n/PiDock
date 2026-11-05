@@ -7,7 +7,8 @@
  * the user-level file:
  *
  * - Ownership namespace: every server PiDock writes is named
- *   `pidock-mcp-<uuid>`. Nothing outside that namespace is ever written,
+ *   `pidock-mcp-<uuid>`. An explicit fingerprint-checked enabled-only edit is
+ *   available for user-owned entries; outside that act nothing else is written,
  *   rewritten or deleted, so a hand-written server (with credentials, OAuth
  *   state or fields this app does not model) survives every UI action.
  * - Unknown top-level fields (`autoEnableCodemode`, comments already stripped
@@ -23,6 +24,7 @@
  *   `http`, `streamable-http`; legacy `sse` is rejected, never downgraded.
  */
 
+import { fingerprintOf } from "./native-models-config.js";
 import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
@@ -133,7 +135,7 @@ export function assertMcpName(value: unknown): string {
 
 /** The resolved Pi agent directory; `PIDOCK_AGENT_DIR` must be absolute. */
 export function resolveMcpAgentDir(env: Record<string, string | undefined>, home: string): string {
-  const override = env["PIDOCK_AGENT_DIR"];
+  const override = env["PIDOCK_AGENT_DIR"]?.trim() || env["PI_CODING_AGENT_DIR"];
   if (typeof override === "string" && override.trim().length > 0) {
     if (!isAbsolute(override.trim())) throw new McpFailure("mcp-agent-dir-invalid", override);
     return override.trim();
@@ -364,6 +366,16 @@ export class NativeMcpFile {
     // Enable/disable changes only the `enabled` flag: every other field —
     // including a credential reference this app never models — is kept.
     this.write(name, { ...entry, enabled });
+  }
+
+  /** One explicit user-owned flag edit; keep name, credentials and all other fields. */
+  setNativeEnabled(name: string, enabled: boolean, expected: string): void {
+    assertMcpName(name);
+    const read = this.read();
+    if (!read.ok) throw new McpFailure("mcp-unreadable");
+    const entry = read.servers[name];
+    if (!record(entry) || fingerprintOf(entry) !== expected) throw new McpFailure("mcp-servers-invalid", "native entry changed; refresh first");
+    this.commit({ ...read.root, mcpServers: { ...read.servers, [name]: { ...entry, enabled } } });
   }
 
   /** Delete one managed server; returns true when it existed. Unmanaged names throw. */

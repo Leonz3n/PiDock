@@ -179,7 +179,7 @@ export function DesktopMcpPanel({ onCount }: { onCount?: (count: number | null) 
               <Badge variant="soft">{transportText(view)}</Badge>
               <Badge variant={stateVariant(view.state)}>{MCP_STATE_TEXT[view.state]}</Badge>
               <span className="text-[10px] text-muted">{tested?.key === view.name ? tested.result.state === "connected" ? `已连接 · ${tested.result.tools.length} 个工具` : tested.result.error?.code === "mcp-auth-required" ? "需要认证" : tested.result.state === "disabled" ? "未连接" : "连接失败" : "连接状态未知"}</span>
-              {!view.managed && <Badge variant="outline">Pi 直接管理 · 只读</Badge>}
+              {!view.managed && <Badge variant="outline">用户原生配置 · 保留所有权</Badge>}
             </div>
             <p className="mt-0.5 truncate font-mono text-[10px] text-muted">
               {view.transport === "http" ? (view.url ?? "URL 缺失") : [view.command ?? "command 缺失", ...view.args].join(" ")}
@@ -197,6 +197,7 @@ export function DesktopMcpPanel({ onCount }: { onCount?: (count: number | null) 
           <div className="flex flex-wrap justify-end gap-1 pr-5">
             {view.transport === "http" && view.enabled && <OAuthControls name={view.name} url={view.url} refresh={tested?.key === view.name ? tested.result : null} onChange={() => setTested(null)} />}
             <Button type="button" size="sm" variant="outline" disabled={busy !== ""} onClick={() => void testSaved(view)}>{busy === `test:${view.name}` ? "测试中…" : "测试"}</Button>
+            {!view.managed && view.fingerprint ? <Button type="button" size="sm" variant="ghost" disabled={busy !== ""} onClick={() => void act(`toggle:${view.name}`, { op: view.enabled ? "native-disable" : "native-enable", name: view.name, fingerprint: view.fingerprint }, "仅改变原生条目的 enabled；新会话生效，认证与原名保留")}>{view.enabled ? "停用" : "启用"}</Button> : null}
             {view.managed && <>
               <Button type="button" size="sm" variant="ghost" disabled={busy !== ""} onClick={() => { setDraft(draftFromView(view)); setDraftError(""); setTested(null); setError(""); }}>编辑</Button>
               <Button type="button" size="sm" variant="ghost" disabled={busy !== ""} onClick={() => void act(`toggle:${view.name}`, { op: view.enabled ? "disable" : "enable", name: view.name }, view.enabled ? `已停用 ${view.name}；新会话不再加载它` : `已启用 ${view.name}；新会话启动时加载`)}>{view.enabled ? "停用" : "启用"}</Button>

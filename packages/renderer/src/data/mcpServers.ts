@@ -37,6 +37,7 @@ export const MCP_STATE_TEXT: Record<McpState, string> = {
 export interface McpServerView {
   name: string;
   managed: boolean;
+  fingerprint?: string;
   label: string | null;
   transport: McpTransport | "invalid";
   enabled: boolean;
@@ -110,6 +111,7 @@ function server(value: unknown): McpServerView {
   return {
     name: value.name,
     managed: value.managed,
+    ...(typeof value.fingerprint === "string" && /^[0-9a-f]{64}$/.test(value.fingerprint) ? { fingerprint: value.fingerprint } : {}),
     label: value.label,
     transport: value.transport as McpServerView["transport"],
     enabled: value.enabled,

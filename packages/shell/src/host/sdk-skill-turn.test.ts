@@ -75,7 +75,7 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 const SKILL_BODY = "Read references/format.md before answering. Then answer with the word ORCHID.";
 const RESOURCE_BODY = "FORMAT-MARKER-7Q: tables first, then prose.";
 
-function fixture(): { dir: string; skillDir: string; appDir: string; sourcePath: string; store: SkillSourceStore } {
+function fixture(native = false): { dir: string; skillDir: string; appDir: string; sourcePath: string; store: SkillSourceStore } {
   const root = mkdtempSync(join(tmpdir(), "pidock-skill-turn-"));
   roots.push(root);
   const dir = join(root, "task");
@@ -101,9 +101,16 @@ function fixture(): { dir: string; skillDir: string; appDir: string; sourcePath:
     "",
   ].join("\n"));
   writeFileSync(join(skillDir, "references", "format.md"), `${RESOURCE_BODY}\n`);
-  const store = new SkillSourceStore(appDir);
-  const added = store.add(join(dir, "skills"));
-  if (!added.ok) throw new Error(added.error);
+  const agentDir = join(appDir, "native-agent");
+  if (native) {
+    mkdirSync(agentDir);
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ skills: [join(dir, "skills")], unknown: "preserved" }));
+  }
+  const store = new SkillSourceStore(appDir, undefined, native ? agentDir : undefined);
+  if (!native) {
+    const added = store.add(join(dir, "skills"));
+    if (!added.ok) throw new Error(added.error);
+  }
   return { dir, skillDir, appDir, sourcePath: join(dir, "skills"), store };
 }
 
@@ -158,8 +165,8 @@ function readTool(): (sessionId: string, request: { tool: string; args: unknown 
   };
 }
 
-it("advertises the scanned skill, expends it once for the explicit request and resolves its relative resource", async () => {
-  const { dir, skillDir, appDir, store } = fixture();
+it.each([false, true])("advertises the scanned skill, expands it once and resolves its relative resource (native=%s)", async (native) => {
+  const { dir, skillDir, appDir, store } = fixture(native);
   // The pane's own scan is what the session sees: one valid skill, resources listed.
   const scan = store.view();
   expect(scan.state).toBe("ok");
@@ -244,8 +251,8 @@ it("advertises the scanned skill, expends it once for the explicit request and r
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 
-it("applies a source toggle at the next session only and keeps a broken sibling named", async () => {
-  const { dir, appDir, store, sourcePath } = fixture();
+it.each([false, true])("applies a source toggle at the next session and keeps a broken sibling named (native=%s)", async (native) => {
+  const { dir, appDir, store, sourcePath } = fixture(native);
   const requests: { messages: { role: string; content: unknown }[] }[] = [];
   const server = createServer((request, response) => {
     void (async () => {
@@ -302,7 +309,7 @@ it("applies a source toggle at the next session only and keeps a broken sibling 
  * skill's own relative reference - while a write to the same source is still
  * refused and changes nothing on disk.
  */
-it("loads a skill from an external source through the real broker, refusing a write to it", async () => {
+it.each([false, true])("loads an external skill through the real broker and refuses writes (native=%s)", async (native) => {
   const root = mkdtempSync(join(tmpdir(), "pidock-skill-external-"));
   roots.push(root);
   const tasksRoot = join(root, "tasks");
@@ -322,8 +329,13 @@ it("loads a skill from an external source through the real broker, refusing a wr
   mkdirSync(join(skillDir, "references"), { recursive: true });
   writeFileSync(join(skillDir, "SKILL.md"), `---\nname: pdf-tools\ndescription: Extract text from PDF files.\n---\n\n${SKILL_BODY}\n`);
   writeFileSync(join(skillDir, "references", "format.md"), `${RESOURCE_BODY}\n`);
-  const store = new SkillSourceStore(appDir);
-  expect(store.add(externalSource).ok).toBe(true);
+  const nativeDir = join(root, "native-agent");
+  if (native) {
+    mkdirSync(nativeDir);
+    writeFileSync(join(nativeDir, "settings.json"), JSON.stringify({ skills: [externalSource] }));
+  }
+  const store = new SkillSourceStore(appDir, undefined, native ? nativeDir : undefined);
+  if (!native) expect(store.add(externalSource).ok).toBe(true);
   const configFile = join(appDir, "skill-sources.json");
 
   const scope: SdkAgentToolScope = {

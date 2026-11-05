@@ -40,6 +40,8 @@
  * boundary — a running session is never mutated behind the user's back.
  */
 
+import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
@@ -57,11 +59,15 @@ export type SkillConfigSource = {
   /** Absolute directory the user added. */
   path: string;
   enabled: boolean;
+  ownership?: "native";
 };
 
 export type SkillConfig = {
   version: typeof SKILL_CONFIG_VERSION;
   sources: SkillConfigSource[];
+  nativeAgentDir?: string;
+  nativeDisabled?: string[];
+  nativeWarnings?: string[];
 };
 
 export type SkillConfigRead =
@@ -110,11 +116,18 @@ export function parseSkillConfig(value: unknown): { ok: true; config: SkillConfi
     paths.add(key);
     sources.push({ id, path, enabled });
   }
-  return { ok: true, config: { version: SKILL_CONFIG_VERSION, sources } };
+  const nativeAgentDir = record["nativeAgentDir"];
+  const nativeDisabled = record["nativeDisabled"];
+  if (nativeAgentDir !== undefined && absolutePath(nativeAgentDir) === null) return { ok: false, message: "原生 Agent 目录无效" };
+  if (nativeDisabled !== undefined && (!Array.isArray(nativeDisabled) || nativeDisabled.some((id) => typeof id !== "string" || !SOURCE_ID.test(id)))) return { ok: false, message: "原生来源启停配置无效" };
+  return { ok: true, config: { version: SKILL_CONFIG_VERSION, sources,
+    ...(typeof nativeAgentDir === "string" ? { nativeAgentDir } : {}),
+    ...(Array.isArray(nativeDisabled) ? { nativeDisabled: nativeDisabled as string[] } : {}),
+  } };
 }
 
 /** Bytes on disk, decoded with their own reason instead of a sample config. */
-export function readSkillConfig(file: string): SkillConfigRead {
+export function readSkillConfig(file: string, includeNative = true): SkillConfigRead {
   let size: number;
   try {
     const stat = statSync(file);
@@ -131,7 +144,49 @@ export function readSkillConfig(file: string): SkillConfigRead {
   try { parsed = JSON.parse(raw); } catch { return { state: "invalid", message: "配置不是合法 JSON" }; }
   const result = parseSkillConfig(parsed);
   if (!result.ok) return { state: "invalid", message: result.message };
-  return { state: "ok", config: result.config };
+  return { state: "ok", config: includeNative ? withNativeSkillSources(result.config) : result.config };
+}
+
+/** User-level native sources only. No project discovery, command execution or extension loading. */
+export function withNativeSkillSources(config: SkillConfig): SkillConfig {
+  const agentDir = config.nativeAgentDir;
+  if (!agentDir) return config;
+  const warnings: string[] = [];
+  const paths: string[] = [];
+  const defaultPath = join(agentDir, "skills");
+  if (existsSync(defaultPath)) paths.push(defaultPath);
+  const settingsPath = join(agentDir, "settings.json");
+  if (existsSync(settingsPath)) {
+    try {
+      if (!statSync(settingsPath).isFile() || statSync(settingsPath).size > MAX_CONFIG_BYTES) throw new Error();
+      const settings: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
+      if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error();
+      const skills = (settings as Record<string, unknown>)["skills"];
+      if (skills !== undefined && !Array.isArray(skills)) throw new Error();
+      for (const path of (skills ?? []) as unknown[]) {
+        if (typeof path !== "string" || path.trim().length === 0 || /[!*?{}\0]/.test(path) || path.endsWith("SKILL.md")) {
+          warnings.push("settings.skills 中的 glob、排除规则、单文件或非路径来源暂不支持；原文件保留。");
+          continue;
+        }
+        const resolved = path.startsWith("~/") ? resolve(homedir(), path.slice(2)) : resolve(agentDir, path);
+        paths.push(resolved);
+      }
+    } catch { warnings.push("原生 settings.json 无法解析；未导入配置来源，原文件保留。"); }
+  }
+  // An exclusion/glob or malformed settings document can affect every native
+  // source. Do not partially load it and accidentally undo a user exclusion.
+  if (warnings.length > 0) return { ...config, nativeWarnings: warnings };
+  const sources = [...config.sources];
+  const seen = new Set(sources.map((source) => sourcePathKey(source.path)));
+  for (const path of paths) {
+    const key = sourcePathKey(path);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const id = `src-${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
+    if (sources.some((source) => source.id === id)) { warnings.push("原生来源标识冲突；该来源未加载。"); continue; }
+    sources.push({ id, path, ownership: "native", enabled: !(config.nativeDisabled ?? []).includes(id) });
+  }
+  return { ...config, sources, nativeWarnings: warnings };
 }
 
 /** Enabled source directories, in list order, one entry per real directory. */
@@ -177,6 +232,7 @@ export type SkillEntry = {
 };
 
 export type SkillSourceScan = {
+  ownership?: "native";
   id: string;
   path: string;
   enabled: boolean;
@@ -253,7 +309,7 @@ function listResources(skillDir: string): SkillResource[] {
 }
 
 function scanSource(source: SkillConfigSource): SkillSourceScan {
-  const base: SkillSourceScan = { id: source.id, path: source.path, enabled: source.enabled, status: "ok", skills: [], diagnostics: [] };
+  const base: SkillSourceScan = { ...(source.ownership ? { ownership: source.ownership } : {}), id: source.id, path: source.path, enabled: source.enabled, status: "ok", skills: [], diagnostics: [] };
   if (!source.enabled) return { ...base, status: "disabled" };
   const listed = listable(source.path);
   if (!listed.ok) {

@@ -20,6 +20,7 @@
  * - Failures are reported as bounded states/codes, never as raw SDK or HTTP text.
  */
 
+import { NativeProviderSource } from "./native-provider-source.js";
 import { randomUUID } from "node:crypto";
 import type { ProviderProfile, ProviderProfileInput, ProviderCredentialRef } from "./provider-profile-store.js";
 import { validateExplicitTextProvider, type ExplicitTextProvider } from "../host/explicit-text-provider.js";
@@ -29,6 +30,7 @@ import type { ProviderSecretStore } from "./provider-secret-store.js";
 import {
   NativeModelsFile,
   managedProviderId,
+  fingerprintOf,
   type NativeManagedState,
   type NativeModelRow,
   type NativeProviderEntry,
@@ -106,7 +108,7 @@ export interface ProviderView {
   credentialSource: "env" | "store";
   credentialAvailable: boolean;
   generation: number;
-  native: { providerId: string; state: NativeManagedState };
+  native: { providerId: string; state: NativeManagedState; ownership?: "user"; fingerprint?: string };
 }
 
 export interface ProviderStatus {
@@ -120,6 +122,8 @@ export interface ProviderStatus {
   nativePath: string | null;
   /** False when the platform cannot encrypt, so the UI must not offer "save key". */
   secretsAvailable: boolean;
+  nativeUnsupported?: string[];
+  nativeUnreadable?: boolean;
 }
 
 export interface ProviderWiringOptions {
@@ -198,6 +202,10 @@ function modelInput(value: unknown): ProviderProfileInput["models"][number] {
   const cost = value["cost"];
   const reasoningLevels = value["reasoningLevels"];
   let thinkingLevelMap: Record<string, string | null> | undefined;
+  if (value["thinkingLevelMap"] !== undefined) {
+    if (reasoningLevels !== undefined || !object(value["thinkingLevelMap"])) throw new TrustDomainViolation("invalid-payload", "invalid provider thinking map");
+    thinkingLevelMap = value["thinkingLevelMap"] as Record<string, string | null>;
+  }
   if (reasoningLevels !== undefined) {
     // An empty list is a *declared* fact: the model declares reasoning but no
     // tier it can actually use. Refusing it here would make one hand-written
@@ -271,14 +279,26 @@ function profileInput(value: unknown): { input: ProviderProfileInput; credential
  */
 export class ProviderWiring {
   private readonly installed = new Map<string, string>();
+  private readonly nativeCredentialDigests = new Map<string, string>();
   private readonly failed = new Map<string, { key: string; state: ProviderInstallState }>();
+
+  private readonly nativeSource?: NativeProviderSource;
 
   constructor(
     private readonly store: ProviderProfileStore,
     private readonly install: ProviderInstaller,
     private readonly env: Record<string, string | undefined> = process.env,
     private readonly options: ProviderWiringOptions = {},
-  ) {}
+  ) {
+    if (options.native) {
+      this.nativeSource = new NativeProviderSource(options.native, env);
+      store.nativeProfiles = (ownedIds) => this.nativeSource!.snapshot(ownedIds).profiles;
+    }
+  }
+
+  private userOwned(profile: ProviderProfile): boolean {
+    return profile.native.providerId !== managedProviderId(profile.id);
+  }
 
   /** Where Pi reads managed Provider entries from. */
   get nativePath(): string | null {
@@ -286,6 +306,7 @@ export class ProviderWiring {
   }
 
   private secretAvailable(profile: ProviderProfile): boolean {
+    if (this.userOwned(profile)) { try { this.nativeSource!.credential(profile); return true; } catch { return false; } }
     if (profile.credentials.kind === "env") {
       return typeof this.env[profile.credentials.ref] === "string" && (this.env[profile.credentials.ref] as string).length > 0;
     }
@@ -295,6 +316,7 @@ export class ProviderWiring {
 
   /** The credential value for main's own use; never returned to a renderer. */
   private credential(profile: ProviderProfile): string {
+    if (this.userOwned(profile)) return this.nativeSource!.credential(profile);
     if (profile.credentials.kind === "env") {
       const credential = resolveProviderCredential({ authRef: profile.credentials.ref }, this.env);
       if (credential.length < 8) throw new Error("provider-not-configured");
@@ -308,7 +330,7 @@ export class ProviderWiring {
 
   private view(profile: ProviderProfile): ProviderView {
     const active = profile.models.find((row) => row.id === profile.modelId) ?? profile.models[0]!;
-    const nativeState = this.options.native
+    const nativeState = this.userOwned(profile) ? "synced" : this.options.native
       ? this.options.native.state(profile.id, profile.native.fingerprint)
       : "never-written";
     return {
@@ -334,7 +356,7 @@ export class ProviderWiring {
       credentialSource: profile.credentials.kind,
       credentialAvailable: this.secretAvailable(profile),
       generation: profile.generation,
-      native: { providerId: managedProviderId(profile.id), state: nativeState },
+      native: { providerId: profile.native.providerId, state: nativeState, ...(this.userOwned(profile) ? { ownership: "user" as const, fingerprint: profile.native.fingerprint! } : {}) },
     };
   }
 
@@ -389,7 +411,15 @@ export class ProviderWiring {
       this.failed.set(taskId, { key, state: "binding-stale" });
       return "binding-stale";
     }
-    try { this.credential(profile); } catch {
+    try {
+      const credential = this.credential(profile);
+      if (this.userOwned(profile) && this.installed.has(taskId) &&
+          this.nativeCredentialDigests.get(taskId) !== fingerprintOf(credential)) {
+        await this.retireInstalled(taskId, sender);
+        this.failed.set(taskId, { key, state: "binding-stale" });
+        return "binding-stale";
+      }
+    } catch {
       try { await this.retireInstalled(taskId, sender); }
       catch { /* An active context remains available to finish or cancel its turn. */ }
       this.failed.set(taskId, { key, state: "credential-missing" });
@@ -397,6 +427,7 @@ export class ProviderWiring {
     }
     // Loss of a credential requires an explicit selection to restore sending.
     if (this.failed.get(taskId)?.key === key && this.failed.get(taskId)?.state === "credential-missing") return "credential-missing";
+    if (this.userOwned(profile) && this.failed.get(taskId)?.key === key && this.failed.get(taskId)?.state === "binding-stale") return "binding-stale";
     if (this.installed.get(taskId) === key) return "configured";
     const state = await this.installSelection(taskId, selection.profileId, selection.modelId, selection.thinkingLevel, selection.generation, key, sender);
     if (state !== "configured") return state;
@@ -417,6 +448,7 @@ export class ProviderWiring {
     if (!this.installed.has(taskId)) return;
     await this.install(taskId, null, sender);
     this.installed.delete(taskId);
+    this.nativeCredentialDigests.delete(taskId);
   }
 
   /** Installs and persists an explicit user selection (profile + model + level). */
@@ -445,7 +477,12 @@ export class ProviderWiring {
 
   private async installSelection(taskId: string, id: string, modelId: string, level: ReasoningTier, generation: number, key: string, sender: number): Promise<ProviderInstallState> {
     let credential: string;
-    try { credential = this.credential(this.store.profile(id)); }
+    let nativeSelection = false;
+    try {
+      const profile = this.store.profile(id);
+      nativeSelection = this.userOwned(profile);
+      credential = this.credential(profile);
+    }
     catch { this.failed.set(taskId, { key, state: "credential-missing" }); return "credential-missing"; }
     try { await this.install(taskId, { profileId: id, credential, modelId, thinkingLevel: level }, sender); }
     catch (error) {
@@ -455,6 +492,7 @@ export class ProviderWiring {
       return state;
     }
     this.installed.set(taskId, key);
+    if (nativeSelection) this.nativeCredentialDigests.set(taskId, fingerprintOf(credential));
     // Eager SDK open is asynchronous: profile edits or credential loss while it
     // waits must not turn its eventual reply into permission for a stale send.
     let state: ProviderInstallState = "configured";
@@ -488,6 +526,8 @@ export class ProviderWiring {
       profiles: this.views(),
       nativePath: this.nativePath,
       secretsAvailable: this.options.secrets?.available() === true,
+      nativeUnsupported: this.nativeSource?.snapshot(this.store.list().profiles.filter((row) => !this.userOwned(row)).map((row) => row.id)).unsupported ?? [],
+      nativeUnreadable: this.options.native ? !this.options.native.read().ok : false,
     };
   }
 
@@ -536,6 +576,7 @@ export class ProviderWiring {
   save(input: ProviderProfileInput, apiKey: string | undefined, reconcile: boolean): { profile: ProviderView; status: ProviderStatus; conflict: NativeManagedState | null; written: boolean } {
     const native = this.options.native;
     const existing = input.id === undefined ? undefined : this.store.list().profiles.find((row) => row.id === input.id);
+    if (existing && this.userOwned(existing)) throw new ProviderRefusal("native-conflict");
     // Resolve the credential reference first: a store-backed profile cannot be
     // saved without a stored revision (a new key or a kept one).
     let credentials: ProviderCredentialRef;
@@ -623,6 +664,7 @@ export class ProviderWiring {
 
   /** Removes the profile, its native entry and its stored credential. */
   async remove(id: string, taskId: string | undefined, sender: number, reconcile = false): Promise<ProviderStatus> {
+    if (this.userOwned(this.store.profile(id))) throw new ProviderRefusal("native-conflict");
     if (taskId !== undefined) {
       const selection = this.store.selection(taskId);
       if (selection?.profileId === id) {
@@ -703,6 +745,28 @@ export class ProviderWiring {
         const id = taskId(args["taskId"]);
         await this.ensure(id, sender);
         return this.status(id);
+      }
+      case "edit-native": {
+        const args = shape(request, "edit-native", ["profile", "fingerprint"]);
+        const { input } = profileInput(args["profile"]);
+        if (!input.id || typeof args["fingerprint"] !== "string") throw new TrustDomainViolation("invalid-payload", "invalid native edit");
+        const current = this.store.profile(input.id);
+        if (!this.userOwned(current) || !this.options.native || args["fingerprint"] !== current.native.fingerprint) throw new ProviderRefusal("native-conflict");
+        // Authentication, identity and model membership remain native-owned.
+        const draft = { ...input, credentials: current.credentials, models: input.models.map((row) => {
+          const original = current.models.find((model) => model.id === row.id);
+          if (original && row.reasoning === original.reasoning &&
+              JSON.stringify(availableReasoningLevels(row)) === JSON.stringify(availableReasoningLevels(original))) {
+            const preserved = { ...row };
+            delete preserved.thinkingLevelMap;
+            return { ...preserved, ...(original.thinkingLevelMap ? { thinkingLevelMap: original.thinkingLevelMap } : {}) };
+          }
+          return row;
+        }) };
+        validateExplicitTextProvider(this.configOf({ ...draft, generation: current.generation }));
+        try { this.options.native.editExisting(current.native.providerId, args["fingerprint"], this.nativeEntry(draft)); }
+        catch { throw new ProviderRefusal("native-conflict"); }
+        return { profile: this.view(this.store.profile(input.id)), status: this.status(), conflict: null, written: true };
       }
       case "save": {
         const args = shape(request, "save", ["profile"], ["apiKey", "reconcile"]);

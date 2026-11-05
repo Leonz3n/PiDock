@@ -192,3 +192,15 @@ it("projects only OAuth registration metadata and preserves native credentials t
   await mcp.perform({ op: "disable", name: added.name });
   expect(JSON.parse(readFileSync(file.path, "utf8")).mcpServers.native.oauth).toEqual(oauth);
 });
+
+it("edits only enabled on a user-owned MCP entry and refuses a stale native edit", async () => {
+  const original = { command: process.execPath, args: [FIXTURE], env: { TOKEN: "$MCP_TOKEN" }, unknown: { kept: true }, enabled: true };
+  const { dir, mcp } = wiring({ mcpServers: { native: original }, unknownRoot: 42 });
+  const row = mcp.list().servers.find((server) => server.name === "native")!;
+  expect(row.managed).toBe(false);
+  await mcp.perform({ op: "native-disable", name: "native", fingerprint: row.fingerprint });
+  const saved = JSON.parse(readFileSync(join(dir, "mcp.json"), "utf8"));
+  expect(saved).toEqual({ mcpServers: { native: { ...original, enabled: false } }, unknownRoot: 42 });
+  await expect(mcp.perform({ op: "native-enable", name: "native", fingerprint: row.fingerprint })).rejects.toMatchObject({ code: "mcp-servers-invalid" });
+  expect(JSON.parse(readFileSync(join(dir, "mcp.json"), "utf8"))).toEqual(saved);
+});

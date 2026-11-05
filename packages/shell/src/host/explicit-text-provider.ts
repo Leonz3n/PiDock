@@ -9,6 +9,8 @@ import { SESSION_THINKING_LEVELS, type SessionThinkingLevel } from "./session-in
  * own model list); the product never presents them as provider-probed truth.
  */
 export interface ExplicitProviderModel {
+  /** Native declared input modalities; text must remain supported. */
+  input?: ("text" | "image")[];
   id: string;
   /** Display name shown in the composer; falls back to the id when equal. */
   name: string;
@@ -88,7 +90,7 @@ function text(value: unknown, max: number, pattern: RegExp): string {
 
 function modelRowOf(value: unknown): ExplicitProviderModel {
   if (!record(value)) throw new Error("provider-configuration-invalid");
-  const allowed = [...MODEL_KEYS, "thinkingLevelMap", "cost"];
+  const allowed = [...MODEL_KEYS, "thinkingLevelMap", "cost", "input"];
   if (Object.keys(value).some((key) => !allowed.includes(key)) || MODEL_KEYS.some((key) => !Object.hasOwn(value, key))) {
     throw new Error("provider-configuration-invalid");
   }
@@ -100,6 +102,12 @@ function modelRowOf(value: unknown): ExplicitProviderModel {
   const maxTokens = positiveInteger(value["maxTokens"]);
   if (maxTokens > contextWindow) throw new Error("provider-configuration-invalid");
   const row: ExplicitProviderModel = { id, name, contextWindow, maxTokens, reasoning };
+  if (value["input"] !== undefined) {
+    const input = value["input"];
+    if (!Array.isArray(input) || !input.includes("text") || input.length > 2 || new Set(input).size !== input.length ||
+        input.some((modality) => modality !== "text" && modality !== "image")) throw new Error("provider-configuration-invalid");
+    row.input = input as ("text" | "image")[];
+  }
   const map = value["thinkingLevelMap"];
   if (map !== undefined) {
     // A declared map only makes sense for a model that declares reasoning; a
@@ -265,7 +273,7 @@ export async function createExplicitTextRuntime(config: ExplicitTextProvider, ke
       api: validated.protocol,
       reasoning: row.reasoning,
       ...(row.thinkingLevelMap ? { thinkingLevelMap: row.thinkingLevelMap } : {}),
-      input: ["text"] as ("text" | "image")[],
+      input: row.input ?? ["text"] as ("text" | "image")[],
       // `ProviderModelConfig.cost` is required by the SDK contract. A declared
       // price is passed through; an undeclared one stays a zero placeholder
       // that PiDock never presents as a real price (the UI reports `cost: null`).

@@ -23,6 +23,7 @@
  * instead of implying a live reload.
  */
 
+import { fingerprintOf } from "./native-models-config.js";
 import {
   McpFailure,
   MCP_EXPOSURES,
@@ -55,6 +56,7 @@ export interface McpServerView {
   name: string;
   /** True only inside the `pidock-mcp-<uuid>` namespace this app owns. */
   managed: boolean;
+  fingerprint?: string;
   label: string | null;
   transport: McpTransportKind | "invalid";
   enabled: boolean;
@@ -270,7 +272,7 @@ export class McpWiring {
   list(): McpStatus {
     const rows = this.file.list();
     return {
-      servers: rows.map((row) => view(row.name, row.entry, this.env)),
+      servers: rows.map((row) => ({ ...view(row.name, row.entry, this.env), fingerprint: fingerprintOf(row.entry) })),
       path: this.file.path,
       sessionBoundary: MCP_SESSION_BOUNDARY,
     };
@@ -338,6 +340,15 @@ export class McpWiring {
         await this.oauth?.cancel(name);
         if (!this.file.remove(name)) throw new McpFailure("mcp-not-found", name);
         return { removed: name, path: this.file.path };
+      }
+      case "native-enable":
+      case "native-disable": {
+        const args = shape(request, request["op"], ["name", "fingerprint"]);
+        const name = nameOf(args["name"]);
+        if (typeof args["fingerprint"] !== "string" || !/^[0-9a-f]{64}$/.test(args["fingerprint"])) throw new TrustDomainViolation("invalid-payload", "invalid native MCP edit");
+        this.file.setNativeEnabled(name, request["op"] === "native-enable", args["fingerprint"]);
+        await this.oauth?.cancel(name);
+        return { server: this.row(name) };
       }
       case "enable":
       case "disable": {

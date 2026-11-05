@@ -63,7 +63,7 @@ export type ProviderView = {
   credentialAvailable: boolean;
   authRef: string;
   generation: number;
-  native: { providerId: string; state: NativeState };
+  native: { providerId: string; state: NativeState; ownership?: "user"; fingerprint?: string };
 };
 
 export type ProviderStatus = {
@@ -75,6 +75,8 @@ export type ProviderStatus = {
   profiles: ProviderView[];
   nativePath: string | null;
   secretsAvailable: boolean;
+  nativeUnsupported?: string[];
+  nativeUnreadable?: boolean;
 };
 
 export type RowCost = { input: string; output: string; cacheRead: string; cacheWrite: string };
@@ -90,6 +92,7 @@ export const COST_LABELS: Record<(typeof COST_FIELDS)[number], string> = {
   input: "输入价格", output: "输出价格", cacheRead: "缓存读价格", cacheWrite: "缓存写价格",
 };
 export type ProviderDraft = {
+  nativeFingerprint?: string;
   id?: string;
   name: string;
   notes: string;
@@ -130,6 +133,7 @@ export const EMPTY_PROVIDER_DRAFT: ProviderDraft = {
 
 export function draftFromView(view: ProviderView): ProviderDraft {
   return {
+    ...(view.native.ownership === "user" ? { nativeFingerprint: view.native.fingerprint } : {}),
     id: view.id, name: view.name, notes: view.notes ?? "", protocol: view.protocol as ProviderProtocol, baseUrl: view.baseUrl,
     credentialKind: view.credentialSource, authRef: view.credentialSource === "env" ? view.authRef : "PIDOCK_PROVIDER_",
     apiKey: "", hasStoredKey: view.credentialSource === "store" && view.credentialAvailable,
@@ -219,7 +223,9 @@ function parseView(value: unknown): ProviderView {
     credentialSource, credentialAvailable: value.credentialAvailable,
     authRef: value.authRef, generation: value.generation as number,
     native: native === undefined ? { providerId: `pidock-${value.id}`, state: "never-written" }
-      : { providerId: (native as { providerId: string }).providerId, state: (native as { state: NativeState }).state },
+      : { providerId: (native as { providerId: string }).providerId, state: (native as { state: NativeState }).state,
+          ...((native as Record<string, unknown>)["ownership"] === "user" && typeof (native as Record<string, unknown>)["fingerprint"] === "string"
+            ? { ownership: "user" as const, fingerprint: (native as Record<string, string>)["fingerprint"] } : {}) },
   };
 }
 
@@ -242,6 +248,8 @@ export function parseProviderStatus(value: unknown): ProviderStatus {
     generation: status.generation as number | null,
     profiles: value.profiles.map(parseView),
     nativePath: typeof status.nativePath === "string" ? status.nativePath : null,
+    nativeUnsupported: Array.isArray(status.nativeUnsupported) ? status.nativeUnsupported.filter((name): name is string => typeof name === "string") : [],
+    nativeUnreadable: status.nativeUnreadable === true,
     secretsAvailable: status.secretsAvailable === true,
   };
 }
@@ -351,7 +359,9 @@ export function draftIssues(draft: ProviderDraft, existing: ProviderView[] = [])
     else if (url.username || url.password) issues.push({ field: "baseUrl", message: "Base URL 不能包含用户名或密码" });
   }
 
-  if (draft.credentialKind === "env") {
+  if (draft.nativeFingerprint !== undefined) {
+    // Native credentials remain references in their original file.
+  } else if (draft.credentialKind === "env") {
     if (!/^PIDOCK_PROVIDER_[A-Z0-9_]{1,80}$/.test(draft.authRef)) {
       issues.push({ field: "authRef", message: "环境变量名需要形如 PIDOCK_PROVIDER_XXX（大写字母、数字与下划线）" });
     }

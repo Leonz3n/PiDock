@@ -1,3 +1,4 @@
+import { SkillSourceStore } from "./skill-source-store.js";
 import { homedir } from "node:os";
 import { app, powerMonitor, safeStorage, shell } from "electron";
 import { resolveShellCommand } from "./command.js";
@@ -248,6 +249,8 @@ async function run(): Promise<void> {
   // `PIDOCK_AGENT_DIR` overrides the agent directory for tests/alternate homes.
   const providerSecrets = new ProviderSecretStore(app.getPath("userData"), safeStorage);
   const nativeModels = new NativeModelsFile(resolveAgentDir(process.env, homedir()));
+  // Bind native sources by reference; both UI and Host re-read their originals.
+  new SkillSourceStore(app.getPath("userData"), undefined, nativeModels.agentDir);
   const providers = new ProviderWiring(providerProfiles, async (taskId, provider, senderWebContentsId) => {
     const payload = provider === null
       ? { provider: null }

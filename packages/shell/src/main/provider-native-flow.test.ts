@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
@@ -162,7 +162,7 @@ it("preserves unmanaged providers and removes only its own entry", async () => {
   expect(afterRemove.providers[`pidock-${saved.profile.id}`]).toBeUndefined();
   // The stored credential goes with the profile.
   expect(f.secrets.has(saved.profile.id)).toBe(false);
-  expect(f.profiles.list().profiles).toHaveLength(0);
+  expect(f.profiles.list().profiles).toHaveLength(0); // localhost HTTP remains outside the explicit adapter
 });
 
 /** A fetch stub that records the request and answers with a scripted response. */
@@ -341,4 +341,79 @@ it("refuses to remove a profile whose managed entry was deleted outside PiDock",
   expect(f.profiles.list().profiles).toHaveLength(1);
   await f.providers.perform({ op: "remove", profileId: saved.profile.id, reconcile: true }, 1);
   expect(f.profiles.list().profiles).toHaveLength(0);
+});
+
+it("lists pre-existing native models through the public provider API without taking ownership", async () => {
+  const f = fixture();
+  mkdirSync(f.agentDir, { recursive: true });
+  writeFileSync(join(f.agentDir, "models.json"), JSON.stringify({ providers: {
+    existing: { api: "openai-completions", baseUrl: "http://127.0.0.1:11434/v1", apiKey: "EXISTING_MODEL_KEY", models: [{ id: "existing-model", contextWindow: 32768, maxTokens: 2048 }] },
+  } }));
+  const listed = await f.providers.perform({ op: "list" }, 1) as { profiles: { native: { providerId: string } }[] };
+  expect(listed.profiles.some((row) => row.native.providerId === "existing")).toBe(true);
+  expect(existsSync(join(f.userData, "provider-profiles.json"))).toBe(false);
+});
+
+it("preserves native ownership on conflicts and fences changed native credentials until explicit reselection", async () => {
+  const f = fixture();
+  mkdirSync(f.agentDir, { recursive: true });
+  const path = join(f.agentDir, "models.json");
+  const original = { providers: { existing: { api: "openai-completions", baseUrl: "http://127.0.0.1:12345/v1", apiKey: "native-fixture-one", unknown: 19,
+    models: [{ id: "native-model", reasoning: true, thinkingLevelMap: { off: null, low: "custom-low", high: "custom-high" }, contextWindow: 32768, maxTokens: 2048 }] } } };
+  writeFileSync(path, JSON.stringify(original));
+  const profile = f.profiles.list().profiles[0]!;
+  expect(await f.providers.select("native-task", profile.id, undefined, undefined, 1)).toMatchObject({ state: "configured" });
+  const authPath = join(f.agentDir, "auth.json");
+  writeFileSync(authPath, JSON.stringify({ existing: { type: "api_key", key: "native-fixture-two" } }));
+  expect(await f.providers.ensure("native-task", 1)).toBe("binding-stale");
+  expect(await f.providers.ensure("native-task", 1)).toBe("binding-stale");
+  expect(await f.providers.select("native-task", profile.id, undefined, undefined, 1)).toMatchObject({ state: "configured" });
+  expect(f.installs.at(-1)?.provider?.credential).toBe("native-fixture-two");
+  const request = { op: "edit-native", fingerprint: profile.native.fingerprint, profile: { id: profile.id, name: "Edited", notes: null,
+    protocol: profile.protocol, baseUrl: profile.baseUrl, models: profile.models.map((row) => ({ ...row })), modelId: profile.modelId, credential: { kind: "store" } } };
+  await f.providers.perform(request, 1);
+  expect(JSON.parse(readFileSync(path, "utf8")).providers.existing.models[0].thinkingLevelMap).toEqual(original.providers.existing.models[0].thinkingLevelMap);
+  const beforeConflict = readFileSync(path, "utf8");
+  await expect(f.providers.perform(request, 1)).rejects.toMatchObject({ code: "native-conflict" });
+  await expect(f.providers.perform({ op: "remove", profileId: profile.id }, 1)).rejects.toMatchObject({ code: "native-conflict" });
+  expect(readFileSync(path, "utf8")).toBe(beforeConflict);
+  writeFileSync(path, "{malformed");
+  expect(f.providers.status()).toMatchObject({ nativeUnreadable: true, profiles: [] });
+  expect(await f.providers.ensure("native-task", 1)).toBe("binding-stale");
+  expect(readFileSync(path, "utf8")).toBe("{malformed");
+});
+
+it("resolves native env templates without echoing values and never executes native credential commands", async () => {
+  const f = fixture();
+  mkdirSync(f.agentDir, { recursive: true });
+  const native = { providers: { existing: { api: "openai-completions", baseUrl: "http://127.0.0.1:12345/v1", apiKey: "${FIXTURE_NATIVE_KEY}", models: [{ id: "native-model" }] },
+    advanced: { api: "openai-completions", baseUrl: "https://example.test/v1", headers: { Authorization: "must-stay-private" }, models: [{ id: "advanced" }] } } };
+  const path = join(f.agentDir, "models.json");
+  writeFileSync(path, JSON.stringify(native));
+  const installs: ProviderInstall[] = [];
+  const providers = new ProviderWiring(f.profiles, async (_taskId, provider) => { if (provider) installs.push(provider); }, { FIXTURE_NATIVE_KEY: "native-env-fixture-key" }, { native: f.native });
+  const status = providers.status();
+  expect(status).toMatchObject({ nativeUnsupported: ["advanced"], profiles: [{ credentialAvailable: true, contextWindow: 128000, maxTokens: 16384 }] });
+  expect(JSON.stringify(status)).not.toContain("native-env-fixture-key");
+  expect(JSON.stringify(status)).not.toContain("must-stay-private");
+  const profile = status.profiles[0]!;
+  expect(await providers.select("native-task", profile.id, undefined, undefined, 1)).toMatchObject({ state: "configured" });
+  expect(installs.at(-1)?.credential).toBe("native-env-fixture-key");
+  native.providers.existing.apiKey = "!echo must-not-execute";
+  writeFileSync(path, JSON.stringify(native));
+  expect(providers.status().profiles[0]!.credentialAvailable).toBe(false);
+  expect(await providers.select("another-task", profile.id, undefined, undefined, 1)).toMatchObject({ state: "credential-missing" });
+  expect(installs).toHaveLength(1);
+  expect(readFileSync(path, "utf8")).toContain("!echo must-not-execute");
+});
+
+it("lists text-capable native models that also declare image input", async () => {
+  const f = fixture();
+  mkdirSync(f.agentDir, { recursive: true });
+  writeFileSync(join(f.agentDir, "models.json"), JSON.stringify({ providers: { existing: {
+    api: "openai-responses", baseUrl: "https://models.example.test/v1", apiKey: "native-fixture-key",
+    models: [{ id: "native-text-image", input: ["text", "image"], thinkingLevelMap: {}, contextWindow: 256000, maxTokens: 16384, reasoning: true }],
+  } } }));
+  const listed = await f.providers.perform({ op: "list" }, 1) as { profiles: { native: { providerId: string } }[] };
+  expect(listed.profiles.some((row) => row.native.providerId === "existing")).toBe(true);
 });

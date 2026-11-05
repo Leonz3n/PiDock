@@ -355,3 +355,72 @@ it("speaks each protocol's own wire shape through the real SDK (anthropic-messag
     } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
   }
 });
+
+it("selects and edits a user-owned native entry, then sends its existing auth reference through the real SDK", async () => {
+  const { root, dir } = task("task-native-existing");
+  const { agentDir, profiles, providers, installed } = management(root);
+  const seen: { authorization: string | undefined; body: Record<string, unknown>; url: string | undefined }[] = [];
+  const server = createServer((request, response) => { void (async () => {
+    seen.push({ authorization: request.headers.authorization, body: await body(request), url: request.url });
+    openaiSse(response, ["native reply"]);
+  })(); });
+  const port = await listen(server);
+  try {
+    mkdirSync(agentDir, { recursive: true });
+    const path = modelsJsonPath(agentDir);
+    const original = { unknownRoot: { preserved: true }, providers: { existing: {
+      api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/old`, apiKey: "$NATIVE_FIXTURE_KEY",
+      unknownProvider: { kept: true }, models: [{ id: "fixture-model", contextWindow: 32768, maxTokens: 2048, unknownModel: 42 }],
+    } } };
+    writeFileSync(path, JSON.stringify(original));
+    // Native auth.json has the SDK's documented precedence over models.json.
+    writeFileSync(join(agentDir, "auth.json"), JSON.stringify({ existing: { type: "api_key", key: SECRET }, unrelated: { type: "oauth", access: "untouched-fixture" } }));
+    const authBefore = readFileSync(join(agentDir, "auth.json"), "utf8");
+    const listed = await providers.perform({ op: "list" }, 1) as { profiles: { id: string; native: { fingerprint: string; ownership: string } }[] };
+    const native = listed.profiles[0]!;
+    expect(native.native.ownership).toBe("user");
+    const profile = profiles.profile(native.id);
+    const edited = await providers.perform({ op: "edit-native", fingerprint: native.native.fingerprint, profile: {
+      id: profile.id, name: "Existing native edited", notes: null, protocol: profile.protocol,
+      baseUrl: `http://127.0.0.1:${port}/v1`, credential: { kind: "store" }, models: profile.models, modelId: profile.modelId,
+    } }, 1);
+    expect(edited).toMatchObject({ written: true });
+    const after = JSON.parse(readFileSync(path, "utf8"));
+    expect(Object.keys(after.providers)).toEqual(["existing"]);
+    expect(after).toMatchObject({ unknownRoot: original.unknownRoot, providers: { existing: {
+      apiKey: "$NATIVE_FIXTURE_KEY", unknownProvider: { kept: true }, models: [{ unknownModel: 42 }],
+    } } });
+    expect(readFileSync(join(agentDir, "auth.json"), "utf8")).toBe(authBefore);
+    const status = await providers.perform({ op: "select", taskId: "task-native-existing", profileId: native.id }, 1);
+    expect(status).toMatchObject({ state: "configured", profileId: native.id });
+    const actual = installed.at(-1)!;
+    const runtime = await createExplicitTextRuntime(actual.config, actual.credential);
+    const kernel = new PiSdkTextKernel("task-native-existing", dir, { model: runtime.model, modelRuntime: runtime.runtime, bindingIdentity: runtime.bindingIdentity });
+    await kernel.open("main");
+    try { expect(await kernel.prompt("main", "native turn")).toMatchObject({ state: "done", text: "native reply" }); }
+    finally { await kernel.dispose(); }
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ authorization: `Bearer ${SECRET}`, url: "/v1/chat/completions", body: { model: "fixture-model", stream: true } });
+    // Cold management + SDK reopen derives the same original native identity,
+    // resolves auth again and continues the pinned transcript without replay.
+    const cold = management(root);
+    expect(await cold.providers.perform({ op: "list", taskId: "task-native-existing" }, 1)).toMatchObject({ state: "configured", profileId: native.id });
+    const coldInstall = cold.installed.at(-1)!;
+    expect(coldInstall.config).toEqual(actual.config);
+    const coldRuntime = await createExplicitTextRuntime(coldInstall.config, coldInstall.credential);
+    const reopened = new PiSdkTextKernel("task-native-existing", dir, { model: coldRuntime.model, modelRuntime: coldRuntime.runtime, bindingIdentity: coldRuntime.bindingIdentity });
+    await reopened.open("main");
+    expect(seen).toHaveLength(1);
+    try { expect(await reopened.prompt("main", "after native restart")).toMatchObject({ state: "done", text: "native reply" }); }
+    finally { await reopened.dispose(); }
+    expect(seen).toHaveLength(2);
+    expect((seen[1]!.body["messages"] as { role: string; content: unknown }[]).filter((message) => message.role === "user").map(messageText)).toEqual(["native turn", "after native restart"]);
+    expect(JSON.stringify(edited) + JSON.stringify(status)).not.toContain(SECRET);
+    expect(JSON.parse(readFileSync(join(root, "userData", "provider-profiles.json"), "utf8")).profiles).toEqual([]);
+    // An external endpoint edit is observable immediately and fences the old selection.
+    after.providers.existing.baseUrl = `http://127.0.0.1:${port}/changed`;
+    writeFileSync(path, JSON.stringify(after));
+    expect(await providers.ensure("task-native-existing", 1)).toBe("binding-stale");
+    expect(providers.status().profiles[0]!.baseUrl).toContain("/changed");
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});

@@ -6,8 +6,9 @@
  * `agentDir` option) says otherwise (`docs/configuration.md#agent-directory`).
  * This module owns the *managed slice* of that file:
  *
- * - Only providers named `pidock-<profileId>` are written, read back and
- *   removed. Every other provider, every unmanaged model row and every unknown
+ * - New entries and removals use only `pidock-<profileId>`. Explicit edits of
+ *   existing user-owned entries require the exact observed fingerprint and keep
+ *   their provider/model identities and credentials. Every unknown
  *   field is preserved byte-for-value through a read → mutate → write cycle.
  * - Writes are atomic (temp file + fsync + rename) and leave one `.bak` copy of
  *   the previous file, so a crash cannot truncate a file Pi also reads.
@@ -77,13 +78,14 @@ export function isManagedProviderId(value: unknown): value is string {
 }
 
 /**
- * The default Pi agent directory; `PIDOCK_AGENT_DIR` overrides it (tests,
+ * The default Pi agent directory; `PIDOCK_AGENT_DIR` overrides Pi's
+ * `PI_CODING_AGENT_DIR`, which overrides the home default (tests,
  * alternate homes). The override decides which file PiDock writes, so it must
  * be an absolute path: a relative one would silently resolve against whatever
  * working directory the app was started in.
  */
 export function resolveAgentDir(env: Record<string, string | undefined>, home: string): string {
-  const override = env["PIDOCK_AGENT_DIR"];
+  const override = env["PIDOCK_AGENT_DIR"]?.trim() || env["PI_CODING_AGENT_DIR"];
   if (typeof override === "string" && override.trim().length > 0) {
     if (!isAbsolute(override.trim())) throw new Error("provider-agent-dir-invalid");
     return override.trim();
@@ -227,6 +229,27 @@ export class NativeModelsFile {
     const read = this.read();
     if (!read.ok) throw new Error("provider-models-unreadable");
     this.commit({ ...read.raw, providers: { ...read.providers, [providerId]: entry as Record<string, unknown> } }, existsSync(this.file));
+  }
+
+  /** Explicit field edit of a user-owned entry; no rename, adoption or deletion. */
+  editExisting(providerId: string, expected: string, patch: NativeProviderEntry): void {
+    const read = this.read();
+    if (!read.ok) throw new Error("provider-models-unreadable");
+    const previous = read.providers[providerId];
+    if (!record(previous) || fingerprintOf(previous) !== expected) throw new Error("provider-native-conflict");
+    if (!Array.isArray(previous["models"]) || patch.models.length !== previous["models"].length ||
+        patch.models.some((row, index) => !record((previous["models"] as unknown[])[index]) ||
+          ((previous["models"] as Record<string, unknown>[])[index])?.["id"] !== row.id)) {
+      throw new Error("provider-native-model-identity");
+    }
+    const models = patch.models.map((row, index) => {
+      const original = { ...(previous["models"] as Record<string, unknown>[])[index] };
+      delete original["cost"];
+      delete original["thinkingLevelMap"];
+      return { ...original, ...row };
+    });
+    const next = { ...previous, name: patch.name, baseUrl: patch.baseUrl, api: patch.api, models };
+    this.commit({ ...read.raw, providers: { ...read.providers, [providerId]: next } }, true);
   }
 
   private commit(root: Record<string, unknown>, backup: boolean): void {

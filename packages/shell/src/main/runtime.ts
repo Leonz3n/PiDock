@@ -2453,7 +2453,7 @@ export function registerIpc(
   ipcMain.handle("shell/skillsOp", async (event, payload?: unknown) => {
     try {
       registry.requireShellSender(event);
-      const result = performSkillSourcesOperation(payload, app.getPath("userData"));
+      const result = performSkillSourcesOperation(payload, app.getPath("userData"), resolveAgentDir(process.env, homedir()));
       if (!result.ok) return { ok: false as const, error: result.error };
       if (result.open !== undefined) {
         const failure = await shell.openPath(result.open);

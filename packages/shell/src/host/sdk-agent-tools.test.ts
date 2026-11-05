@@ -1253,7 +1253,7 @@ const MCP_ECHO = "mcp__pidock_mcp_fixture__echo";
 const MCP_MUTATE = "mcp__pidock_mcp_fixture__mutate";
 
 /** Write the same native mcp.json main's manager writes, with the real fixture child. */
-function configureMcpFixture(h: Harness, options: { enabled?: boolean } = {}): { log: string; pidFile: string; path: string } {
+function configureMcpFixture(h: Harness, options: { enabled?: boolean; serverName?: string } = {}): { log: string; pidFile: string; path: string } {
   const agentDir = join(h.fixture.taskDir, ".pidock-sdk-agent");
   mkdirSync(agentDir, { recursive: true });
   const log = join(h.fixture.root, "mcp-fixture.log");
@@ -1261,7 +1261,7 @@ function configureMcpFixture(h: Harness, options: { enabled?: boolean } = {}): {
   const path = join(agentDir, "mcp.json");
   writeFileSync(path, JSON.stringify({
     mcpServers: {
-      [MCP_SERVER]: {
+      [options.serverName ?? MCP_SERVER]: {
         type: "stdio",
         command: process.execPath,
         args: [MCP_FIXTURE],
@@ -1279,9 +1279,11 @@ const pidGone = async (pid: number) => {
   await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 10_000 });
 };
 
-it("runs a real managed MCP tool through the Host approval path and records input/result in the session JSONL", async () => {
+it.each([MCP_SERVER, "native-user-fixture"])("runs a real MCP tool through Host approval and records input/result (%s)", async (serverName) => {
+  const safeName = serverName.replaceAll("-", "_");
+  const MCP_MUTATE = `mcp__${safeName}__mutate`;
   const h = await harness({ mcp: true });
-  const files = configureMcpFixture(h);
+  const files = configureMcpFixture(h, { serverName });
   await h.host.configureSdkProvider({ config: PROVIDER_CONFIG, credential: "synthetic-key" });
   await h.host.setPermission("main", "default");
 
@@ -1298,7 +1300,7 @@ it("runs a real managed MCP tool through the Host approval path and records inpu
   expect(approval).toMatchObject({ tool: MCP_MUTATE, scope: "agent-tool", permissionAtRequest: "default" });
   // Pi sanitizes the server part in a tool name (`-` → `_`); the approval names
   // that same registered identity, not a second spelling.
-  expect(approval.target).toBe(`${h.fixture.taskDir}/mcp/pidock_mcp_fixture/mutate`);
+  expect(approval.target).toBe(`${h.fixture.taskDir}/mcp/${safeName}/mutate`);
   expect(approval.operation).toContain(`{"value":"hello mcp"}`);
   h.host.approve("main", approval.id);
 

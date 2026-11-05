@@ -314,6 +314,8 @@ function emptyDocument(): DocumentV2 {
 
 export class ProviderProfileStore {
   private readonly file: string;
+  /** Native rows are projected on demand and never persisted as owned profiles. */
+  nativeProfiles?: (ownedIds: string[]) => ProviderProfile[];
 
   constructor(private readonly directory: string, private readonly now: () => string = () => new Date().toISOString()) {
     this.file = join(directory, FILE);
@@ -356,11 +358,11 @@ export class ProviderProfileStore {
 
   list(): { profiles: ProviderProfile[]; selections: ProviderSelection[] } {
     const document = this.read();
-    return { profiles: document.profiles, selections: document.selections };
+    return { profiles: [...document.profiles, ...(this.nativeProfiles?.(document.profiles.map((row) => row.id)) ?? [])], selections: document.selections };
   }
 
   profile(profileId: string): ProviderProfile {
-    const profile = this.read().profiles.find((row) => row.id === profileId);
+    const profile = this.list().profiles.find((row) => row.id === profileId);
     if (!profile) throw new Error("provider-profile-unknown");
     return profile;
   }
@@ -470,7 +472,7 @@ export class ProviderProfileStore {
 
   select(taskId: string, profileId: string, modelId?: string, level?: ReasoningTier): ProviderSelection {
     const document = this.read();
-    const profile = document.profiles.find((row) => row.id === profileId);
+    const profile = this.profile(profileId);
     if (!profile) throw new Error("provider-profile-unknown");
     const selectedId = modelId ?? profile.modelId;
     const model = profile.models.find((row) => row.id === selectedId);

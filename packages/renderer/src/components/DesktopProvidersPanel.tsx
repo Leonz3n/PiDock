@@ -165,7 +165,9 @@ export function DesktopProvidersPanel({
       // A defining edit changes what Pi is told; the reply carries the new
       // status, so the list does not need a second read to be honest.
       const request = draftRequest(current);
-      const payload = parseSaved(await providerCall({ op: "save", ...request, ...(reconcile ? { reconcile: true } : {}) }));
+      const payload = parseSaved(await providerCall(current.nativeFingerprint
+        ? { op: "edit-native", profile: request.profile, fingerprint: current.nativeFingerprint }
+        : { op: "save", ...request, ...(reconcile ? { reconcile: true } : {}) }));
       if (!payload.written) {
         // A managed entry edited outside PiDock is named and left untouched.
         setConflict({ state: payload.conflict ?? "modified", draft: current });
@@ -339,9 +341,9 @@ export function DesktopProvidersPanel({
               <summary className="cursor-pointer text-[10px] text-muted">模型选择与配置操作</summary>
               <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted">
                 <Badge variant="soft">{protocolLabel(view.protocol)}</Badge>
-                <Badge variant="soft">{CREDENTIAL_TEXT[view.credentialSource]}</Badge>
+                <Badge variant="soft">{view.native.ownership === "user" ? "原生认证引用（不迁移）" : CREDENTIAL_TEXT[view.credentialSource]}</Badge>
                 <Badge variant="outline">{view.credentialAvailable ? "密钥可用" : "密钥缺失"}</Badge>
-                <span>{NATIVE_STATE_TEXT[view.native.state]}</span>
+                <span>{view.native.ownership === "user" ? `原生用户配置 · ${view.native.providerId}` : NATIVE_STATE_TEXT[view.native.state]}</span>
                 {isCurrent ? <span data-testid={`provider-current-${view.id}`}>当前任务已选用 · {status.modelId} · 推理 {status.thinkingLevel ? levelText(status.thinkingLevel) : "无"}</span> : null}
               </div>
               {view.notes ? <p className="mt-1 text-[11px] text-muted">{view.notes}</p> : null}
@@ -377,7 +379,7 @@ export function DesktopProvidersPanel({
                   ...(chosenLevel === null ? {} : { thinkingLevel: chosenLevel }) }, "Provider 选用失败")}>
                 选用
               </Button>
-              {pendingDelete === view.id
+              {view.native.ownership === "user" ? <span className="text-xs text-muted">用户所有 · 保留原名与认证；不支持在此删除</span> : pendingDelete === view.id
                 ? <>
                   <Button type="button" disabled={busy} onClick={() => void confirmDelete(view, false)}>确认删除</Button>
                   <Button type="button" onClick={() => setPendingDelete(null)}>取消</Button>
@@ -397,6 +399,10 @@ export function DesktopProvidersPanel({
       {status && status.profiles.length > 0 && !status.profiles.some((view) => `${view.name} ${view.models.map((model) => `${model.id} ${model.name}`).join(" ")}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) ? <p className="py-6 text-xs text-muted">没有匹配的供应商</p> : null}
     </section>
 
+    <p className="mt-3 text-xs text-muted">刷新会重新读取原生配置；已绑定会话不自动切换。外部修改后请新建会话并重新选用。</p>
+    <Button type="button" disabled={busy} onClick={() => void onReload()}>刷新原生配置</Button>
+    {status?.nativeUnreadable ? <p role="alert">models.json 无法读取；原文件保留，已停止原生配置操作。</p> : null}
+    {status?.nativeUnsupported?.length ? <p role="status" className="text-xs text-muted">原生条目暂不支持此适配器（保留原文件）：{status.nativeUnsupported.join("、")}。支持三种文本协议；高级 headers、compat、逐模型协议/地址、图像及 OAuth/命令认证仍需原生工具。</p> : null}
     <section className="mt-6" aria-label="可添加">
       <h2 className="text-xs font-semibold text-muted">可添加 · 预设</h2>
       <p className="mt-1 text-[11px] text-muted">预设填入地址、协议与模型，保存前可修改。</p>
@@ -449,7 +455,7 @@ function ProviderForm({
     {headerSlot ? createPortal(heading, headerSlot) : heading}
     <form ref={formRef} data-testid="provider-form" data-form-open="true" onSubmit={submit} onKeyDown={keys} className="provider-form min-w-0 rounded-lg border border-line bg-paper p-5">
 
-    {presetKey === null ? <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-sidebar px-3 py-2">
+    {draft.nativeFingerprint ? <p className="text-xs text-muted">编辑原生条目：保留原名、模型 ID、认证引用与未知字段。外部更改后请返回刷新；保存后新建会话并重新选用。</p> : presetKey === null ? <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-sidebar px-3 py-2">
       <p className="text-xs text-muted">手动配置协议、地址与模型，或使用供应商预设。</p>
       <Button type="button" onClick={nextPreset}>使用预设</Button>
     </div> : <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-sidebar px-3 py-2">
@@ -470,7 +476,7 @@ function ProviderForm({
         <FieldLabel htmlFor="provider-name">名称 *</FieldLabel>
         <Input id="provider-name" aria-label="名称" value={draft.name} aria-invalid={Boolean(issueFor("name"))} data-invalid={issueFor("name") ? "true" : undefined} onChange={(event) => onPatch({ name: event.target.value })} placeholder="例如 DeepSeek 官方" />{error("name")}
       </Field>
-      <Field><FieldLabel htmlFor="provider-notes">备注（可选）</FieldLabel><Input id="provider-notes" aria-label="备注" value={draft.notes} onChange={(event) => onPatch({ notes: event.target.value })} />{error("notes")}</Field>
+      <Field><FieldLabel htmlFor="provider-notes">备注（可选）</FieldLabel><Input id="provider-notes" aria-label="备注" disabled={Boolean(draft.nativeFingerprint)} value={draft.notes} onChange={(event) => onPatch({ notes: event.target.value })} />{error("notes")}</Field>
       <Field><FieldLabel htmlFor="provider-protocol">接口格式 *</FieldLabel>
         <select id="provider-protocol" aria-label="接口格式" className={field} value={draft.protocol} onChange={(event) => onPatch({ protocol: event.target.value as ProviderDraft["protocol"] })}>
           {PROVIDER_PROTOCOLS.map((protocol) => <option key={protocol.id} value={protocol.id}>{protocol.label}</option>)}
@@ -479,6 +485,7 @@ function ProviderForm({
       <Field data-invalid={Boolean(issueFor("baseUrl"))}><FieldLabel htmlFor="provider-base">Base URL *</FieldLabel>
         <Input id="provider-base" aria-label="Base URL" value={draft.baseUrl} aria-invalid={Boolean(issueFor("baseUrl"))} data-invalid={issueFor("baseUrl") ? "true" : undefined} onChange={(event) => onPatch({ baseUrl: event.target.value })} placeholder="https://api.example.com/v1" />{error("baseUrl")}
       </Field>
+      {draft.nativeFingerprint ? <p className="text-xs text-muted">继续使用 models.json / auth.json 中的原生认证（不回显、不写入、不执行命令；OAuth 暂不支持）。</p> : <>
       <Field><FieldLabel htmlFor="credential-kind">凭据来源</FieldLabel><select id="credential-kind" className={field} value={draft.credentialKind} onChange={(event) => onPatch({ credentialKind: event.target.value === "env" ? "env" : "store" })}>
         <option value="store">密钥保存在本机（safeStorage 加密）</option><option value="env">从环境变量读取引用</option>
       </select></Field>
@@ -490,15 +497,16 @@ function ProviderForm({
       </Field> : <Field data-invalid={Boolean(issueFor("authRef"))}><FieldLabel htmlFor="provider-env">环境变量名</FieldLabel>
         <Input id="provider-env" aria-label="环境变量名" value={draft.authRef} aria-invalid={Boolean(issueFor("authRef"))} data-invalid={issueFor("authRef") ? "true" : undefined} onChange={(event) => onPatch({ authRef: event.target.value })} />{error("authRef")}
       </Field>}
+      </>}
     </FieldGroup>
 
     <section className="mt-4" aria-label="模型">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xs font-semibold text-muted">模型 · {draft.models.length}</h2>
-        <label className="flex min-w-0 items-center gap-2 text-[10px] text-muted">默认模型<select aria-label="默认模型" className="capability-input max-w-[240px]" value={draft.modelId} onChange={(event) => onPatch({ modelId: event.target.value })}><option value="">请选择</option>{draft.models.filter((row) => row.id.trim() !== "").map((row) => <option key={row.id} value={row.id}>{row.id}</option>)}</select>{error("modelId")}</label>
+        <label className="flex min-w-0 items-center gap-2 text-[10px] text-muted">默认模型<select aria-label="默认模型" disabled={Boolean(draft.nativeFingerprint)} className="capability-input max-w-[240px]" value={draft.modelId} onChange={(event) => onPatch({ modelId: event.target.value })}><option value="">请选择</option>{draft.models.filter((row) => row.id.trim() !== "").map((row) => <option key={row.id} value={row.id}>{row.id}</option>)}</select>{error("modelId")}</label>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" onClick={onAddRow}>手动添加</Button>
-          <Button type="button" disabled={busy || draft.baseUrl.trim() === ""} onClick={onDiscover}>获取模型列表</Button>
+          <Button type="button" disabled={Boolean(draft.nativeFingerprint)} onClick={onAddRow}>手动添加</Button>
+          <Button type="button" disabled={busy || Boolean(draft.nativeFingerprint) || draft.baseUrl.trim() === ""} onClick={onDiscover}>获取模型列表</Button>
         </div>
       </div>
       {error("models")}
@@ -517,8 +525,8 @@ function ProviderForm({
       <div className="mt-2 flex flex-col gap-2">
         {draft.models.map((row, index) => <div key={index} className="model-row rounded-md bg-sidebar p-3">
           <FieldGroup className="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)] gap-3 below-narrow:grid-cols-1">
-            <Field data-invalid={Boolean(issueFor(`models.${index}.id`))}><FieldLabel htmlFor={`model-id-${index}`}>模型 ID *（手动输入 + 下拉选择）</FieldLabel>
-              <Input id={`model-id-${index}`} aria-label={`模型 ID ${index + 1}`} value={row.id} aria-invalid={Boolean(issueFor(`models.${index}.id`))} data-invalid={issueFor(`models.${index}.id`) ? "true" : undefined} onChange={(event) => onPatchRow(index, { id: event.target.value })} />{error(`models.${index}.id`)}
+            <Field data-invalid={Boolean(issueFor(`models.${index}.id`))}><FieldLabel htmlFor={`model-id-${index}`}>{draft.nativeFingerprint ? "模型 ID（保留原名）" : "模型 ID *（手动输入 + 下拉选择）"}</FieldLabel>
+              <Input id={`model-id-${index}`} aria-label={`模型 ID ${index + 1}`} readOnly={Boolean(draft.nativeFingerprint)} value={row.id} aria-invalid={Boolean(issueFor(`models.${index}.id`))} data-invalid={issueFor(`models.${index}.id`) ? "true" : undefined} onChange={(event) => onPatchRow(index, { id: event.target.value })} />{error(`models.${index}.id`)}
               {discovery?.status === "success" ? <select aria-label={`已发现模型 ${index + 1}`} className={field} value="" onChange={(event) => { if (event.target.value) onPatchRow(index, { id: event.target.value }); }}><option value="">下拉选择模型</option>{discovery.candidates.map((id) => <option key={id} value={id}>{id}</option>)}</select> : null}
             </Field>
             <Field><FieldLabel htmlFor={`model-name-${index}`}>显示名称</FieldLabel><Input id={`model-name-${index}`} aria-label={`显示名称 ${index + 1}`} value={row.name} onChange={(event) => onPatchRow(index, { name: event.target.value })} />{error(`models.${index}.name`)}</Field>
@@ -533,10 +541,10 @@ function ProviderForm({
               {COST_FIELDS.map((key) => <Field key={key}><FieldLabel htmlFor={`cost-${index}-${key}`}>{COST_LABELS[key]}</FieldLabel><Input id={`cost-${index}-${key}`} aria-label={`${COST_LABELS[key]} ${index + 1}`} value={row.cost[key]} placeholder={COST_LABELS[key]} onChange={(event) => onPatchRow(index, { cost: { ...row.cost, [key]: event.target.value } })} /></Field>)}
             </FieldGroup>{error(`models.${index}.cost`)}
           </details>
-          {draft.models.length > 1 ? <Button type="button" size="sm" variant="ghost" onClick={() => onRemoveRow(index)}>移除</Button> : null}
+          {draft.models.length > 1 ? <Button type="button" size="sm" variant="ghost" disabled={Boolean(draft.nativeFingerprint)} onClick={() => onRemoveRow(index)}>移除</Button> : null}
         </div>)}
       </div>
-      <p className="mt-1 text-[10px] text-muted">窗口、推理与价格是本机声明；价格四项未填全则保持未知。模型 ID 可继续手动编辑。</p>
+      <p className="mt-1 text-[10px] text-muted">窗口、推理与价格是本机声明；价格四项未填全则保持未知。{draft.nativeFingerprint ? "原生模型 ID 保持不变。" : "模型 ID 可继续手动编辑。"}</p>
 
     </section>
 

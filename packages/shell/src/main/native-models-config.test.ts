@@ -157,6 +157,9 @@ it("rejects profile ids that would escape the namespaced key", () => {
 it("resolves the agent directory with the testable override", () => {
   expect(resolveAgentDir({}, "/home/user")).toBe(join("/home/user", ".pi", "agent"));
   expect(resolveAgentDir({ PIDOCK_AGENT_DIR: "/tmp/agent" }, "/home/user")).toBe("/tmp/agent");
+  expect(resolveAgentDir({ PI_CODING_AGENT_DIR: "/tmp/native" }, "/home/user")).toBe("/tmp/native");
+  expect(resolveAgentDir({ PIDOCK_AGENT_DIR: "/tmp/app", PI_CODING_AGENT_DIR: "/tmp/native" }, "/home/user")).toBe("/tmp/app");
+  expect(() => resolveAgentDir({ PI_CODING_AGENT_DIR: "relative" }, "/home/user")).toThrow("provider-agent-dir-invalid");
   // S10: the override picks the file PiDock writes, so a relative path (which
   // would resolve against whatever cwd Electron started in) is refused.
   expect(() => resolveAgentDir({ PIDOCK_AGENT_DIR: "relative/agent" }, "/home/user")).toThrow("provider-agent-dir-invalid");
