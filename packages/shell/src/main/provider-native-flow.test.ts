@@ -417,3 +417,30 @@ it("lists text-capable native models that also declare image input", async () =>
   const listed = await f.providers.perform({ op: "list" }, 1) as { profiles: { native: { providerId: string } }[] };
   expect(listed.profiles.some((row) => row.native.providerId === "existing")).toBe(true);
 });
+
+it.each([{ supportsUsageInStreaming: false }, {}])("reports provider compat %j as unsupported before selection without changing identity or auth", async (compat) => {
+  const f = fixture();
+  mkdirSync(f.agentDir, { recursive: true });
+  const path = join(f.agentDir, "models.json");
+  const authPath = join(f.agentDir, "auth.json");
+  const provider = { api: "openai-completions", baseUrl: "http://127.0.0.1:12345/v1", apiKey: "${FIXTURE_NATIVE_KEY}",
+    models: [{ id: "native-model" }], unknown: "preserve-me" };
+  writeFileSync(path, JSON.stringify({ providers: { existing: provider } }));
+  const auth = JSON.stringify({ existing: { type: "api_key", key: "fixture-native-auth-key" } });
+  writeFileSync(authPath, auth);
+  const listed = await f.providers.perform({ op: "list" }, 1) as { profiles: { id: string }[] };
+  const id = listed.profiles[0]!.id;
+  expect(await f.providers.select("native-task", id, undefined, undefined, 1)).toMatchObject({ state: "configured" });
+  const original = JSON.stringify({ providers: { existing: { ...provider, compat } } }, null, 2);
+  writeFileSync(path, original);
+
+  const refused = await f.providers.perform({ op: "list" }, 1);
+  expect(refused).toMatchObject({ profiles: [], nativeUnsupported: ["existing"] });
+  expect(await f.providers.ensure("native-task", 1)).toBe("binding-stale");
+  await expect(f.providers.perform({ op: "select", taskId: "another-task", profileId: id }, 1)).rejects.toThrow();
+  expect(f.installs.filter((entry) => entry.provider !== null)).toHaveLength(1);
+  expect(readFileSync(path, "utf8")).toBe(original);
+  expect(readFileSync(authPath, "utf8")).toBe(auth);
+  expect(JSON.stringify(refused)).not.toContain("fixture-native-auth-key");
+  expect(JSON.parse(readFileSync(join(f.userData, "provider-profiles.json"), "utf8")).profiles).toEqual([]);
+});

@@ -29,7 +29,7 @@ export class NativeProviderSource {
         if (!/^[A-Za-z0-9_-]{1,100}$/.test(providerId) || !object(entry) || !Array.isArray(entry["models"]) ||
             !(NATIVE_APIS as readonly unknown[]).includes(entry["api"])) throw new Error();
         // These fields require a richer request adapter. Never silently drop them.
-        if (["headers", "authHeader", "modelOverrides", "oauth"].some((key) => entry[key] !== undefined)) throw new Error();
+        if (["headers", "authHeader", "modelOverrides", "oauth", "compat"].some((key) => entry[key] !== undefined)) throw new Error();
         const models = entry["models"].map((raw) => {
           if (!object(raw) || ["api", "baseUrl", "headers", "compat", "samplingParams", "samplingParamsByThinkingLevel", "inputLimits", "promptCache", "type"].some((key) => raw[key] !== undefined)) throw new Error();
           return {
