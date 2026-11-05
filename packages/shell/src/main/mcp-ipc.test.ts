@@ -7,7 +7,7 @@
  * value never crosses the boundary.
  */
 
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -64,6 +64,32 @@ it("refuses a submission Pi would reject and writes nothing", async () => {
   // A literal secret under a secret header is refused by name.
   await expect(mcp.perform({ op: "save", input: { transport: "http", url: "https://example.com/mcp", headers: { Authorization: "sk-literal-secret" } } })).rejects.toMatchObject({ code: "mcp-credential-literal" });
   expect(existsSync(file.path)).toBe(false);
+});
+
+it("saves a single absolute executable pathname with spaces without parsing argv or changing ownership", async () => {
+  const original = { command: "node", args: ["user.mjs"], custom: true };
+  const { dir, file, mcp } = wiring({ mcpServers: { handwritten: original }, customRoot: true });
+  // The trailing space is part of the actual filename, not input padding.
+  const command = join(dir, "MCP 可执行 executable ");
+  writeFileSync(command, "#!/bin/sh\nexit 0\n");
+  chmodSync(command, 0o700);
+  const args = ["argument with spaces", "--literal=$(no-shell)"];
+  const added = await mcp.perform({ op: "save", input: { transport: "stdio", command, args, env: { TOKEN: "$MCP_TOKEN" }, cwd: dir } }) as { name: string };
+  expect(file.entry(added.name)).toMatchObject({ command, args, env: { TOKEN: "$MCP_TOKEN" }, cwd: dir });
+  expect(file.entry("handwritten")).toEqual(original);
+  expect(JSON.parse(readFileSync(file.path, "utf8")).customRoot).toBe(true);
+  const before = readFileSync(file.path);
+  const directory = join(dir, "not executable directory");
+  mkdirSync(directory);
+  for (const invalid of [`${command} --flag`, join(dir, "missing executable"), directory, "node server.mjs", `"${command}"`]) {
+    await expect(mcp.perform({ op: "save", input: { transport: "stdio", command: invalid } })).rejects.toMatchObject({ code: "mcp-command-invalid" });
+    expect(readFileSync(file.path)).toEqual(before);
+  }
+  if (process.platform !== "win32") {
+    chmodSync(command, 0o600);
+    await expect(mcp.perform({ op: "save", input: { transport: "stdio", command } })).rejects.toMatchObject({ code: "mcp-command-invalid" });
+    expect(readFileSync(file.path)).toEqual(before);
+  }
 });
 
 it("accepts only the exact-key operation payloads", async () => {

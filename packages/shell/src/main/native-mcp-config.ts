@@ -26,7 +26,7 @@
 
 import { fingerprintOf } from "./native-models-config.js";
 import { randomUUID } from "node:crypto";
-import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, statSync, chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 
 /** Exposure values the 1.5.0 MCP extension accepts; `codemode-deferred` is an alias. */
@@ -211,7 +211,17 @@ export function buildMcpEntry(input: McpServerInput): McpServerEntry {
   if (transport === "stdio") {
     const command = input.command;
     if (typeof command !== "string" || command.trim().length === 0) throw new McpFailure("mcp-command-missing");
-    if (/\s/.test(command.trim())) throw new McpFailure("mcp-command-invalid", "one executable, args separate");
+    // Whitespace may belong to one native executable pathname. Verify that
+    // exact file; never split a command line, strip filename bytes or add quotes.
+    const executable = isAbsolute(command) ? command : command.trim();
+    if (/\s/.test(executable)) {
+      try {
+        if (!isAbsolute(executable) || !statSync(executable).isFile()) throw new Error();
+        accessSync(executable, constants.X_OK);
+      } catch {
+        throw new McpFailure("mcp-command-invalid", "one executable, args separate");
+      }
+    }
     const args = input.args;
     if (args !== undefined && (!Array.isArray(args) || args.some((arg) => typeof arg !== "string"))) throw new McpFailure("mcp-command-invalid", "args");
     const env = stringMap(input.env, "mcp-servers-invalid", "env");
@@ -219,7 +229,7 @@ export function buildMcpEntry(input: McpServerInput): McpServerEntry {
     if (input.cwd !== undefined && typeof input.cwd !== "string") throw new McpFailure("mcp-servers-invalid", "cwd");
     return {
       type: "stdio",
-      command: command.trim(),
+      command: executable,
       ...(args ? { args: [...args] as string[] } : {}),
       ...(env ? { env } : {}),
       ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
