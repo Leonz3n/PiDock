@@ -212,6 +212,7 @@ async function run() {
     await capture(`${theme}-session-menu-expanded`);
     wc.sendInputEvent({ type: "keyDown", keyCode: "Escape" }); wc.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
     await until("!document.querySelector('[role=menu]')", "Escape menu dismissal");
+    await until(`document.activeElement?.getAttribute('data-session-nav') === '${selectedId}'`, "menu close restores row focus");
     check(`${theme}: menu returns row focus`, await evaluate(`document.activeElement?.getAttribute('data-session-nav') === '${selectedId}'`));
     await menu(row, true);
     wc.sendInputEvent({type:"keyDown",keyCode:"Down"}); wc.sendInputEvent({type:"keyUp",keyCode:"Down"});
@@ -232,7 +233,10 @@ async function run() {
     await capture(`${theme}-task-collapsed-expanded`);
     await click("展开任务 修复结算对账分页边界 · 超长任务名称核对截断不会挤出导航");
     await until("document.querySelector('[aria-label=消息]')", "real composer before lifecycle");
-    await evaluate(`(() => { const el=document.querySelector('[aria-label=消息]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(el,'sidebar lifecycle draft'); el.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+    await until(`document.querySelector('[data-session-nav="${selectedId}"][data-selected=true]')`, "draft owner selected");
+    await evaluate("document.querySelector('[aria-label=消息]').focus()");
+    await wc.insertText("sidebar lifecycle draft");
+    await until("document.querySelector('[aria-label=消息]')?.value === 'sidebar lifecycle draft'", "native input reaches controlled composer");
     await wait(700);
     const draft = await registry.routeTaskOp({taskId,op:"task/readDraft",payload:{sessionId:selectedId},origin});
     check(`${theme}: draft is persisted for exact selected session`, /** @type {{draft?:{text?:string}}} */(draft.payload)?.draft?.text === "sidebar lifecycle draft", draft);
