@@ -134,7 +134,7 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
  * named in the header instead of being filled in.
  */
 type TaskFacts = { branch: string; repoCount: number | null };
-type ConversationProps = TaskFacts & { sidebarAction?: SidebarAction | null; onSidebarActionConsumed?: () => void; onSessionSelected?: (sessionId: string) => void; toolbarTarget?: HTMLElement | null; taskId: string; /** [#139] the session the sidebar asked for; omitted = the task's active session. */ initialSessionId?: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
+type ConversationProps = TaskFacts & { sidebarAction?: SidebarAction | null; onSidebarActionConsumed?: (token: number) => void; onSessionSelected?: (sessionId: string) => void; toolbarTarget?: HTMLElement | null; taskId: string; /** [#139] the session the sidebar asked for; omitted = the task's active session. */ initialSessionId?: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
 /**
  * [PiDock 16] (#16 盒 1) one attachment of this desktop draft. The production
  * turn is `window.pidock.sdkTurn` → SDK `session.prompt(text)`: a string-only
@@ -1141,7 +1141,7 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
   useEffect(() => {
     if (!sidebarAction || sidebarAction.taskId !== taskId || consumedSidebarAction.current === sidebarAction.token || sessionBusy || sessionList.phase === "reading") return;
     consumedSidebarAction.current = sidebarAction.token;
-    const consume = () => onSidebarActionConsumed?.();
+    const consume = () => onSidebarActionConsumed?.(sidebarAction.token);
     if (sessionList.phase !== "read") { consume(); setSessionNotice("会话列表未核验，无法执行侧栏操作；请重试读取"); return; }
     if (sidebarAction.action === "archive-task" || sidebarAction.action === "cleanup-task") {
       setArchiveMode(sidebarAction.action === "cleanup-task" ? "archive-and-cleanup" : "archive-only"); setArchivePrompt(true); consume(); return;

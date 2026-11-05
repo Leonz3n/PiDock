@@ -108,6 +108,8 @@ export function DesktopInventory() {
   const [usageOpen, setUsageOpen] = useState(false);
   const [schedulesOpen, setSchedulesOpen] = useState(false);
   const [sidebarAction, setSidebarAction] = useState<SidebarAction | null>(null);
+  const [taskEntryError, setTaskEntryError] = useState<string | null>(null);
+  const taskEntryPending = useRef(false);
   const sidebarSequence = useRef(0);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [attentionOpen, setAttentionOpen] = useState(false);
@@ -117,9 +119,20 @@ export function DesktopInventory() {
   // management list) wins and is never overridden by a later reread.
   const pinned = useRef(false);
   const entryEpoch = useRef(0);
-  const openTask = async (taskId: string, sessionId?: string) => {
+  const cancelTaskEntry = () => {
+    entryEpoch.current++;
+    setSidebarAction(null);
+    setTaskEntryError(null);
+    if (taskEntryPending.current) { taskEntryPending.current = false; setBusy(false); }
+  };
+  const openTask = async (taskId: string, sessionId?: string, action?: SidebarAction) => {
+    // A lifecycle intent belongs to this navigation attempt, never to a later
+    // ordinary Open. Publish it only alongside the validated destination.
+    cancelTaskEntry();
     if (rootRetryRef.current) return;
-    const epoch = ++entryEpoch.current;
+    const epoch = entryEpoch.current;
+    taskEntryPending.current = true;
+    setTaskEntryError(null);
     setBusy(true); setActionError(null);
     try {
       const fresh = await loadDesktopProjects(window.pidock ?? {});
@@ -136,8 +149,9 @@ export function DesktopInventory() {
       setSessionFocus(sessionId);
       setConversationOpen(sessionId !== undefined);
       setActiveTask({ id: taskId, name: task.name, roots: JSON.stringify(fresh.inventory.roots), association: JSON.stringify(row) });
-    } catch (error) { if (epoch === entryEpoch.current) setActionError(errorMessage(error)); }
-    finally { if (epoch === entryEpoch.current) setBusy(false); }
+      setSidebarAction(action ?? null);
+    } catch (error) { if (epoch === entryEpoch.current) setTaskEntryError(errorMessage(error)); }
+    finally { if (epoch === entryEpoch.current) { taskEntryPending.current = false; setBusy(false); } }
   };
   const load = useCallback(async (inPlace = false): Promise<boolean> => {
     if (!inPlace) setView({ kind: "loading" });
@@ -328,6 +342,7 @@ export function DesktopInventory() {
     });
   };
   const openCreateWorkspace = () => {
+    cancelTaskEntry();
     setForm("create");
     setEditProjectId(null);
     setRepairSourceId(null);
@@ -336,6 +351,7 @@ export function DesktopInventory() {
     setEditNeedsReview(false);
   };
   const openEditWorkspace = (projectId: string) => {
+    cancelTaskEntry();
     const target = data?.projects.find((item) => item.id === projectId);
     if (!target) return;
     setForm("edit");
@@ -358,7 +374,7 @@ export function DesktopInventory() {
       setDeleting({ projectId, tasks: null, error: errorMessage(error) });
     }
   };
-  const openDelete = async (projectId: string) => { await readBlockers(projectId, true); };
+  const openDelete = async (projectId: string) => { cancelTaskEntry(); await readBlockers(projectId, true); };
   const confirmDelete = async (projectId: string) => {
     if (busy) return;
     setBusy(true);
@@ -429,7 +445,8 @@ export function DesktopInventory() {
         : selection.kind === "project" && selectedProject
           ? { view: "project", projectId: selectedProject.id }
           : { view: "unassigned" };
-  const navigate = (next: DesktopView) => {
+  const navigate = (next: DesktopView, action?: SidebarAction) => {
+    cancelTaskEntry();
     setActionError(null);
     setForm(null);
     setDraft(null);
@@ -444,10 +461,9 @@ export function DesktopInventory() {
       setAttentionOpen(false);
       setEnvironmentOpen(false);
       setUsageTaskId(null);
-      void openTask(next.taskId, next.sessionId);
+      void openTask(next.taskId, next.sessionId, action);
       return;
     }
-    entryEpoch.current++;
     setUsageOpen(next.view === "usage");
     setSchedulesOpen(next.view === "schedules");
     setArchiveOpen(next.view === "archive");
@@ -520,9 +536,8 @@ export function DesktopInventory() {
       else if (action === "remove") void openDelete(projectId);
       else { setCreationKind("normal"); navigate({ view: "project", projectId }); setManage(true); setCreationEntry((value) => value + 1); }
     }}
-    onSidebarAction={sidebarAction ? undefined : (action) => {
-      navigate({ view: "task", taskId: action.taskId, sessionId: action.sessionId ?? "main" });
-      setSidebarAction({ ...action, token: ++sidebarSequence.current });
+    onSidebarAction={busy || sidebarAction ? undefined : (action) => {
+      navigate({ view: "task", taskId: action.taskId, sessionId: action.sessionId ?? "main" }, { ...action, token: ++sidebarSequence.current });
     }}
     onNewWorkspace={openCreateWorkspace}
     tasks={activeTasks}
@@ -532,15 +547,16 @@ export function DesktopInventory() {
     roots={ready?.inventory.roots ?? []}
     rootRetry={{ busy, pending: rootRetryPending, error: rootRetryError, run: () => void retryRoots() }}
     breadcrumb={breadcrumb}
-    headerFacts={activeTask && conversationOpen ? <DesktopTaskFacts compact taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge} onBack={() => setConversationOpen(false)} /> : undefined}
+    headerFacts={activeTask && conversationOpen ? <DesktopTaskFacts compact taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge} onBack={() => { cancelTaskEntry(); setConversationOpen(false); }} /> : undefined}
     headerActions={activeTask && conversationOpen ? <div ref={setConversationToolbar} className="min-w-0" /> : activeTask && !conversationOpen ? <>
-      <Button type="button" size="sm" variant="default" disabled={factsActiveSession?.taskId !== activeTask.id || factsActiveSession.sessionId === null} onClick={() => { if (factsActiveSession?.sessionId) { setSessionFocus(factsActiveSession.sessionId); setConversationOpen(true); } }}>进入活跃对话</Button>
+      <Button type="button" size="sm" variant="default" disabled={factsActiveSession?.taskId !== activeTask.id || factsActiveSession.sessionId === null} onClick={() => { if (factsActiveSession?.sessionId) { cancelTaskEntry(); setSessionFocus(factsActiveSession.sessionId); setConversationOpen(true); } }}>进入活跃对话</Button>
       <Button type="button" size="sm" variant="outline" onClick={returnToWorkspace}>返回工作空间总览</Button>
     </> : !activeTask && !manage && !usageOpen && !schedulesOpen && !archiveOpen && !attentionOpen && !environmentOpen && selection.kind === "project" ? <>
       <Button type="button" size="sm" variant="default" onClick={() => { setManage(true); setCreationEntry((value) => value + 1); }}>在此工作空间新建任务</Button>
       <Button type="button" size="sm" variant="outline" onClick={() => openEditWorkspace(selection.id)}>添加来源仓库/目录</Button>
     </> : undefined}
   >
+    {taskEntryError && <p role="alert" className="mb-3 text-sm text-destructive">{taskEntryError}</p>}
     {children}
     {form && draft ? <DesktopWorkspaceDialog
       mode={form}
@@ -579,10 +595,10 @@ export function DesktopInventory() {
   // session choice mounts the SDK conversation. Disk identities stay Host-owned.
   if (activeTask) return shell(conversationOpen ? <div className="flex h-full min-h-0 flex-col">
     <div className="min-h-0 flex-1">
-      <DesktopConversation onSessionSelected={setSessionFocus} sidebarAction={sidebarAction?.taskId === activeTask.id ? sidebarAction : null} onSidebarActionConsumed={() => setSidebarAction(null)} toolbarTarget={conversationToolbar} key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => setConversationOpen(false)} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
+      <DesktopConversation onSessionSelected={setSessionFocus} sidebarAction={sidebarAction?.taskId === activeTask.id ? sidebarAction : null} onSidebarActionConsumed={(token) => setSidebarAction((current) => current?.token === token ? null : current)} toolbarTarget={conversationToolbar} key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => { cancelTaskEntry(); setConversationOpen(false); }} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
     </div>
   </div> : <DesktopTaskFacts headerInShell destinationActive={localPage === null} onActiveSession={reportActiveSession} taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge}
-    onOpenSession={(sessionId) => { setSessionFocus(sessionId); setConversationOpen(true); }}
+    onOpenSession={(sessionId) => { cancelTaskEntry(); setSessionFocus(sessionId); setConversationOpen(true); }}
     onBack={returnToWorkspace}
     onRepair={() => { if (activeProject) openEditWorkspace(activeProject.id); }} />);
   if (view.kind !== "ready" || !data) return <main className="grid min-h-screen place-items-center bg-bg px-6 text-ink" data-testid="desktop-inventory">
