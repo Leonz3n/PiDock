@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { waitFor, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { DesktopShell } from "../components/DesktopShell";
 
@@ -56,4 +56,35 @@ it("keeps the workspace creation trigger exposed so modal closure can restore it
   fireEvent.click(screen.getByLabelText("展开导航"));
   fireEvent.click(screen.getByRole("button", { name: "新建工作空间" }));
   expect(screen.getByLabelText("收起导航")).toHaveAttribute("aria-expanded", "true");
+});
+
+it("opens a keyboard context menu on the addressed session without selecting it; Escape returns row focus", async () => {
+  const onNavigate = vi.fn(), onSidebarAction = vi.fn();
+  window.pidock = { taskOp: vi.fn(async () => ({ ok: true, payload: { activeSessionId: "main", provider: null, sessions: [{ id: "main", name: "边界复查", createdAt: "2026-01-01", updatedAt: "2026-01-01", archived: false, permission: "default", binding: null }] } })) } as unknown as typeof window.pidock;
+  render(<DesktopShell view={{ view: "project", projectId: "workspace-one" }} onNavigate={onNavigate} onSidebarAction={onSidebarAction}
+    projects={[{ id: "workspace-one", name: "核心开发", description: "", taskCount: 1 }]} projectsInitialized unassignedCount={0}
+    tasks={[task]} allTaskCount={1} lifecyclePending={false} lifecycleErrors={[]} roots={[]}
+    rootRetry={{ busy: false, pending: false, error: null, run: vi.fn() }} breadcrumb={{ project: "核心开发" }}>内容</DesktopShell>);
+  const row = await screen.findByRole("button", { name: "边界复查" });
+  row.focus();
+  fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+  const menu = await screen.findByRole("menu", { name: "边界复查 会话菜单" });
+  expect(onNavigate).not.toHaveBeenCalled();
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "重命名" }));
+  await waitFor(() => expect(onSidebarAction).toHaveBeenCalledExactlyOnceWith({ taskId: "task-one", sessionId: "main", action: "rename" }));
+  expect(onNavigate).not.toHaveBeenCalled();
+});
+
+it("keeps expand and select separate even if workspace and task IDs collide", async () => {
+  const onNavigate = vi.fn();
+  window.pidock = { taskOp: vi.fn(async () => ({ ok: true, payload: { activeSessionId: null, provider: null, sessions: [] } })) } as unknown as typeof window.pidock;
+  render(<DesktopShell view={{ view: "project", projectId: "task-one" }} onNavigate={onNavigate}
+    projects={[{ id: "task-one", name: "核心开发", description: "", taskCount: 1 }]} projectsInitialized unassignedCount={0}
+    tasks={[{ ...task, projectId: "task-one" }]} allTaskCount={1} lifecyclePending={false} lifecycleErrors={[]} roots={[]}
+    rootRetry={{ busy: false, pending: false, error: null, run: vi.fn() }} breadcrumb={{ project: "核心开发" }}>内容</DesktopShell>);
+  await screen.findByText("暂无会话");
+  fireEvent.click(screen.getByRole("button", { name: "收起工作空间 核心开发" }));
+  fireEvent.click(screen.getByRole("button", { name: "展开工作空间 核心开发" }));
+  expect(screen.getByRole("button", { name: "收起任务 修复分页" })).toHaveAttribute("aria-expanded", "true");
+  expect(onNavigate).not.toHaveBeenCalled();
 });

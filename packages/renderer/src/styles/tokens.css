@@ -407,3 +407,26 @@
   .settings-content > header { padding: 0 20px; flex-wrap: wrap; align-content: center; gap: 0 10px; }
   .appearance-title { font-size: 20px; line-height: 28px; }
 }
+
+/* Immutable Pencil S01/S07/S08: 26px workspaces; 14px task + 16px session indentation. */
+.sidebar-workspace-row { display:flex; align-items:center; gap:5px; height:26px; padding:0 4px; border-radius:4px; margin-top:3px; }
+.sidebar-workspace-arrow { display:grid; place-items:center; flex-shrink:0; width:12px; height:26px; color:var(--color-muted); }
+.sidebar-workspace-arrow svg { width:12px; height:12px; }
+.sidebar-workspace-select { display:flex; min-width:0; flex:1; align-items:center; gap:5px; text-align:left; font-size:12px; }
+.sidebar-workspace-select svg { width:13px; height:13px; }
+.sidebar-workspace-row[data-selected="true"] .sidebar-workspace-select { font-weight:600; }
+.sidebar-task-column { display:flex; flex-direction:column; gap:2px; padding-left:14px; }
+.sidebar-task-row { display:flex; align-items:center; gap:5px; min-width:0; height:24px; padding:0 6px; border-radius:4px; }
+.sidebar-task-row[data-open="true"] { height:26px; }
+.sidebar-task-row[data-selected="true"] { background:var(--color-soft); color:var(--color-accent); font-weight:600; }
+.sidebar-task-arrow { display:grid; place-items:center; width:10px; height:24px; flex-shrink:0; }
+.sidebar-task-arrow svg { width:10px; height:10px; }
+.sidebar-task-select { display:flex; flex:1; min-width:0; align-items:center; gap:5px; text-align:left; font-size:11px; }
+.sidebar-task-select svg { width:13px; height:13px; }
+.sidebar-session-column { display:flex; min-width:0; flex-direction:column; gap:2px; padding:2px 0 2px 16px; }
+.sidebar-session-row { display:flex; min-width:0; width:100%; align-items:center; gap:5px; height:22px; border:1px solid transparent; border-radius:4px; padding:0 5px; text-align:left; font-size:11px; color:var(--color-muted); }
+.sidebar-session-row[data-selected="true"] { height:24px; border-color:var(--color-line); background:var(--color-paper); color:var(--color-ink); font-weight:600; }
+.sidebar-session-row svg { width:10px; height:10px; }
+.sidebar-new-session { display:flex; align-items:center; gap:4px; height:20px; padding:0 6px; font-size:10px; color:var(--color-muted); }
+.sidebar-new-session svg { width:9px; height:9px; }
+.sidebar-task-row:hover, .sidebar-session-row:hover, .sidebar-workspace-row:hover { background-color:var(--color-paper); }

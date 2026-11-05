@@ -1,5 +1,6 @@
 /** Workspace shell aligned with Pencil S01/S06; management replaces the whole window. */
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { SidebarMenu, type SidebarAction, type SidebarMenuItem } from "./SidebarMenu";
 import { Button } from "./ui/button";
 import { Icon, type IconName } from "./Icon";
 import { cn } from "../lib/utils";
@@ -72,6 +73,8 @@ export function DesktopShell({
   projectsInitialized,
   unassignedCount,
   onNewWorkspace,
+  onWorkspaceAction,
+  onSidebarAction,
   tasks,
   allTaskCount,
   lifecyclePending,
@@ -94,6 +97,8 @@ export function DesktopShell({
   unassignedCount: number | null;
   /** The S10 create dialog; the shell offers it next to the workspace tree. */
   onNewWorkspace?: () => void;
+  onWorkspaceAction?: (projectId: string, action: "edit" | "new-task" | "remove") => void;
+  onSidebarAction?: (action: Omit<SidebarAction, "token">) => void;
   tasks: DesktopShellTask[];
   allTaskCount: number;
   lifecyclePending: boolean;
@@ -127,6 +132,7 @@ export function DesktopShell({
   const [railExpanded, setRailExpanded] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [sessions, setSessions] = useState<Record<string, SessionList | string>>({});
+  const [showArchived, setShowArchived] = useState(false);
   const [revision, setRevision] = useState(0);
   const taskIds = tasks.map((task) => task.taskId).join(",");
   useEffect(() => subscribeSessionWrites(() => setRevision((value) => value + 1)), []);
@@ -144,7 +150,7 @@ export function DesktopShell({
   const visibleTasks = tasks.filter((task) => {
     const list = sessions[task.taskId];
     return !needle || matches(task.name) || matches(projects.find((project) => project.id === task.projectId)?.name ?? "未归属任务") ||
-      (typeof list === "object" && list.sessions.some((session) => !session.archived && matches(session.name)));
+      (typeof list === "object" && list.sessions.some((session) => (showArchived || !session.archived) && matches(session.name)));
   });
   const toggle = (id: string) => setCollapsed((current) => {
     const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next;
@@ -155,26 +161,42 @@ export function DesktopShell({
   </Button>;
   const taskRows = (projectId: string | null) => visibleTasks.filter((task) => task.projectId === projectId).map((task) => {
     const list = sessions[task.taskId];
-    const open = Boolean(needle) || !collapsed.has(task.taskId);
+    const open = Boolean(needle) || !collapsed.has(`task:${task.taskId}`);
     const selected = task.taskId === activeTaskId;
+    const command = (action: Omit<SidebarAction, "token" | "taskId">) => onSidebarAction?.({ taskId: task.taskId, ...action });
+    const taskMenu: SidebarMenuItem[] = [
+      { label: "打开任务", run: () => onNavigate({ view: "task", taskId: task.taskId }) },
+      { label: "新建会话", run: onSidebarAction ? () => command({ action: "new" }) : undefined },
+      { label: "重命名任务", reason: "当前任务接口不支持重命名" },
+      { label: "归档任务…", run: onSidebarAction ? () => command({ action: "archive-task" }) : undefined },
+      { label: "收尾清理…", run: onSidebarAction ? () => command({ action: "cleanup-task" }) : undefined },
+      { label: "恢复任务", reason: "请在已归档页恢复已归档任务" },
+    ];
     return <Fragment key={task.taskId}>
-      <div className="flex min-w-0 items-center pl-3">
-        <button type="button" aria-label={`${open ? "收起" : "展开"}任务 ${task.name}`} aria-expanded={open} onClick={() => toggle(task.taskId)} className="grid size-4 shrink-0 place-items-center text-muted">{open ? "⌄" : "›"}</button>
-        <button type="button" data-task-nav={task.taskId} aria-label={task.name} title={task.name} aria-current={selected ? "page" : undefined}
+      <SidebarMenu label={`${task.name} 任务菜单`} items={taskMenu}><div data-tree-task-row data-selected={selected} data-open={open} className="sidebar-task-row">
+        <button type="button" aria-label={`${open ? "收起" : "展开"}任务 ${task.name}`} aria-expanded={open} onClick={() => toggle(`task:${task.taskId}`)} className="sidebar-task-arrow"><Icon name={open ? "down" : "chevron-right"} /></button>
+        <button type="button" data-row-select data-task-nav={task.taskId} aria-label={task.name} title={task.name} aria-current={selected ? "page" : undefined}
           onClick={() => onNavigate({ view: "task", taskId: task.taskId })}
-          className={cn("flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-left text-[11px] text-muted hover:bg-paper", selected && "bg-soft text-accent")}>
+          className="sidebar-task-select">
           <Icon name="branch" /><span className="truncate">{task.name}</span>
         </button>
-      </div>
-      {open && <div data-session-tree={task.taskId} className="ml-[30px] flex min-w-0 flex-col">
+      </div></SidebarMenu>
+      {open && <div data-session-tree={task.taskId} className="sidebar-session-column">
         {list === undefined ? <p className="py-1 text-[10px] text-muted">正在读取会话…</p> : typeof list === "string" ? <div><p role="status" className="py-1 text-[10px] text-destructive">会话列表读取失败：{list}</p><Button type="button" variant="ghost" size="sm" aria-label={`重试读取${task.name}的会话`} onClick={() => setRevision((value) => value + 1)}>重试读取会话</Button></div> : <>
-          {list.sessions.filter((session) => !session.archived && (!needle || matches(session.name) || matches(task.name) || matches(projects.find((project) => project.id === projectId)?.name ?? "未归属任务"))).map((session) => <button key={session.id} type="button" data-session-nav={session.id} aria-label={session.name} title={session.name}
+          {list.sessions.filter((session) => (showArchived || !session.archived) && (!needle || matches(session.name) || matches(task.name) || matches(projects.find((project) => project.id === projectId)?.name ?? "未归属任务"))).map((session) => <SidebarMenu key={session.id} label={`${session.name} 会话菜单`} items={[
+            { label: "打开会话", run: () => onNavigate({ view: "task", taskId: task.taskId, sessionId: session.id }) },
+            ...(["rename", "stop", "archive", "restore", "delete"] as const).map((action) => ({ label: ({ rename: "重命名", stop: "停止", archive: "归档", restore: "恢复", delete: "永久删除…" })[action],
+              run: onSidebarAction && (action === "restore" ? session.archived : action === "stop" || action === "archive" ? !session.archived : true) ? () => command({ action, sessionId: session.id }) : undefined,
+              reason: action === "restore" && !session.archived ? "会话未归档" : (action === "stop" || action === "archive") && session.archived ? "会话已归档" : undefined })),
+            { label: "新建会话", run: onSidebarAction ? () => command({ action: "new" }) : undefined },
+          ]}><button type="button" data-row-select data-session-nav={session.id} aria-label={session.name} title={session.name}
             aria-current={selected && (view.view === "task" ? view.sessionId : null) === session.id ? "true" : undefined}
             onClick={() => onNavigate({ view: "task", taskId: task.taskId, sessionId: session.id })}
-            className={cn("flex h-6 min-w-0 items-center gap-1 rounded px-1.5 text-left text-[11px] text-muted hover:bg-paper", selected && (view.view === "task" ? view.sessionId : null) === session.id && "border border-line bg-paper text-ink")}>
-            <Icon name="message" /><span className="truncate">{session.name}</span>
-          </button>)}
-          {list.sessions.every((session) => session.archived) && <p className="py-1 text-[10px] text-muted">暂无会话</p>}
+            data-selected={selected && (view.view === "task" ? view.sessionId : null) === session.id} className="sidebar-session-row">
+            <Icon name="message" /><span className="truncate">{session.name}</span>{session.archived && <span className="ml-auto text-[9px]">已归档</span>}
+          </button></SidebarMenu>)}
+          <button type="button" className="sidebar-new-session" aria-label={`新建会话 · ${task.name}`} disabled={!onSidebarAction} onClick={() => command({ action: "new" })}><Icon name="plus" />新建会话</button>
+          {!showArchived && list.sessions.every((session) => session.archived) && <p className="py-1 text-[10px] text-muted">暂无会话</p>}
         </>}
       </div>}
     </Fragment>;
@@ -194,16 +216,20 @@ export function DesktopShell({
           <div className="shell-tree min-h-0 flex-1 overflow-y-auto" role="group" aria-label="工作空间与任务">
             <div className="mb-2 flex items-center justify-between px-1 text-[11px] text-muted"><span>工作空间与任务树</span>{onNewWorkspace && <Button type="button" variant="ghost" size="icon-sm" aria-label="新建工作空间" title="新建工作空间" onClick={onNewWorkspace}><Icon name="plus" /></Button>}</div>
             {projects.map((project) => {
-              const open = Boolean(needle) || !collapsed.has(project.id);
+              const open = Boolean(needle) || !collapsed.has(`workspace:${project.id}`);
               return <div key={project.id} data-workspace-tree={project.id}>
-                <div className="flex min-w-0 items-center">
-                  <button type="button" aria-label={`${open ? "收起" : "展开"}工作空间 ${project.name}`} aria-expanded={open} onClick={() => toggle(project.id)} className="grid size-4 shrink-0 place-items-center text-muted">{open ? "⌄" : "›"}</button>
-                  <button type="button" aria-label={project.name} title={project.name} aria-current={view.view === "project" && view.projectId === project.id ? "page" : undefined} onClick={() => onNavigate({ view: "project", projectId: project.id })} className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 text-left text-[12px] text-ink"><Icon name="folder" /><span className="truncate">{project.name}</span><span className="ml-auto shrink-0 text-[10px] text-muted">{project.taskCount === null ? "未核验" : `${project.taskCount} 任务`}</span></button>
-                </div>{open && taskRows(project.id)}
+                <SidebarMenu label={`${project.name} 工作空间菜单`} items={[
+                  { label: "打开工作空间", run: () => onNavigate({ view: "project", projectId: project.id }) },
+                  ...(["edit", "new-task", "remove"] as const).map((action) => ({ label: ({ edit: "编辑工作空间…", "new-task": "在此新建任务…", remove: "移除工作空间…" })[action], run: onWorkspaceAction ? () => onWorkspaceAction(project.id, action) : undefined })),
+                ]}><div className="sidebar-workspace-row" data-selected={view.view === "project" && view.projectId === project.id}>
+                  <button type="button" aria-label={`${open ? "收起" : "展开"}工作空间 ${project.name}`} aria-expanded={open} onClick={() => toggle(`workspace:${project.id}`)} className="sidebar-workspace-arrow"><Icon name={open ? "down" : "chevron-right"} /></button>
+                  <button type="button" data-row-select aria-label={project.name} title={project.name} aria-current={view.view === "project" && view.projectId === project.id ? "page" : undefined} onClick={() => onNavigate({ view: "project", projectId: project.id })} className="sidebar-workspace-select"><Icon name="folder" /><span className="truncate">{project.name}</span><span className="ml-auto shrink-0 text-[10px] text-muted">{project.taskCount === null ? "未核验" : `${project.taskCount} 任务`}</span></button>
+                </div></SidebarMenu><div className="sidebar-task-column">{open && taskRows(project.id)}</div>
               </div>;
             })}
             {projects.length === 0 && <p className="px-1 py-2 text-[11px] text-muted">{projectsInitialized ? "暂无工作空间" : "项目映射未建立。"}</p>}
-            {nav("未归属任务", "inbox", { view: "unassigned" })}{taskRows(null)}
+            <div className="sidebar-workspace-row"><button type="button" className="sidebar-workspace-arrow" aria-label={`${collapsed.has("unassigned") ? "展开" : "收起"}未归属任务`} aria-expanded={!collapsed.has("unassigned")} onClick={() => toggle("unassigned")}><Icon name={collapsed.has("unassigned") ? "chevron-right" : "down"} /></button><button type="button" className="sidebar-workspace-select" onClick={() => onNavigate({ view: "unassigned" })} aria-label="未归属任务"><Icon name="inbox" />未归属任务</button></div><div className="sidebar-task-column">{(!collapsed.has("unassigned") || needle) && taskRows(null)}</div>
+            <button type="button" className="py-1 text-[10px] text-muted" aria-pressed={showArchived} onClick={() => setShowArchived((value) => !value)}>{showArchived ? "隐藏已归档会话" : "显示已归档会话"}</button>
             {needle && visibleTasks.length === 0 && <p role="status" className="px-1 py-2 text-[11px] text-muted">没有匹配的任务或会话</p>}
             {!needle && tasks.length === 0 && <p className="px-1 py-2 text-[11px] text-muted">{lifecyclePending || lifecycleErrors.length ? "任务归档状态未核验完整。" : "暂无进行中任务"}</p>}
             <span className="sr-only">未归属 {unassignedCount ?? "未核验"} · 所有任务 {allTaskCount}</span>

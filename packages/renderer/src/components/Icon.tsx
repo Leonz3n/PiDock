@@ -25,6 +25,7 @@ export const ICON_PATHS = {
   settings: "M4 7h16 M4 17h16 M8 4v6 M16 14v6",
   chart: "M4 20V4 M4 20h17 M9 16V9 M14 16V5 M19 16v-5",
   plus: "M12 5v14 M5 12h14",
+  "chevron-right": "M9 6l6 6-6 6",
   down: "M6 9l6 6 6-6",
   archive: "M3 3h18v5H3z M5 8v13h14V8 M9 12h6",
   clock: "M21 12a9 9 0 1 0-18 0a9 9 0 1 0 18 0 M12 7v5l3 2",

@@ -1,3 +1,4 @@
+import { type SidebarAction } from "./SidebarMenu";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./Icon";
 import { Button } from "./ui/button";
@@ -106,6 +107,8 @@ export function DesktopInventory() {
   const [usageTaskId, setUsageTaskId] = useState<string | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const [schedulesOpen, setSchedulesOpen] = useState(false);
+  const [sidebarAction, setSidebarAction] = useState<SidebarAction | null>(null);
+  const sidebarSequence = useRef(0);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [attentionOpen, setAttentionOpen] = useState(false);
   const [environmentOpen, setEnvironmentOpen] = useState(false);
@@ -512,6 +515,15 @@ export function DesktopInventory() {
     }}
     management={localPage === "capabilities" ? <DesktopCapabilitiesPage taskId={activeTask?.id ?? null} taskName={activeTask?.name ?? null} onBack={() => setLocalPage(null)} />
       : localPage === "settings" ? <DesktopSettingsPage taskName={activeTask?.name ?? null} onBack={() => setLocalPage(null)} /> : undefined}
+    onWorkspaceAction={(projectId, action) => {
+      if (action === "edit") openEditWorkspace(projectId);
+      else if (action === "remove") void openDelete(projectId);
+      else { setCreationKind("normal"); navigate({ view: "project", projectId }); setManage(true); setCreationEntry((value) => value + 1); }
+    }}
+    onSidebarAction={sidebarAction ? undefined : (action) => {
+      navigate({ view: "task", taskId: action.taskId, sessionId: action.sessionId ?? "main" });
+      setSidebarAction({ ...action, token: ++sidebarSequence.current });
+    }}
     onNewWorkspace={openCreateWorkspace}
     tasks={activeTasks}
     allTaskCount={shellTasks.length}
@@ -567,7 +579,7 @@ export function DesktopInventory() {
   // session choice mounts the SDK conversation. Disk identities stay Host-owned.
   if (activeTask) return shell(conversationOpen ? <div className="flex h-full min-h-0 flex-col">
     <div className="min-h-0 flex-1">
-      <DesktopConversation toolbarTarget={conversationToolbar} key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => setConversationOpen(false)} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
+      <DesktopConversation onSessionSelected={setSessionFocus} sidebarAction={sidebarAction?.taskId === activeTask.id ? sidebarAction : null} onSidebarActionConsumed={() => setSidebarAction(null)} toolbarTarget={conversationToolbar} key={activeTask.id} initialSessionId={sessionFocus} taskId={activeTask.id} name={activeTask.name} branch={activeTaskSummary?.branch ?? ""} repoCount={activeTaskSummary?.repoCount ?? null} roots={activeTask.roots} association={activeTask.association} onBack={() => setConversationOpen(false)} onOpenProviders={() => navigate({ view: "capabilities" })} onArchived={() => { navigate({ view: "archive" }); void load(); }} onSourcesChanged={() => { void load(true); }} />
     </div>
   </div> : <DesktopTaskFacts headerInShell destinationActive={localPage === null} onActiveSession={reportActiveSession} taskId={activeTask.id} taskName={activeTask.name} bridge={window.pidock ?? emptyBridge}
     onOpenSession={(sessionId) => { setSessionFocus(sessionId); setConversationOpen(true); }}

@@ -1,3 +1,4 @@
+import { type SidebarAction } from "./SidebarMenu";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Message as ChatMessage, MessageContent, MessageHeader } from "./ui/message";
@@ -133,7 +134,7 @@ function allowed(data: DesktopProjects, taskId: string): boolean {
  * named in the header instead of being filled in.
  */
 type TaskFacts = { branch: string; repoCount: number | null };
-type ConversationProps = TaskFacts & { toolbarTarget?: HTMLElement | null; taskId: string; /** [#139] the session the sidebar asked for; omitted = the task's active session. */ initialSessionId?: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
+type ConversationProps = TaskFacts & { sidebarAction?: SidebarAction | null; onSidebarActionConsumed?: () => void; onSessionSelected?: (sessionId: string) => void; toolbarTarget?: HTMLElement | null; taskId: string; /** [#139] the session the sidebar asked for; omitted = the task's active session. */ initialSessionId?: string; name: string; roots: string; association: string; onBack: () => void; onOpenProviders: () => void; onArchived: () => void; onSourcesChanged?: () => void };
 /**
  * [PiDock 16] (#16 盒 1) one attachment of this desktop draft. The production
  * turn is `window.pidock.sdkTurn` → SDK `session.prompt(text)`: a string-only
@@ -229,7 +230,7 @@ function ExecutionStateCard({ taskId, sessionId: session, read, approvals }: { t
   </ExecutionCardSection>;
 }
 
-function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branch, repoCount, roots, association, onBack, onOpenProviders, onArchived, onSourcesChanged }: ConversationProps) {
+function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSelected, toolbarTarget, taskId, initialSessionId, name, branch, repoCount, roots, association, onBack, onOpenProviders, onArchived, onSourcesChanged }: ConversationProps) {
   const bridge = window.pidock;
   /**
    * [#139] Which session this page is showing. The Host's session list is the
@@ -247,9 +248,11 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
   const sessions = sessionList.phase === "read" ? sessionList.list.sessions : [];
   const activeSession = sessions.find((session) => session.id === sessionId) ?? null;
   const historyReadOnly = activeSession?.archived === true;
+  useEffect(() => { if (activeSession) onSessionSelected?.(activeSession.id); }, [activeSession, onSessionSelected]);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const renameInput = useRef<HTMLInputElement>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   /**
    * [#146] Delete is the only irreversible session action, so it is always asked
@@ -257,6 +260,7 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
    * task workspace and the user's own directories stay, scheduled history keeps
    * an explicit deleted state); nothing is deleted by a single click.
    */
+  const deleteCancel = useRef<HTMLButtonElement>(null);
   const [deletePrompt, setDeletePrompt] = useState<TaskSession | null>(null);
   /** What a lifecycle write really did (`已停止 1 个回合` / `该会话没有执行中的回合`). */
   const [lifecycleNotice, setLifecycleNotice] = useState<string | null>(null);
@@ -1063,9 +1067,10 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
   const renameOne = async () => {
     if (renaming === null || sessionBusy) return;
     setSessionBusy(true);
-    applySessionWrite(await renameSession(taskId, renaming.id, renaming.name));
+    const result = await renameSession(taskId, renaming.id, renaming.name);
+    applySessionWrite(result);
     setSessionBusy(false);
-    setRenaming(null);
+    if (result.ok) setRenaming(null);
   };
   const archiveOne = async (id: string) => {
     if (sessionBusy) return;
@@ -1127,6 +1132,32 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
       else { setSnapshot(null); setValid(false); setConnected(false); setActiveSessionId(SDK_SESSION_ID); }
     }
   };
+
+  // Consume a navigation intent only after the authoritative list arrives. The
+  // same handlers own cancellation, drafts, receipts and confirmation everywhere.
+  const consumedSidebarAction = useRef<number | null>(null);
+  useEffect(() => {
+    if (!sidebarAction || sidebarAction.taskId !== taskId || consumedSidebarAction.current === sidebarAction.token || sessionBusy || sessionList.phase === "reading") return;
+    consumedSidebarAction.current = sidebarAction.token;
+    const consume = () => onSidebarActionConsumed?.();
+    if (sessionList.phase !== "read") { consume(); setSessionNotice("会话列表未核验，无法执行侧栏操作；请重试读取"); return; }
+    if (sidebarAction.action === "archive-task" || sidebarAction.action === "cleanup-task") {
+      setArchiveMode(sidebarAction.action === "cleanup-task" ? "archive-and-cleanup" : "archive-only"); setArchivePrompt(true); consume(); return;
+    }
+    if (sidebarAction.action === "new") { void newSession().finally(consume); return; }
+    const target = sessions.find((entry) => entry.id === sidebarAction.sessionId);
+    if (!target) { consume(); setSessionNotice("会话已不存在，请重新选择"); return; }
+    switch (sidebarAction.action) {
+      case "rename": setSessionsOpen(true); setRenaming({ id: target.id, name: target.name }); consume(); break;
+      case "delete": setDeletePrompt(target); consume(); break;
+      case "archive": void archiveOne(target.id).finally(consume); break;
+      case "restore": void restoreOne(target.id).finally(consume); break;
+      case "stop": void stopOne(target.id).finally(consume); break;
+    }
+    // These event handlers intentionally read this render's verified identity;
+    // token consumption prevents rerenders/StrictMode from replaying mutations.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebarAction, sessionList.phase, sessionBusy, taskId, onSidebarActionConsumed]);
 
   /**
    * [#139] 推理/上下文/模型 read ONE session readout (`task/sessionReadout`),
@@ -1486,12 +1517,14 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
         onAppended={() => onSourcesChanged?.()}
       />
     </div> : null}
-    {sessionsOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="全部会话" data-testid="session-panel">
-      <div className="max-h-[80vh] w-[min(560px,100%)] overflow-y-auto rounded-[10px] border border-line bg-paper p-4 shadow-lg">
+    {!sessionsOpen && sessionNotice && <p role="alert" className="shrink-0 border-b border-line bg-paper px-4 py-2 text-[11px] text-destructive">{sessionNotice}</p>}
+    {!sessionsOpen && lifecycleNotice && <p role="status" className="shrink-0 border-b border-line bg-soft px-4 py-2 text-[11px] text-ink">{lifecycleNotice}</p>}
+    <Dialog open={sessionsOpen} onOpenChange={(open) => { if (!sessionBusy) { setSessionsOpen(open); if (!open) setRenaming(null); } }}>
+      <DialogContent aria-label="全部会话" data-testid="session-panel" onOpenAutoFocus={(event) => { if (renaming) { event.preventDefault(); renameInput.current?.focus(); } }}>
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
-            <h2 className="text-[14px] font-semibold">全部会话</h2>
-            <p className="mt-0.5 text-[11px] text-muted">一个任务可有多个会话，共享同一工作区与仓库；每个会话有自己的上下文、模型绑定与 SDK JSONL。</p>
+            <DialogTitle>全部会话</DialogTitle>
+            <DialogDescription>一个任务可有多个会话，共享同一工作区与仓库；每个会话有自己的上下文、模型绑定与 SDK JSONL。</DialogDescription>
           </div>
           <Button type="button" size="sm" variant="ghost" aria-label="关闭会话列表" onClick={() => { setSessionsOpen(false); setRenaming(null); }}>×</Button>
         </div>
@@ -1501,7 +1534,7 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
           {sessions.length === 0 && <li className="text-[11px] text-muted">本任务还没有会话。</li>}
           {sessions.map((session) => <li key={session.id} data-testid={`session-row-${session.id}`} className={`rounded-[7px] border p-2 ${session.id === sessionId ? "border-accent bg-soft" : "border-line"}`}>
             {renaming?.id === session.id ? <form className="flex min-w-0 items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); void renameOne(); }}>
-              <input aria-label="会话名称" value={renaming.name} maxLength={40} autoFocus className="min-w-0 flex-1 rounded-[5px] border border-line bg-bg px-1.5 py-1 text-[12px]" onChange={(event) => setRenaming({ id: session.id, name: event.target.value })} />
+              <input ref={renameInput} aria-label="会话名称" value={renaming.name} maxLength={40} autoFocus className="min-w-0 flex-1 rounded-[5px] border border-line bg-bg px-1.5 py-1 text-[12px]" onChange={(event) => setRenaming({ id: session.id, name: event.target.value })} />
               <Button type="submit" size="sm" disabled={sessionBusy || !renaming.name.trim() || renaming.name === session.name}>保存</Button>
               <Button type="button" size="sm" variant="ghost" onClick={() => setRenaming(null)}>取消</Button>
             </form> : <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -1539,26 +1572,26 @@ function TaskConversation({ toolbarTarget, taskId, initialSessionId, name, branc
           <Button type="button" size="sm" disabled={sessionBusy || sessions.length >= 50} onClick={() => void newSession()}><Icon name="plus" />新建会话</Button>
           <span className="text-[10px] text-muted">新会话从零开始：不复用任何会话的历史，也不会沿用已删除会话的身份。删除会话会同时删除它的 SDK 记录，无法恢复。</span>
         </div>
-      </div>
-    </div>}
+      </DialogContent>
+    </Dialog>
     {/* [#146] 删除确认：先说明真实影响，再执行。历史与草稿随会话删除；任务工作
         区与用户自己的原始目录不受影响；定时任务历史保留，并明确显示「会话已删除」。 */}
-    {deletePrompt && <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="删除会话" data-testid="session-delete-confirm">
-      <div className="w-full max-w-[460px] rounded-[10px] border border-line bg-paper p-5 shadow-lg">
-        <h2 className="text-[14px] font-semibold">删除会话「{deletePrompt.name}」</h2>
-        <p className="mt-2 text-[11px] leading-5 text-muted">删除不可恢复。如果你只是想让它不再出现在对话里，请用「归档」：归档保留全部历史且只读。</p>
+    <Dialog open={deletePrompt !== null} onOpenChange={(open) => { if (!open && !sessionBusy) setDeletePrompt(null); }}>
+      {deletePrompt && <DialogContent aria-label="删除会话" data-testid="session-delete-confirm" onOpenAutoFocus={(event) => { event.preventDefault(); deleteCancel.current?.focus(); }}>
+        <DialogTitle>删除会话「{deletePrompt.name}」</DialogTitle>
+        <DialogDescription>删除不可恢复。如果你只是想让它不再出现在对话里，请用「归档」：归档保留全部历史且只读。</DialogDescription>
         <ul className="mt-3 flex list-disc flex-col gap-1.5 pl-4 text-[11px] leading-5 text-ink">
           <li>本会话的记录、SDK JSONL 转录与执行日志会被删除。</li>
           <li>本会话的未发送草稿与待确认请求记录会被丢弃。</li>
-          <li>任务工作区、仓库与用户原始目录不受影响：这里只删除会话，不删除任何文件。</li>
+          <li>任务工作区、仓库与用户原始目录不受影响：这里只删除会话记录，不删除工作区或来源文件。</li>
           <li>引用过本会话的定时任务执行记录会保留，并明确标记「会话已删除」（T18 边界）。</li>
           {deletePrompt.archived ? null : <li>若该会话正在执行：Host 会先中止回合、等待结算并释放工具与待确认操作，然后才删除。</li>}
         </ul>
         <div className="mt-4 flex justify-end gap-2">
-          <Button type="button" variant="outline" disabled={sessionBusy} onClick={() => setDeletePrompt(null)}>取消</Button>
+          <Button ref={deleteCancel} type="button" variant="outline" disabled={sessionBusy} onClick={() => setDeletePrompt(null)}>取消</Button>
           <Button type="button" data-testid="session-delete-confirm-button" disabled={sessionBusy} onClick={() => void deleteOne(deletePrompt.id)}>{sessionBusy ? "删除中…" : "确认删除"}</Button>
         </div>
-      </div>
-    </div>}
+      </DialogContent>}
+    </Dialog>
   </main></TooltipProvider>;
 }

@@ -287,12 +287,15 @@ describe("[#139] task sessions in the conversation", () => {
     mount(fixture);
     await screen.findByRole("tab", { name: "主会话" });
     const expectModelMenu = async (label: string) => {
+      const panelOpen = Boolean(screen.queryByRole("dialog", { name: "全部会话" }));
+      if (panelOpen) fireEvent.click(screen.getByRole("button", { name: "关闭会话列表" }));
       fireEvent.click(screen.getByTestId("composer-model"));
       const menu = await screen.findByRole("menu", { name: "会话模型" });
       expect({ label, rows: within(menu).getAllByRole("menuitemradio").map((row) => rowName(row)) })
         .toEqual({ label, rows: ["Large", "Fast"] });
       fireEvent.click(screen.getByTestId("composer-model"));
       await waitFor(() => expect(screen.queryByRole("menu", { name: "会话模型" })).not.toBeInTheDocument());
+      if (panelOpen) fireEvent.click(screen.getByTestId("session-all"));
     };
     await expectModelMenu("initial");
 
@@ -430,6 +433,7 @@ describe("[#139] task sessions in the conversation", () => {
     expect(within(row).getByRole("button", { name: "继续对话" })).toBeDisabled();
     fireEvent.click(within(row).getByRole("button", { name: "恢复" }));
     await waitFor(() => expect(fixture.ops.some((entry) => entry.op === "task/sessionRestore" && entry.payload["sessionId"] === "s-77777777")).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "关闭会话列表" }));
     expect(await screen.findByRole("tab", { name: "旧尝试" })).toBeInTheDocument();
   });
   it("names a task with no sessions and offers 新建会话 instead of subscribing to an id it lacks", async () => {
@@ -652,4 +656,27 @@ describe("[#146] 停止 / 归档 / 恢复 / 删除 entries", () => {
     }
     view.unmount();
   });
+});
+
+it("consumes a sidebar lifecycle intent once across rerenders and requires explicit deletion confirmation", async () => {
+  const fixture = setup();
+  window.pidock = fixture.bridge;
+  const consumed = vi.fn();
+  const base = { taskId: TASK_ID, name: "Task", branch: "task/main", repoCount: 1, roots: JSON.stringify(roots), association: JSON.stringify(association), onBack: vi.fn(), onOpenProviders: vi.fn(), onArchived: vi.fn(), onSidebarActionConsumed: consumed };
+  const action = { taskId: TASK_ID, sessionId: "s-1a2b3c4d", action: "delete" as const, token: 1 };
+  const mounted = render(<DesktopConversation {...base} sidebarAction={action} />);
+  const dialog = await screen.findByRole("dialog", { name: /^删除会话/ });
+  expect(dialog).toHaveTextContent("未发送草稿");
+  expect(fixture.ops.filter(entry => entry.op === "task/sessionDelete")).toHaveLength(0);
+  mounted.rerender(<DesktopConversation {...base} sidebarAction={{ ...action }} />);
+  expect(consumed).toHaveBeenCalledOnce();
+  fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  expect(fixture.ops.filter(entry => entry.op === "task/sessionDelete")).toHaveLength(0);
+  mounted.rerender(<DesktopConversation {...base} sidebarAction={{ ...action, token: 2 }} />);
+  const confirm = await screen.findByRole("dialog", { name: /^删除会话/ });
+  fireEvent.click(within(confirm).getByRole("button", { name: "确认删除" }));
+  await waitFor(() => expect(fixture.ops.filter(entry => entry.op === "task/sessionDelete")).toHaveLength(1));
+  mounted.rerender(<DesktopConversation {...base} sidebarAction={{ ...action, token: 2 }} />);
+  expect(fixture.ops.filter(entry => entry.op === "task/sessionDelete")).toHaveLength(1);
+  expect(fixture.sdkCalls.some(call => call["action"] === "start")).toBe(false);
 });
