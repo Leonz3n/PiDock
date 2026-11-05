@@ -11,7 +11,8 @@ import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 
 const repo = resolve(import.meta.dirname, "../../..");
 const preflight = process.argv.includes("--preflight");
-const output = preflight ? "/tmp/pidock-manual-validation/native-live-preflight" : "/tmp/pidock-manual-validation/native-live";
+const outputFlag = process.argv.indexOf("--output");
+const output = outputFlag >= 0 ? resolve(process.argv[outputFlag + 1]) : preflight ? "/tmp/pidock-manual-validation/native-live-preflight" : "/tmp/pidock-manual-validation/native-live";
 const root = mkdtempSync(join(tmpdir(), "pidock-native-live-"));
 const profile = join(root, "profile"), taskRoot = join(root, "tasks"), directory = join(root, "empty-task");
 const agentDir = join(homedir(), ".pi", "agent");

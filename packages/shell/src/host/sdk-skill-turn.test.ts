@@ -183,9 +183,10 @@ it.each([false, true])("advertises the scanned skill, expands it once and resolv
       turn += 1;
       // 1: list the skill (no reading yet) → the model opens SKILL.md, then
       // 2: the skill's own instruction sends it to the relative resource, then
-      // 3: a plain answer.
-      if (turn === 1) return toolCall(response, "fs.read", { path: join(skillDir, "SKILL.md") });
-      if (turn === 2) return toolCall(response, "fs.read", { path: join(skillDir, "references", "format.md") });
+      // 3: a plain answer. Reply with the transport identifier actually declared.
+      const wireRead = (parsed["tools"] as { function: { name: string } }[]).find(tool => tool.function.name.includes("fs_read"))!.function.name;
+      if (turn === 1) return toolCall(response, wireRead, { path: join(skillDir, "SKILL.md") });
+      if (turn === 2) return toolCall(response, wireRead, { path: join(skillDir, "references", "format.md") });
       sse(response, { content: "loaded ORCHID" }, "stop");
     })();
   });
@@ -212,8 +213,10 @@ it.each([false, true])("advertises the scanned skill, expands it once and resolv
     expect(prompt).toContain(`<location>${join(skillDir, "SKILL.md")}</location>`);
     expect(prompt).not.toContain("Read references/format.md before answering");
     // The skill's declared `allowed-tools` never becomes a Host tool.
-    expect((requests[0]!.tools as { function: { name: string } }[]).map((tool) => tool.function.name).sort())
-      .toEqual([...SDK_AGENT_TOOL_NAMES].sort());
+    const wireNames = (requests[0]!.tools as { function: { name: string } }[]).map(tool => tool.function.name);
+    expect(new Set(wireNames).size).toBe(SDK_AGENT_TOOL_NAMES.length);
+    expect(wireNames.every(name => /^[a-zA-Z0-9_-]{1,64}$/.test(name))).toBe(true);
+    expect(wireNames).not.toContain("bash");
 
     // 2: the explicit request expanded SKILL.md once, through the real tool call.
     const afterExpand = requests[1]!.messages;
@@ -367,8 +370,9 @@ it.each([false, true])("loads an external skill through the real broker and refu
       const parsed = await body(request);
       requests.push({ messages: (parsed["messages"] ?? []) as { role: string; content: unknown }[] });
       turn += 1;
-      if (turn === 1) return toolCall(response, "fs.read", { path: join(skillDir, "SKILL.md") });
-      if (turn === 2) return toolCall(response, "fs.read", { path: join(skillDir, "references", "format.md") });
+      const wireRead = (parsed["tools"] as { function: { name: string } }[]).find(tool => tool.function.name.includes("fs_read"))!.function.name;
+      if (turn === 1) return toolCall(response, wireRead, { path: join(skillDir, "SKILL.md") });
+      if (turn === 2) return toolCall(response, wireRead, { path: join(skillDir, "references", "format.md") });
       sse(response, { content: "external ORCHID" }, "stop");
     })();
   });

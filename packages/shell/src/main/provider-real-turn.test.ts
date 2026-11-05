@@ -424,3 +424,64 @@ it("selects and edits a user-owned native entry, then sends its existing auth re
     expect(providers.status().profiles[0]!.baseUrl).toContain("/changed");
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
+
+it("uses portable tool names on the Responses wire and restores broker identities across continuation/reopen", async () => {
+  const { root, dir } = task("task-native-portable-tools");
+  const { agentDir, profiles, providers, installed } = management(root);
+  const requests: Record<string, unknown>[] = [];
+  const calls: string[] = [];
+  const server = createServer((request, response) => { void (async () => {
+    const payload = await body(request);
+    requests.push(payload);
+    const tools = payload["tools"] as { name: string }[];
+    if (!tools.every(tool => /^[a-zA-Z0-9_-]{1,64}$/.test(tool.name))) {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { code: "invalid_request_error", message: "Invalid tools name: expected ^[a-zA-Z0-9_-]+$" } }));
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const send = (event: Record<string, unknown>) => response.write(`data: ${JSON.stringify(event)}\n\n`);
+    const wireName = tools.find(tool => tool.name.includes("fs_read"))!.name;
+    const item = requests.length === 1
+      ? { type: "function_call", id: "fc_portable", call_id: "call_portable", name: wireName, arguments: JSON.stringify({ path: "safe.txt" }), status: "completed" }
+      : { type: "message", id: `msg_${requests.length}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: "portable reply", annotations: [] }] };
+    send({ type: "response.created", response: { id: `resp_${requests.length}`, status: "in_progress", output: [] } });
+    send({ type: "response.output_item.added", output_index: 0, item: item.type === "function_call" ? { ...item, arguments: "" } : { ...item, content: [] } });
+    if (item.type === "function_call") send({ type: "response.function_call_arguments.delta", item_id: item.id, output_index: 0, delta: item.arguments });
+    else {
+      send({ type: "response.content_part.added", item_id: item.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } });
+      send({ type: "response.output_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: "portable reply" });
+    }
+    send({ type: "response.output_item.done", output_index: 0, item });
+    send({ type: "response.completed", response: { id: `resp_${requests.length}`, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
+    response.end();
+  })(); });
+  const port = await listen(server);
+  try {
+    mkdirSync(agentDir, { recursive: true });
+    const nativePath = join(agentDir, "models.json");
+    const nativeBytes = JSON.stringify({ providers: { "native-responses": { api: "openai-responses", baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: SECRET, models: [{ id: "fixture-model", input: ["text", "image"], reasoning: true, thinkingLevelMap: {}, contextWindow: 32768, maxTokens: 2048 }] } } });
+    writeFileSync(nativePath, nativeBytes);
+    const list = await providers.perform({ op: "list" }, 1) as { profiles: { id: string }[] };
+    const id = list.profiles[0]!.id;
+    await providers.perform({ op: "select", taskId: "task-native-portable-tools", profileId: id }, 1);
+    const selected = installed[0]!;
+    const context = await createExplicitTextRuntime(profiles.config(id, "fixture-model"), selected.credential);
+    const callTool = async (_sessionId: string, request: { tool: string }) => { calls.push(request.tool); return { outcome: "ok" as const, text: "fixture safe content" }; };
+    let kernel = new PiSdkTextKernel("task-native-portable-tools", dir, { ...context, modelRuntime: context.runtime, callTool });
+    await kernel.open("main");
+    expect((await kernel.prompt("main", "Use the read tool once")).state).toBe("done");
+    expect(calls).toEqual(["fs.read"]);
+    const continuation = requests[1]!["input"] as { type: string; name?: string; output?: string }[];
+    expect(continuation.find(item => item.type === "function_call")?.name).toContain("fs_read");
+    expect(continuation.some(item => item.type === "function_call_output" && item.output?.includes("fixture safe content"))).toBe(true);
+    await kernel.dispose();
+    const reopened = await createExplicitTextRuntime(profiles.config(id, "fixture-model"), selected.credential);
+    kernel = new PiSdkTextKernel("task-native-portable-tools", dir, { ...reopened, modelRuntime: reopened.runtime, callTool });
+    await kernel.open("main");
+    expect((await kernel.prompt("main", "Continue briefly")).state).toBe("done");
+    expect(calls).toEqual(["fs.read"]);
+    expect(readFileSync(nativePath, "utf8")).toBe(nativeBytes);
+    await kernel.dispose();
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});

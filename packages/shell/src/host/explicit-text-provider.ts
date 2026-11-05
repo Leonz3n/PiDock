@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createAssistantMessageEventStream, type Api, type Model } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { SESSION_THINKING_LEVELS, type SessionThinkingLevel } from "./session-index.js";
+import { portableToolContext } from "./portable-tool-context.js";
 
 /**
  * One declared model row. Windows, max output and reasoning are **declared by
@@ -290,11 +291,13 @@ export async function createExplicitTextRuntime(config: ExplicitTextProvider, ke
     let pendingText = "";
     queueMicrotask(async () => {
       try {
-        const source = streamSimple(selected, context, {
+        const portable = portableToolContext(context);
+        const source = streamSimple(selected, portable.context, {
           ...options, maxRetries: 0,
           fetch: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
         });
-        for await (const event of source) {
+        for await (const wireEvent of source) {
+          const event = portable.restore(wireEvent);
           if (event.type === "text_start") pendingText = "";
           if (event.type === "text_delta") {
             pendingText += event.delta;
