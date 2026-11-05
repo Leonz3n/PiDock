@@ -115,7 +115,7 @@ async function run() {
   };
   const until = async (expression, label) => {
     for (let attempt = 0; attempt < 200; attempt++) { if (await evaluate(`Boolean(${expression})`)) return; await wait(50); }
-    throw Error(`timeout ${label}: ${await evaluate("document.body.innerText")}`);
+    throw Error(`timeout ${label}: ${await evaluate("JSON.stringify({active:document.activeElement?.outerHTML.slice(0,1200),focused:document.hasFocus(),body:document.body.innerText})")}`);
   };
   const click = async (label) => {
     check(`control reachable: ${label}`, await evaluate(`(() => { const el = [...document.querySelectorAll('button')].find(el => (el.getAttribute('aria-label') ?? el.textContent.trim()) === ${JSON.stringify(label)} && el.getBoundingClientRect().width > 0 && !el.closest('[hidden]')); if (!el) return false; el.click(); return true; })()`));
@@ -147,6 +147,7 @@ async function run() {
     const shot = await wc.debugger.sendCommand("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
     writeFileSync(join(output, name), Buffer.from(shot.data, "base64"));
     shots.push({ file: name, sha256: hash(join(output, name)), metrics });
+    if(state.includes('menu')) check(`${state}: captured context menu remains mounted`, await evaluate("Boolean(document.querySelector('[role=menu]'))"), await evaluate("({events:window.__menuEvents,focused:document.hasFocus(),active:document.activeElement?.outerHTML.slice(0,800)})"));
   };
   check("production built file renderer", /^file:.*\/renderer\/index.html$/.test(await evaluate("location.href")));
   await until(scenario === "failed" ? "document.querySelector('[role=alert]')" : "document.querySelector('[data-testid=desktop-project-overview]')", "initial data");
@@ -183,6 +184,7 @@ async function run() {
     const getList = async () => (await registry.routeTaskOp({ taskId, op: "task/sessionList", payload: {}, origin })).payload;
     const listBefore = await getList();
     const selectedId = listBefore.sessions.find(row => row.id !== "main").id;
+    await evaluate(`(() => { window.__menuEvents=[]; for(const type of ['focusin','focusout','keydown','pointerdown','pointermove','blur']) window.addEventListener(type,e=>{window.__menuEvents.push({type,key:e.key,target:e.target?.tagName,role:e.target?.getAttribute?.('role'),time:performance.now()}); if(window.__menuEvents.length>35)window.__menuEvents.shift();},true); })()`);
     const menu = async (selector, keyboard = false) => {
       await expandIfNeeded();
       await until(`document.querySelector(${JSON.stringify(selector)})`, "menu row");

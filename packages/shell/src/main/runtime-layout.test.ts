@@ -765,7 +765,7 @@ it.each(["task/sessionList", "task/lifecycleState", "task/fileRoots", "task/file
   const frame = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
   const identity = { taskId: "task-a", sessionId: "main" };
   expect(await sdk(frame, {action:"subscribe", ...identity})).toMatchObject({ok:true});
-  expect(await task(frame, {taskId:"task-b",op,payload:{}})).toMatchObject({ok:true});
+  expect(await task(frame, {taskId:"task-b",op,payload:{rootId:"repo-12345678",relative:"README.md",sourcePath:join(tmpdir(),"source")}})).toMatchObject({ok:true});
   expect(await sdk(frame, {action:"projection", ...identity})).toMatchObject({ok:true});
   expect(detach).not.toHaveBeenCalled();
   expect(routeTaskOp.mock.calls.some(args => args[0].op === "task/sendMessage")).toBe(false);

@@ -8,15 +8,22 @@ export type SidebarMenuItem = { label: string; run?: () => void; reason?: string
 export function SidebarMenu({ children, label, items }: { children: ReactNode; label: string; items: SidebarMenuItem[] }) {
   const trigger = useRef<HTMLSpanElement>(null);
   const content = useRef<HTMLDivElement>(null);
+  const keyboardEntry = useRef(false);
   const pendingAction = useRef<(() => void) | null>(null);
-  return <ContextMenu onOpenChange={(open) => { if (open) pendingAction.current = null; }}><ContextMenuTrigger asChild><span ref={trigger} className="contents" onKeyDown={(event) => {
+  return <ContextMenu onOpenChange={(open) => { if (open) pendingAction.current = null; else keyboardEntry.current = false; }}><ContextMenuTrigger asChild><span ref={trigger} className="contents" onKeyDown={(event) => {
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
     event.preventDefault();
+    keyboardEntry.current = true;
     const target = event.target as HTMLElement;
     const rect = target.getBoundingClientRect();
     target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2 }));
-    requestAnimationFrame(() => content.current?.querySelector<HTMLElement>('[role="menuitem"]:not([data-disabled])')?.focus());
-  }}>{children}</span></ContextMenuTrigger><ContextMenuContent ref={content} aria-label={label} onCloseAutoFocus={(event) => {
+  }}>{children}</span></ContextMenuTrigger><ContextMenuContent ref={content} aria-label={label} onOpenAutoFocus={(event) => {
+    // Let the mounted Radix focus scope own keyboard entry. A pre-mount
+    // animation frame can race its automatic focus and leave focus on the menu.
+    if (!keyboardEntry.current) return;
+    event.preventDefault();
+    content.current?.querySelector<HTMLElement>('[role="menuitem"]:not([data-disabled])')?.focus({ preventScroll: true });
+  }} onCloseAutoFocus={(event) => {
     // The span uses display:contents; return to the row's actual navigation button.
     event.preventDefault();
     trigger.current?.querySelector<HTMLButtonElement>("button[data-row-select]")?.focus({ preventScroll: true });

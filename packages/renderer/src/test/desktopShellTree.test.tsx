@@ -1,5 +1,6 @@
 import { waitFor, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { SidebarMenu } from "../components/SidebarMenu";
 import { DesktopShell } from "../components/DesktopShell";
 
 const task = { taskId: "task-one", name: "修复分页", branch: "fix/page", repoCount: 1, updatedAt: "2026-01-01", projectId: "workspace-one" };
@@ -87,4 +88,21 @@ it("keeps expand and select separate even if workspace and task IDs collide", as
   fireEvent.click(screen.getByRole("button", { name: "展开工作空间 核心开发" }));
   expect(screen.getByRole("button", { name: "收起任务 修复分页" })).toHaveAttribute("aria-expanded", "true");
   expect(onNavigate).not.toHaveBeenCalled();
+});
+
+
+it("focuses keyboard menu entry after the portal mounts even when animation frames arrive early", async () => {
+  const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => { callback(0); return 1; });
+  try {
+    render(<SidebarMenu label="archived session" items={[{ label: "Unavailable", reason: "archived" }, {label:"Restore",run:vi.fn()}]}><button data-row-select onContextMenu={() => fireEvent.pointerMove(document.body)}>Session</button></SidebarMenu>);
+    const row=screen.getByRole("button",{name:"Session"});
+    row.focus();
+    fireEvent.keyDown(row,{key:"F10",shiftKey:true});
+    // A native pointer can move while Radix defers mounting its focus scope.
+    fireEvent.pointerMove(document.body);
+    const item=await screen.findByRole("menuitem",{name:"Restore"});
+    await waitFor(() => expect(item).toHaveFocus());
+    fireEvent.keyDown(item,{key:"Escape"});
+    await waitFor(() => expect(row).toHaveFocus());
+  } finally { frame.mockRestore(); }
 });
