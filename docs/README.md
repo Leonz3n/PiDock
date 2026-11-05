@@ -10,6 +10,7 @@
 | 讨论领域概念 | 根目录 [GLOSSARY.md](../GLOSSARY.md) |
 | 设计或实现界面 | [设计说明与画板索引](design/README.md) |
 | 修改进程、权限、持久化或 SDK 接入 | [技术文档](architecture/README.md)，以及相关 [ADR](adr/) |
+| 第一次理解仓库结构、Electron 进程与本地运行方式 | [项目结构与 Electron 入门](development/project-structure-and-electron-guide.md) |
 | 开发、构建、打包或复查已有实现 | [开发资料](development/README.md) |
 | 验收当前首版 | [真实桌面验证计划](mvp-validation-plan.md) |
 | 查找运行截图、日志和失败记录 | 本机 `docs/evidence/`（不纳入版本控制，见下方“证据”） |
