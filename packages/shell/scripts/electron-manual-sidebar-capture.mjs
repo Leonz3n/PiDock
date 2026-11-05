@@ -104,6 +104,7 @@ async function run() {
   }
   if (scenario === "failed") writeFileSync(join(profile, "projects.json"), "{broken-registry");
   await loadTrustedViews(views);
+  views.window.show(); app.focus({ steal: true }); views.window.focus();
   const wc = views.shellView.webContents;
   wc.on("console-message", (_event, level, message) => { if (level >= 3) consoleErrors.push(message); });
   wc.debugger.attach();
@@ -122,7 +123,7 @@ async function run() {
   };
   const expand = async () => { if (width < 960) await click("展开导航"); };
   const capture = async (state) => {
-    views.window.show(); app.focus({ steal: true }); views.window.moveTop(); views.window.focus(); await wait(180);
+    await wait(180);
     const metrics = await evaluate(`(() => {
       const box = el => { if (!el || !el.getBoundingClientRect().width) return null; const r = el.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height }; };
       const management = document.querySelector('.management-window');
@@ -181,6 +182,9 @@ async function run() {
       }
       await until("document.querySelector('[role=menu]')", "context menu");
       if (keyboard) await until("document.activeElement?.getAttribute('role') === 'menuitem'", "keyboard menu entry focus");
+      // Radix registers its outside-pointer listener in a deferred effect so
+      // the opening pointer event cannot dismiss it. Interact after that turn.
+      await wait(50);
     };
     const expandIfNeeded = async () => { if (width < 960 && !(await evaluate("document.querySelector('[data-testid=desktop-sidebar]')?.dataset.expanded === 'true'"))) await expand(); };
     const choose = async (text) => {
@@ -269,8 +273,11 @@ async function run() {
     await capture(`${theme}-task-cleanup-expanded`);
     await click("取消");
     await menu('[data-task-nav="task-aaaa1111"]');
+    await evaluate("window.__sidebarPointer = []; document.addEventListener('pointerdown', e => window.__sidebarPointer.push({x:e.clientX,y:e.clientY,tag:e.target.tagName,role:e.target.getAttribute('role')}), {capture:true,once:true})");
     wc.sendInputEvent({type:"mouseDown",button:"left",clickCount:1,x:width-20,y:24}); wc.sendInputEvent({type:"mouseUp",button:"left",clickCount:1,x:width-20,y:24});
-    await until("!document.querySelector('[role=menu]')", "outside pointer dismissal");
+    await wait(200);
+    const outside = await evaluate("({events:window.__sidebarPointer,bodyEvents:getComputedStyle(document.body).pointerEvents,menu:!!document.querySelector('[role=menu]'),menuRect:document.querySelector('[role=menu]')?.getBoundingClientRect().toJSON()})");
+    check(`${theme}: outside pointer dismissal`, !outside.menu, outside);
     check(`${theme}: outside click closes context menu`, !(await evaluate("document.querySelector('[role=menu]')")));
     // Seed only the next theme's isolated session; never a model request.
     if (theme === "light") await registry.routeTaskOp({ taskId, op:"task/sessionCreate", payload:{name:"边界复查 · 会话长名称验证"}, origin });
