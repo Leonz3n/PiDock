@@ -12,7 +12,7 @@
 | 修改进程、权限、持久化或 SDK 接入 | [技术文档](architecture/README.md)，以及相关 [ADR](adr/) |
 | 开发、构建、打包或复查已有实现 | [开发资料](development/README.md) |
 | 验收当前首版 | [真实桌面验证计划](mvp-validation-plan.md) |
-| 查找运行截图、日志和失败记录 | [证据说明](evidence/README.md) |
+| 查找运行截图、日志和失败记录 | 本机 `docs/evidence/`（不纳入版本控制，见下方“证据”） |
 | 追溯旧设计、选型、调研或工单迁移 | [历史资料索引](archive/README.md) |
 | 调整 Agent 协作方式 | [工单规则](agents/issue-tracker.md)、[标签](agents/triage-labels.md)、[领域文档规则](agents/domain.md) |
 
@@ -22,7 +22,13 @@
 - GitHub Issues 保存规格、工单、依赖与执行记录；仓库中的规格入口链接到权威记录。
 - `design/` 保存唯一 UI 设计及配套外观资料；`architecture/` 保存现行技术边界与适配依据。
 - `development/` 保存开发操作和既有实现记录；命令和版本使用前核对当前脚本与 lockfile。
-- `evidence/` 保存对应版本的原始验证材料；`archive/` 保存历史研究和被取代的设计，按需追溯。
+- `evidence/` **不入库**：运行验证的截图、日志与失败记录是单机产物，该目录已在 `.gitignore` 中；`archive/` 保存历史研究和被取代的设计，按需追溯。
+
+## 证据
+
+- 采集脚本仍默认写入 `docs/evidence/`，方便本机复查；它不再进入版本历史，也不随仓库分发。
+- 可重复、体积小的合成夹具放入所在包的 `test-fixtures/`：需要随仓库分发的东西不能只放在 `docs/evidence/`。
+- 跨机器交接证据时，另行归档（例如 Issue 附件或独立的存储位置），不要把整目录重新提交进仓库。
 
 新增文档按用途放入对应目录，并在本页或该目录的索引中加入阅读条件。优先链接已有依据，使每项约定有明确的维护位置。
 

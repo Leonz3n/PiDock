@@ -8,6 +8,6 @@
 | 构建安装包或复核安装、升级、卸载证据 | [Electron 打包](electron-packaging.md)；#22 内部分发与 #80 对外发布分别验收 |
 | 处理工具链下载、缓存或环境预热 | [工具链预热记录](toolchain-warmup.md) |
 | 修改任务根目录发现或定位 #36 的覆盖缺口 | [任务根覆盖](desktop-task-root-coverage.md) |
-| 需要原始运行材料 | [证据目录](../evidence/README.md) |
+| 需要原始运行材料 | 本机 `docs/evidence/`（不纳入版本控制） |
 
 新版功能验收使用 [首版验证计划](../mvp-validation-plan.md)，功能范围和执行控制读取 [#135](https://github.com/Leonz3n/PiDock/issues/135)。

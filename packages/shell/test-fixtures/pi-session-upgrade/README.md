@@ -37,6 +37,10 @@ fields after a 1.5.0 open + append.
 Regenerate / inspect:
 
 ```sh
-sha256sum docs/evidence/pencil-v1-t19-upgrade/fixtures/*.jsonl
+sha256sum packages/shell/test-fixtures/pi-session-upgrade/*.jsonl
 node packages/shell/scripts/pencil-v1-t19-upgrade-session-evidence.mjs
 ```
+
+The regeneration script writes its output to the local, unversioned
+`docs/evidence/pencil-v1-t19-upgrade/`; only these three fixture files are
+checked in here.

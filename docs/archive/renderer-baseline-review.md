@@ -4,9 +4,11 @@
 
 > 本文记录旧 UI 的实现与验证，不作为现行界面的设计或验收目标。当前唯一 UI 基准为 [PiDock.pen](../design/PiDock.pen)，见 [设计说明](../design/README.md)。文中旧原型与审阅资料已清理，其路径和行号仅用于 Git 历史追溯；保留的截图不代表已对齐新版设计。
 
+> **证据位置：** 本文引用的 `docs/evidence/` 截图与日志不再随仓库分发（已从全部 Git 历史移除，并在 `.gitignore` 中排除）；采集脚本仍会把输出写到本机该目录，跨机器留档需另行保存。
+
 2026-09-22（复核修订：2026-09-22）。本记录覆盖渲染层基线（`packages/renderer`，`@pidock/renderer`）与静态草稿 `prototypes/pidock-ui/`（variant A 对话优先）的逐页对照、组件与许可证、状态职责边界、密集列表实测、锚点跟随验证与未测边界。
 
-对照截图证据：[`docs/evidence/renderer-baseline-2026-09-22/`](../evidence/renderer-baseline-2026-09-22)（renderer 34 张 = 32 个页面截图 + 1 个流程截图（失败现场重试）+ 1 张品牌标记裁剪图；prototype 9 张；`measurements.json` + `anchor-follow-verification.json` + `brand-mark-verification.json` + `capture-errors.json` + [`verification-log.md`](../evidence/renderer-baseline-2026-09-22/verification-log.md)）。原型只读保留，未修改。
+对照截图证据：``docs/evidence/renderer-baseline-2026-09-22/``（renderer 34 张 = 32 个页面截图 + 1 个流程截图（失败现场重试）+ 1 张品牌标记裁剪图；prototype 9 张；`measurements.json` + `anchor-follow-verification.json` + `brand-mark-verification.json` + `capture-errors.json` + ``verification-log.md``）。原型只读保留，未修改。
 
 > **第四轮整改（两轴复核第四轮）勘误。** 上一版把「服务启动配方与从 `.vscode` 导入」整块列为**未复原项（明确取舍）**，但原型该块完全在内存实现（表单＋卡片列表＋示例导入），**并非**依赖真实仓库扫描。本轮已在适配层内存中复原该项，未复原项收窄为「真实仓库扫描、向仓库默认配置写入配方与进程启动」。同时修复一处**未披露的功能回退**：任务页此前只在「仅普通目录」任务上渲染目录 UI，使 **Git＋普通目录混合任务**的目录数、添加目录入口与文件／终端目录选择器**不可见且不可选**（原型对所有含目录的任务都提供）；本轮按原型改为任意含目录的任务均可访问（见「第四次整改」A）。`/env` 行的对齐标签据此重新核对（下方 #6），Zustand 状态表补回 `envDrafts`，`memoryHost.ts` 行数更正为当前值。
 
@@ -258,7 +260,7 @@
 - 「最多四个会话标签」是可记录的小集合豁免：渲染层固定只取前 4 个会话（`sessionTabs`），不虚拟化，实测渲染 4 行。
 - 上一版把会话列表记为「数据行数 4、视图 3、渲染 3」——那是**固定数量演示，不是容量证据**；上一版又把 `/usage` 的 `rendered: 17` 当成容量证据——那是**高度反馈环的产物**（见下节），都已在第二轮更正为密集数据 + 期望/实测对照。`measurements.json` 另存 `expectationMismatches`，本机为空数组。
 
-实测输出（2026-09-22，dev server 端口 4335；完整文件见 [`measurements.json`](../evidence/renderer-baseline-2026-09-22/measurements.json)）：
+实测输出（2026-09-22，dev server 端口 4335；完整文件见 ``measurements.json``）：
 
 ```json
 {
@@ -395,7 +397,7 @@
 | 11 | 锚点离底仅程序化 | 增加真实滚轮手势离底用例 | `scripts/verify-anchor.mjs`、`anchor-follow-verification.json` |
 | 12 | 上轮提交类型与内容不符 | 本轮按实际内容拆分为 `fix/test/docs/build` 等诚实 scope | 见下方「本轮提交」 |
 
-> **证据可复现性（第三轮更正）。** 上一版声称上述 JSON「可逐字节复现」，实际当时只核对了键值，并未逐字节比对。现更正为：这些 JSON 在**本机**重跑可复现到键值一致，但不声称跨主机逐字节一致，也未做逐字节比对。已知时间相关字段：`renderer/task-deploy.png` 的审批面板把 `expiresAt`（`Date.now() + 24h` 经 `toLocaleString`）渲染为文本，截图随运行时刻变化；`approvals[].expiresAt/requestedAt`、`runs[].startedAt`、`sessions[].lastActivity`、`usage[].at`、`scheduledRuns[].at` 等由 `Date.now()`/`new Date()` 产生的 ISO 时间同理。四道 `--force` 检查、证据脚本与三处变异验证的实际输出见 [`verification-log.md`](../evidence/renderer-baseline-2026-09-22/verification-log.md)。
+> **证据可复现性（第三轮更正）。** 上一版声称上述 JSON「可逐字节复现」，实际当时只核对了键值，并未逐字节比对。现更正为：这些 JSON 在**本机**重跑可复现到键值一致，但不声称跨主机逐字节一致，也未做逐字节比对。已知时间相关字段：`renderer/task-deploy.png` 的审批面板把 `expiresAt`（`Date.now() + 24h` 经 `toLocaleString`）渲染为文本，截图随运行时刻变化；`approvals[].expiresAt/requestedAt`、`runs[].startedAt`、`sessions[].lastActivity`、`usage[].at`、`scheduledRuns[].at` 等由 `Date.now()`/`new Date()` 产生的 ISO 时间同理。四道 `--force` 检查、证据脚本与三处变异验证的实际输出见 ``verification-log.md``。
 
 ## 第三次整改（两轴复核第三轮）：规格复原与证据严谨性
 
@@ -567,7 +569,7 @@ node packages/renderer/scripts/verify-brand.mjs
 python3 -m http.server 4319 --bind 127.0.0.1   # URL: http://127.0.0.1:4319/?variant=A
 ```
 
-浏览器自动化一律使用 `playwright-core` + 本机 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`（脚本内可用 `CHROME_PATH` 覆盖），未下载任何浏览器。第三轮整改又用 `--force` 重跑了上述四道检查与四个证据脚本，并把完整输出（含三处变异验证）写入 [`docs/evidence/renderer-baseline-2026-09-22/verification-log.md`](../evidence/renderer-baseline-2026-09-22/verification-log.md)。第四轮整改同样以 `--force` 重跑四道检查与四个证据脚本（新增 `task-mixed` 截图与四处变异验证），输出追加在 `verification-log.md` 的「第四轮整改验证」节。第五轮整改同样以 `--force` 重跑四道检查与四个证据脚本（渲染层截图扩到 32 张、新增 `fill` 步骤支持以截取候选列表、六处变异验证），输出追加在 `verification-log.md` 的「第五轮整改验证」节。
+浏览器自动化一律使用 `playwright-core` + 本机 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`（脚本内可用 `CHROME_PATH` 覆盖），未下载任何浏览器。第三轮整改又用 `--force` 重跑了上述四道检查与四个证据脚本，并把完整输出（含三处变异验证）写入 ``docs/evidence/renderer-baseline-2026-09-22/verification-log.md``。第四轮整改同样以 `--force` 重跑四道检查与四个证据脚本（新增 `task-mixed` 截图与四处变异验证），输出追加在 `verification-log.md` 的「第四轮整改验证」节。第五轮整改同样以 `--force` 重跑四道检查与四个证据脚本（渲染层截图扩到 32 张、新增 `fill` 步骤支持以截取候选列表、六处变异验证），输出追加在 `verification-log.md` 的「第五轮整改验证」节。
 
 ## 本轮提交（第二轮整改）
 

@@ -176,7 +176,7 @@ records reopen unconfirmed, never replay or adopt PIDs. The trusted
 verificationRequired resource flag also blocks the original owner's new write
 claims. Production storage/epoch authority and SDK/Host lifecycle wiring are
 not provided. The utility smoke now adds lifecycle-close/cancel/recovery to the
-original six cases. Evidence: `docs/evidence/service-execution-lifecycle/README.md`.
+original six cases. Evidence (local only, not versioned): `docs/evidence/service-execution-lifecycle/README.md`.
 
 During the async authority full-gate run, the existing real macOS bridge test
 once returned native `termination-unconfirmed` rather than exit code 3, and a
@@ -187,7 +187,7 @@ was not a fix. A later kqueue probe caught anchor wait status 512 (exit 2), and
 a delayed-signal child reproduced the post-SIGKILL ordinary-exit race. The
 anchor now waits for actual death after successful SIGKILL dispatch; failed
 signals, abnormal waits and timeouts remain unconfirmed. Evidence and bounded
-repeat commands: `docs/evidence/service-supervisor-anchor/README.md`.
+repeat commands: local `docs/evidence/service-supervisor-anchor/README.md` (not versioned).
 No production gate is opened by this fix. Temporary debug logging was removed;
 redacted assertion context is retained.
 

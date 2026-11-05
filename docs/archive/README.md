@@ -40,4 +40,4 @@
 - [工程流程设置记录](setup-draft.md)：当时的流程配置；当前规则见 [agents/](../agents/)。
 - [GitHub 迁移索引](github-issues-migration.md) / [迁移 JSON](github-issues-migration.json)：旧逻辑编号与 GitHub issue 的对应关系。`formerSource` 等原始路径保留用于追溯。
 
-已删除的完整规格、旧原型与候选设计通过 [规格历史入口](../mvp-spec.md) 和 Git 历史查阅。原始证据继续保存在 [evidence/](../evidence/README.md)。
+已删除的完整规格、旧原型与候选设计通过 [规格历史入口](../mvp-spec.md) 和 Git 历史查阅。原始证据不再随仓库分发：采集产物只留在本机 `docs/evidence/`（不入库），跨机器留档需另行保存。

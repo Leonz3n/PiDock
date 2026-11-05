@@ -54,8 +54,8 @@ Electron 主进程自带 Node，Host 可放在 `utilityProcess` 中继续保持�
 
 ## 证据与复跑
 
-- [机器可读结果](../evidence/electrobun-recheck-2026-09-22/results.json)：各对照 target、原有 OSR CDP/持久化结果、10 轮关闭重开状态及分区/弹窗结果。
-- [OSR 实验补丁](../evidence/electrobun-recheck-2026-09-22/osr-recheck.patch)：相对原始抛弃式原型的透明窗口单项改动，以及回归脚本。只作复现附件，不是产品实现。
+- 机器可读结果（本机 `docs/evidence/electrobun-recheck-2026-09-22/results.json`，不纳入版本控制）：各对照 target、原有 OSR CDP/持久化结果、10 轮关闭重开状态及分区/弹窗结果。
+- OSR 实验补丁（本机 `docs/evidence/electrobun-recheck-2026-09-22/osr-recheck.patch`，不入库）：相对原始抛弃式原型的透明窗口单项改动，以及回归脚本。只作复现附件，不是产品实现。
 - 本机完整临时实验位于 `/tmp/pidock-electrobun-recheck`，可清理；复现不依赖保留该目录。
 
 在具备原 README 所列 macOS arm64 / Bun / Hutch 离线缓存的环境中，将 `c54d45e` 的 `prototypes/visible-browser` 复制到独立实验目录（保持原工作区不动）。在该目录执行：

@@ -25,7 +25,7 @@ pnpm --filter @pidock/renderer exec vitest run src/test/desktopApp.test.tsx src/
 | 4（Desktop 渲染层并集与失败根） | 默认根 + 已登记覆盖根 + 失败根：两真实任务同时列出，失败根显示准确错误与重试，demo `memoryHost` 在 desktop 模式下从不读写 | `packages/renderer/src/test/desktopApp.test.tsx`：「lists the default and a registered override root together, surfaces one failing root, and never touches the demo fixture」 |
 | 5（迁移风险/用户确认） | 索引主文件损坏/丢失不静默重建、备份需显式恢复；拒绝自动改写既有任务的 `taskDir`（迁移需单独用户批准） | `packages/shell/src/main/task-root-index.test.ts`：「fails closed when primary is removed, corrupt, versioned wrong or interrupted after first backup」，以及 `task-root-index.ts` 的 `rootFailure` 文案分支 |
 
-相关真实 Electron 证据（#34 盒 1/3/5）在 `docs/evidence/desktop-task-inventory/`：空根 / 合法持久任务 /
+相关真实 Electron 证据（#34 盒 1/3/5）在本机 `docs/evidence/desktop-task-inventory/`（不纳入版本控制）：空根 / 合法持久任务 /
 损坏记录被拒 / Host-list 读取失败四态，全部来自生产 main + 生产 renderer。
 
 ## 2. 明确 UNTESTED（不得用测试或截图顶替）
@@ -39,7 +39,7 @@ pnpm --filter @pidock/renderer exec vitest run src/test/desktopApp.test.tsx src/
 2. **真实 Host 覆盖根 provision 端到端未测**：`TaskRootIndex.register` 由 `PerTaskHostRegistry`
    在真实 Host provision 成功后调用；现有索引测试直接调 `register`，没有“真实 `utilityProcess` Host
    在覆盖根下 provision → 索引落盘 → 重启后枚举”的整链证据。
-3. **覆盖根任务的 Desktop 目录内容/视觉未测**：`docs/evidence/desktop-task-inventory/` 只覆盖默认根四态；
+3. **覆盖根任务的 Desktop 目录内容/视觉未测**：本机 `docs/evidence/desktop-task-inventory/`（不纳入版本控制）只覆盖默认根四态；
    覆盖根被登记后的同屏列表只在 renderer 单测（bridge double）与 `shell/listTasks` seam 测试中证明，
    没有真实 Electron 截图。
 4. **Windows 原生断电持久性、跨进程路径更改的检查/使用竞态**：不能声称已原子消除；移动既有根时
@@ -51,4 +51,4 @@ pnpm --filter @pidock/renderer exec vitest run src/test/desktopApp.test.tsx src/
 `shell/listTasks` 的载荷里 `roots[]` 已包含「默认任务根」与「已登记任务根 N」，Renderer 用同一份
 `roots` 渲染失败原因与重试（`DesktopShell.tsx DesktopRootErrors`）。范围提示（「仅显示默认及已登记任务根；
 其他位置需明确找回。」）在 `DesktopInventory.tsx` 项目管理视图常驻，因此覆盖根历史任务“无法自动发现”
-不会被表述成「本机没有任何任务」。#34 的空根/错误态截图见 `docs/evidence/desktop-task-inventory/README.md`。
+不会被表述成「本机没有任何任务」。#34 的空根/错误态截图见本机 `docs/evidence/desktop-task-inventory/README.md`（不纳入版本控制）。
