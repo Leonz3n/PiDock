@@ -1,11 +1,12 @@
 // #165: actual built App / trusted preload / main / registry and native-config stores.
 // Dialog results are deterministic fixtures except --physical (a real OS cancel).
-import { app, dialog } from "electron";
+import { app, dialog, utilityProcess } from "electron";
 import { execFileSync, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, readdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { shutdownTestRegistry } from "./shutdown-test-registry.mjs";
 import { createUnavailableHostClient } from "./unavailable-host-client.mjs";
 const repo = resolve(import.meta.dirname, "../../..");
 const arg = (key, fallback) => process.argv.includes(key) ? process.argv[process.argv.indexOf(key) + 1] : fallback;
@@ -23,6 +24,7 @@ const hash = file => createHash("sha256").update(readFileSync(file)).digest("hex
 const wait = ms => new Promise(done => setTimeout(done, ms));
 /** @param {string} name @param {unknown} passed @param {unknown} detail */
 const check = (name, passed, detail = "") => { assertions.push({ name, passed: !!passed, detail }); console.log(name, !!passed); if (!passed) throw Error(name); };
+const children = [];
 let finishing = false;
 const finish = (code, error = null) => {
   if (finishing) return; finishing = true;
@@ -32,6 +34,7 @@ const finish = (code, error = null) => {
   const prefix = `${width}x${height}${physical ? "-physical" : ""}`;
   writeFileSync(join(output, `${prefix}-identity.json`), JSON.stringify({ source: manifest(paths), build: manifest(under("packages/shell/dist")) }, null, 2));
   writeFileSync(join(output, `${prefix}-result.json`), JSON.stringify({ code, error, source: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(), root, size: [width, height], physical, versions: process.versions, assertions, shots, dialogs, consoleErrors }, null, 2));
+  for (const child of children) { try { child.kill(); } catch { /* already released */ } }
   app.exit(code);
 };
 setTimeout(() => finish(1, "watchdog timeout"), 120000).unref();
@@ -42,7 +45,11 @@ async function run() {
   await app.whenReady();
   const { TaskRootIndex } = await import("../dist/main/task-root-index.js");
   const { ProjectRegistry } = await import("../dist/main/project-registry.js");
-  const { createTrustedWindow, loadTrustedViews, registerIpc } = await import("../dist/main/runtime.js");
+  const { createTrustedWindow, loadTrustedViews, registerIpc, PerTaskHostRegistry } = await import("../dist/main/runtime.js");
+  const { buildHostEnv } = await import("../dist/host/host-guards.js");
+  const { HostClient } = await import("../dist/rpc/host-client.js");
+  const { CreationIntentStore, ProjectTaskCreation } = await import("../dist/main/project-task-creation.js");
+  const { ServiceCatalog, serviceCatalogAuthority } = await import("../dist/main/service-catalog.js");
   const { NativeMcpFile } = await import("../dist/main/native-mcp-config.js");
   const { McpWiring } = await import("../dist/main/mcp-ipc.js");
   const index = new TaskRootIndex(profile, taskRoot), projects = new ProjectRegistry(profile);
@@ -50,13 +57,33 @@ async function run() {
   mkdirSync(directory); mkdirSync(source);
   writeFileSync(join(directory, "original.txt"), "original source survives all selection and cancellation\n");
   const originalHash = hash(join(directory, "original.txt"));
-  execFileSync("git", ["init", "-q", source]);
+  execFileSync("git", ["init", "-q", "-b", "main", source]);
+  writeFileSync(join(source, "README.md"), "fixture Git source\n");
+  execFileSync("git", ["add", "."], {cwd:source});
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], {cwd:source});
+  const remote = join(root,"remote.git");
+  execFileSync("git", ["clone","-q","--bare",source,remote]);
+  execFileSync("git", ["remote","add","origin",remote], {cwd:source});
   const skills = join(root, "技能 space"); mkdirSync(join(skills, "fixture"), { recursive: true });
   writeFileSync(join(skills, "fixture", "SKILL.md"), "---\nname: picker-fixture\ndescription: A selectable fixture.\n---\nNo execution.\n");
-  const workspace = await projects.create({ name: "选择器验证", description: "", repositories: [], directories: [{ name: "original-name", path: directory }], environment: [], branchTemplate: "feature/{task-name}" });
+  const workspace = await projects.create({ name: "选择器验证", description: "", repositories: [{name:"fixture-git",path:source}], directories: [{ name: "original-name", path: directory }], environment: [], branchTemplate: "feature/{task-name}" });
   const views = await createTrustedWindow("manual-pickers", "production");
   views.window.setContentSize(width, height);
-  registerIpc(createUnavailableHostClient(), views.registry, undefined, projects, index, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, new McpWiring(new NativeMcpFile(agentDir), process.env));
+  const registry = new PerTaskHostRegistry("manual-pickers", async (workspaceId, task, variables) => {
+    const child=utilityProcess.fork(join(import.meta.dirname,"../dist/host/host-entry.js"),[], {serviceName:"picker-host",env:buildHostEnv(process.env,workspaceId,task,profile,undefined,process.platform,variables),stdio:"pipe"});
+    children.push(child); return {child,client:new HostClient(child)};
+  }, id=>index.resolve(id),undefined,index);
+  const catalog = new ServiceCatalog(profile,serviceCatalogAuthority(index,projects));
+  const creation = new ProjectTaskCreation(new CreationIntentStore(profile),projects,index,registry,taskRoot);
+  registerIpc(createUnavailableHostClient(), views.registry, registry, projects, index, undefined, creation, undefined, catalog, undefined, undefined, undefined, undefined, new McpWiring(new NativeMcpFile(agentDir), process.env));
+  creation.saveDeliverySettings({branchTemplate:"task/{taskId}",remote:"origin"});
+  const intent=await creation.prepare({projectId:workspace.id,name:"选择器绑定任务",repositories:[{sourceId:workspace.repositories[0].id,remote:"origin",remoteBranch:"main"}],directoryIds:[],sharedWriteConfirmed:false,override:false});
+  await creation.commit(intent.id);
+  const environment=catalog.createEnvironment({projectId:workspace.id,name:"Fixture environment"});
+  catalog.saveTemplate({projectId:workspace.id,environmentId:environment.environmentId,descriptor:{name:"Fixture service",program:"node",args:[],ports:[],runType:"long-lived"},shared:[]});
+  const worktree=join(intent.taskDir,intent.repos[0].repoDir);
+  const childDirectory=join(worktree,"资料 space"); mkdirSync(childDirectory);
+  const origin={kind:/** @type {const} */("shell-ui"),senderWebContentsId:views.shellView.webContents.id};
   let next = { canceled: true, filePaths: [] }, throwNext = false;
   const nativeDialog = dialog.showOpenDialog.bind(dialog);
   dialog.showOpenDialog = async (...args) => {
@@ -146,7 +173,7 @@ async function run() {
     check(`${theme}: repair preserves workspace and source identity`, projects.get(workspace.id).directories[0].id === workspace.directories[0].id && projects.get(workspace.id).directories[0].path === `${directory}-moved`);
     renameSync(`${directory}-moved`, directory);
     // Restore fixture metadata through the same main store for the next theme.
-    await projects.update(workspace.id, { name: workspace.name, description: "", repositories: [], directories: [{ ...workspace.directories[0], path: directory }], environment: [], branchTemplate: "feature/{task-name}" });
+    await projects.update(workspace.id, { name: workspace.name, description: "", repositories: workspace.repositories, directories: [{ ...workspace.directories[0], path: directory }], environment: [], branchTemplate: "feature/{task-name}" });
     await sidebar("能力管理");
     await evaluate("[...document.querySelectorAll('nav[aria-label=能力管理] button')].find(el=>el.textContent.startsWith('Skills')).click();true"); await wait(150);
     next = { canceled: false, filePaths: [skills] }; await click("选择技能来源文件夹"); await capture(`${theme}-skills-select`); await click("添加来源");
@@ -165,10 +192,22 @@ async function run() {
     await until(`document.querySelector('section[aria-label=外部编辑器]')?.innerText.includes(${JSON.stringify(process.execPath)})`, "editor saved");
     check(`${theme}: editor selected file saved without execution`, JSON.parse(readFileSync(join(profile, "external-editor.json"), "utf8")).program === process.execPath);
     await click("返回任务工作区");
+    await sidebar("选择器验证");
+    await sidebar("更多"); await sidebar("环境与服务");
+    await until("document.querySelector('#desktop-env-list')?.options.length>1", "environment list");
+    await evaluate(`(() => {const el=document.getElementById('desktop-env-list');const set=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set;set.call(el,${JSON.stringify(environment.environmentId)});el.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await click("任务绑定");
+    await until("document.querySelector('[aria-label=绑定工作副本]')?.options.length>1", "task binding roots");
+    next = { canceled: false, filePaths: [childDirectory] }; await click("选择绑定工作文件夹");
+    check(`${theme}: existing concrete binding directory selected without saving or executing`,await evaluate("document.querySelector('[aria-label=绑定工作子目录]').value==='资料 space'"));
+    await capture(`${theme}-binding-directory`);
+    next = { canceled: false, filePaths: [directory] }; await click("选择绑定工作文件夹");
+    check(`${theme}: binding refuses outside root without changing draft`,await evaluate("document.querySelector('[aria-label=绑定工作子目录]').value==='资料 space' && document.body.innerText.includes('请选择当前工作副本内的文件夹')"));
   }
   check("all dialogs parented and exact native selection kind", dialogs.every(row => row.parented && (row.options.properties.join() === "openDirectory" || row.options.properties.join() === "openFile,treatPackageAsDirectory")));
   check("original file bytes preserved", hash(join(directory, "original.txt")) === originalHash);
   check("zero renderer console errors", consoleErrors.length === 0, consoleErrors);
+  check("real Hosts gracefully released", (await shutdownTestRegistry(registry,{origin,label:"picker evidence complete"})).length===0);
   finish(0);
 }
 void run();

@@ -1,3 +1,4 @@
+import { LocalResourcePicker } from "./LocalResourcePicker";
 import { useEffect, useRef, useState } from "react";
 import { fileRootsThroughShell, serviceCatalogThroughShell } from "../data/shellBridge";
 import { serviceBindingAdoptionFromMain, serviceBindingsFromMain, type ServiceBindingAdoptionView, type ServiceBindingView, type ServiceTemplateView } from "../data/serviceCatalog";
@@ -25,6 +26,7 @@ export function TaskServiceBinding({ template, environmentName, tasks }: {
   const templateWorkdir = useRef(template.descriptor.workdir ?? "");
   templateWorkdir.current = template.descriptor.workdir ?? "";
   const [refs, setRefs] = useState<{ key: string; envRef: string }[]>([]);
+  const [selecting, setSelecting] = useState(false);
   const [pending, setPending] = useState(false);
   const [adopting, setAdopting] = useState(false);
   const [adoption, setAdoption] = useState<ServiceBindingAdoptionView | null>(null);
@@ -66,7 +68,7 @@ export function TaskServiceBinding({ template, environmentName, tasks }: {
   }, [taskId, template.projectId, template.serviceId, revision]);
 
   const bind = async () => {
-    if (!review || pending || !taskId || !selectedRoot || bound) return;
+    if (!review || pending || selecting || !taskId || !selectedRoot || bound) return;
     const request = epoch.current;
     setPending(true); setError(null);
     const result = await serviceCatalogThroughShell({ op: "bind", projectId: template.projectId, environmentId: template.environmentId,
@@ -125,8 +127,8 @@ export function TaskServiceBinding({ template, environmentName, tasks }: {
 
   return <div className="mt-3 border-t border-line pt-3" aria-label={`${template.descriptor.name}任务绑定`}>
     <div className="flex flex-wrap items-center gap-2">
-      <label className="flex min-w-0 items-center gap-2">任务<select aria-label="绑定任务" disabled={pending || !tasks.length} value={taskId} onChange={(event) => setRequestedTask(event.target.value)} className="min-h-8 min-w-0 max-w-[240px] rounded-[4px] border border-line bg-paper px-2"><option value="" hidden>选择任务</option>{tasks.map((task) => <option key={task.taskId} value={task.taskId}>{task.name}</option>)}</select></label>
-      <Button type="button" size="icon" variant="ghost" title="刷新任务绑定" aria-label="刷新任务绑定" disabled={pending || !taskId} onClick={() => setRevision((value) => value + 1)}><Icon name="refresh" /></Button>
+      <label className="flex min-w-0 items-center gap-2">任务<select aria-label="绑定任务" disabled={pending || selecting || !tasks.length} value={taskId} onChange={(event) => setRequestedTask(event.target.value)} className="min-h-8 min-w-0 max-w-[240px] rounded-[4px] border border-line bg-paper px-2"><option value="" hidden>选择任务</option>{tasks.map((task) => <option key={task.taskId} value={task.taskId}>{task.name}</option>)}</select></label>
+      <Button type="button" size="icon" variant="ghost" title="刷新任务绑定" aria-label="刷新任务绑定" disabled={pending || selecting || !taskId} onClick={() => setRevision((value) => value + 1)}><Icon name="refresh" /></Button>
     </div>
     {error && <p role="alert" className="mt-2 text-[#ad4545]">{error}</p>}
     {pending && <p role="status" className="mt-2 text-muted">正在核对本机绑定</p>}
@@ -148,10 +150,22 @@ export function TaskServiceBinding({ template, environmentName, tasks }: {
     {adoption?.adopted && <div className="mt-2"><p role="status" className="break-words text-muted">已采用 v{adoption.to}（原 v{adoption.from}）；仅改动固定的模板版本，未重启任何进程。该任务的运行面板启停通道已随执行快照撤销，启停会遭到拒绝（service-owner-inventory-unconfirmed），可在下方重新绑定该任务的服务所有者来恢复（不重启任何进程），届时启动使用 v{adoption.to}。</p>{adoption.restart.fencedTaskIds.includes(taskId) && <ServiceOwnerRebind projectId={template.projectId} taskId={taskId} surfacedBy="service-owner-inventory-unconfirmed" onRebound={() => setRevision((value) => value + 1)} />}</div>}
     {bound && <SavedServiceConfigPreview key={`${taskId}/${bound.templateVersion}`} projectId={template.projectId} taskId={taskId} serviceId={bound.serviceId} templateVersion={bound.templateVersion} />}
     {foreignBinding && <p role="status" className="mt-2 break-words text-[#9a6032]">该任务在此服务上绑定的是环境「{foreignBinding.environmentName}」的 v{foreignBinding.templateVersion}，不是当前环境的模板；本面板不会把它当成当前环境的绑定，也不会改写它（同一任务同一服务只能有一个绑定）。</p>}
-    {!bound && !foreignBinding && state?.taskId === taskId && <fieldset disabled={pending} className="mt-3 min-w-0">
+    {!bound && !foreignBinding && state?.taskId === taskId && <fieldset disabled={pending || selecting} className="mt-3 min-w-0">
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1">工作副本<select aria-label="绑定工作副本" value={selectedRoot} disabled={!roots.length} onChange={(event) => { setRootId(event.target.value); setReview(false); }} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2"><option value="" hidden>选择工作副本</option>{roots.map((root) => <option key={root.id} value={root.id}>{hostText(root.label, "Host 未上报根名称")}</option>)}</select></label>
         <label className="grid gap-1">工作子目录<input aria-label="绑定工作子目录" value={subdir} maxLength={512} placeholder={template.descriptor.workdir ?? "仓库根目录"} className="min-h-8 min-w-0 rounded-[4px] border border-line bg-paper px-2" onChange={(event) => { setSubdir(event.target.value); setSubdirTouched(true); setReview(false); }} /></label>
+        <LocalResourcePicker key={`${taskId}/${selectedRoot}`} kind="directory" label="选择绑定工作文件夹" disabled={pending || selecting || !selectedRoot}
+          onBusy={setSelecting} onSelect={(path) => {
+            const root = roots.find((row) => row.id === selectedRoot);
+            if (!root) return;
+            const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "");
+            const base = normalize(root.path), selected = normalize(path);
+            const compare = (value: string) => /^[A-Za-z]:\//.test(value) ? value.toLowerCase() : value;
+            if (compare(selected) !== compare(base) && !compare(selected).startsWith(`${compare(base)}/`)) {
+              setError("请选择当前工作副本内的文件夹；绑定保持不变"); return;
+            }
+            setSubdir(selected.slice(base.length).replace(/^\//, "")); setSubdirTouched(true); setReview(false); setError(null);
+          }} />
       </div>
       <div className="mt-2 flex items-center justify-between"><span>本机凭据引用</span><Button type="button" size="icon" variant="ghost" aria-label="添加私有引用" title="添加私有引用" disabled={refs.length >= 80} onClick={() => { setRefs([...refs, { key: "", envRef: "" }]); setReview(false); }}><Icon name="plus" /></Button></div>
       {refs.map((ref, index) => <div key={index} className="mt-2 flex min-w-0 gap-2"><input aria-label={`私有 KEY ${index + 1}`} value={ref.key} maxLength={100} className="min-h-8 min-w-0 w-2/5 rounded-[4px] border border-line bg-paper px-2" onChange={(event) => { setRefs(refs.map((row, at) => at === index ? { ...row, key: event.target.value } : row)); setReview(false); }} /><input aria-label={`本机环境引用 ${index + 1}`} value={ref.envRef} maxLength={100} className="min-h-8 min-w-0 flex-1 rounded-[4px] border border-line bg-paper px-2" onChange={(event) => { setRefs(refs.map((row, at) => at === index ? { ...row, envRef: event.target.value } : row)); setReview(false); }} /><Button type="button" size="icon" variant="ghost" aria-label={`移除私有引用 ${index + 1}`} title="移除私有引用" onClick={() => { setRefs(refs.filter((_, at) => at !== index)); setReview(false); }}><Icon name="close" /></Button></div>)}

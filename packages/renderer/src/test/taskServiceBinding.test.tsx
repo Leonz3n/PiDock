@@ -265,3 +265,18 @@ it("refuses malformed or leaked binding responses instead of treating them as em
   expect(await screen.findByRole("alert")).toHaveTextContent("无法核对");
   expect(screen.queryByRole("button", { name: "核对任务绑定" })).toBeNull();
 });
+
+it("selects a concrete task subdirectory without typing and rejects an outside folder", async () => {
+  const pickLocalResource = vi.fn().mockResolvedValueOnce({ ok: true, payload: { canceled: false, path: "/task/repo/资料 space" } })
+    .mockResolvedValueOnce({ ok: true, payload: { canceled: false, path: "/task/repo-other" } });
+  const serviceCatalogOp = vi.fn(async () => ({ ok: true, payload: [] }));
+  window.pidock = { taskOp: vi.fn(async () => roots()), serviceCatalogOp, pickLocalResource };
+  render(<TaskServiceBinding environmentName={environmentName} template={template} tasks={tasks} />);
+  await screen.findByRole("option", { name: "Repo" });
+  fireEvent.click(screen.getByRole("button", { name: "选择绑定工作文件夹" }));
+  await waitFor(() => expect(screen.getByLabelText("绑定工作子目录")).toHaveValue("资料 space"));
+  expect(serviceCatalogOp).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "选择绑定工作文件夹" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("请选择当前工作副本内的文件夹");
+  expect(screen.getByLabelText("绑定工作子目录")).toHaveValue("资料 space");
+});
