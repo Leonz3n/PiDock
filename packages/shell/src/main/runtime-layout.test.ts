@@ -235,7 +235,7 @@ describe("trusted Electron view modes", () => {
     expect(deliver).toBeUndefined();
   });
 
-  it.each(["task-a", "task-b"])("keeps pending SDK authority only for its own task while reading %s", async (readTask) => {
+  it.each(["task-a", "task-b"])("preserves pending SDK authority across sidebar metadata reads for %s", async (readTask) => {
     const views = await createTrustedWindow("workspace-a", "production");
     await loadTrustedViews(views);
     let release!: () => void;
@@ -253,7 +253,7 @@ describe("trusted Electron view modes", () => {
     await vi.waitFor(() => expect(routeTaskOp).toHaveBeenCalledWith(expect.objectContaining({op:"task/sdkProjection"})));
     await taskOp(shell,{taskId:readTask,op:"task/sessionList",payload:{}});
     release();
-    expect(await pending).toMatchObject({ok:readTask === "task-a"});
+    expect(await pending).toMatchObject({ok:true});
     await sdk(shell,{action:"unsubscribe",taskId:"task-a",sessionId:"main"});
   });
 
@@ -752,4 +752,42 @@ describe("[PiDock 02a/02c] shell task inventory IPC", () => {
       expect((failed as { payload: { tasks: unknown[] } }).payload.tasks).toHaveLength(1);
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
+});
+
+it.each(["task/sessionList", "task/lifecycleState", "task/fileRoots", "task/fileDiff", "task/probeLink"])("background %s preserves foreground SDK identity without starting a turn", async (op) => {
+  const views = await createTrustedWindow("workspace-metadata", "production");
+  await loadTrustedViews(views);
+  const detach = vi.fn();
+  const routeTaskOp = vi.fn(async (_request: {op: string}) => ({ ok: true, payload: { source: "sdk-jsonl", messages: [] } }));
+  registerIpc({} as never, views.registry, { routeTaskOp, entryForTaskId: () => ({client:{onTurnEvent: () => detach}}) } as never);
+  const sdk = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/sdkTurn")![1];
+  const task = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/taskOp")![1];
+  const frame = { sender: views.shellView.webContents, senderFrame: views.shellView.webContents.mainFrame } as never;
+  const identity = { taskId: "task-a", sessionId: "main" };
+  expect(await sdk(frame, {action:"subscribe", ...identity})).toMatchObject({ok:true});
+  expect(await task(frame, {taskId:"task-b",op,payload:{}})).toMatchObject({ok:true});
+  expect(await sdk(frame, {action:"projection", ...identity})).toMatchObject({ok:true});
+  expect(detach).not.toHaveBeenCalled();
+  expect(routeTaskOp.mock.calls.some(args => args[0].op === "task/sendMessage")).toBe(false);
+  // Nonmetadata task operations still revoke; metadata never grants SDK authority.
+  await task(frame, {taskId:"task-b",op:"task/sessionStates",payload:{}});
+  expect(await sdk(frame, {action:"projection", ...identity})).toMatchObject({ok:false});
+  expect(detach).toHaveBeenCalledOnce();
+});
+
+it("refuses old-document unsubscribe without revoking a new document's subscription", async () => {
+  const views = await createTrustedWindow("workspace-document", "production");
+  await loadTrustedViews(views);
+  const detach = vi.fn();
+  registerIpc({} as never, views.registry, {routeTaskOp:vi.fn(async () => ({ok:true,payload:{source:"sdk-jsonl",messages:[]}})),entryForTaskId:()=>({client:{onTurnEvent:()=>detach}})} as never);
+  const sdk = vi.mocked(ipcMain.handle).mock.calls.findLast(([channel]) => channel === "shell/sdkTurn")![1];
+  const current = {sender:views.shellView.webContents,senderFrame:views.shellView.webContents.mainFrame} as never;
+  const old = {sender:views.shellView.webContents,senderFrame:{processId:1,routingId:99}} as never;
+  const identity = {taskId:"task-a",sessionId:"main"};
+  expect(await sdk(current,{action:"subscribe",...identity})).toMatchObject({ok:true});
+  expect(await sdk(old,{action:"unsubscribe",...identity})).toMatchObject({ok:false});
+  expect(await sdk(current,{action:"projection",...identity})).toMatchObject({ok:true});
+  expect(detach).not.toHaveBeenCalled();
+  expect(await sdk(current,{action:"unsubscribe",...identity})).toMatchObject({ok:true});
+  expect(detach).toHaveBeenCalledOnce();
 });

@@ -129,6 +129,8 @@ async function run() {
       const management = document.querySelector('.management-window');
       return { viewport: [innerWidth, innerHeight], theme: document.documentElement.dataset.theme, sidebar:box(document.querySelector('[data-testid=desktop-sidebar]')), header:box(document.querySelector('[data-testid=desktop-breadcrumb]')), managementNav:box(management?.querySelector('nav')), managementHeader:box(management?.querySelector('[data-testid=management-header]')), managementHeaders:management?.querySelectorAll('header').length ?? 0, summary: Boolean(document.querySelector('[data-testid=desktop-summary]')), overflow:document.documentElement.scrollWidth > innerWidth, names:[...document.querySelectorAll('[data-task-nav], [data-session-nav]')].map(el => ({name:el.textContent.trim(), width:el.getBoundingClientRect().width, scroll:el.scrollWidth})), colors: { canvas:getComputedStyle(document.body).backgroundColor, ink:getComputedStyle(document.body).color } };
     })()`);
+    const subscriptionError = await evaluate(`({reconnect:[...document.querySelectorAll('[data-testid=desktop-composer-container] button')].some(el=>el.textContent.trim()==='重新连接'),senderError:/sdk-sender-navigated|sdk-subscription-required/.test(document.body.innerText)})`);
+    check(`${state}: foreground SDK subscription remains connected`, !subscriptionError.reconnect && !subscriptionError.senderError, subscriptionError);
     check(`${state}: exact renderer viewport`, metrics.viewport[0] === width && metrics.viewport[1] === height, metrics.viewport);
     check(`${state}: no horizontal document overflow`, !metrics.overflow);
     check(`${state}: no old summary`, !metrics.summary);
@@ -154,6 +156,16 @@ async function run() {
     await wc.reload();
     await until(`document.documentElement?.dataset.theme === '${theme}' && document.querySelector('${scenario === "failed" ? "[role=alert]" : "[data-testid=desktop-project-overview]"}')`, "theme hydration");
     await until("document.querySelectorAll('[data-task-nav]').length === 3", "real task tree");
+    if (scenario === "subscription") {
+      const seam = await evaluate(`(async () => {
+        const identity={taskId:'task-aaaa1111',sessionId:'main'};
+        const before=await window.pidock.sdkTurn({action:'subscribe',...identity});
+        const metadata=await window.pidock.taskOp('task-bbbb2222','task/sessionList',{});
+        const after=await window.pidock.sdkTurn({action:'projection',...identity});
+        return {before:before.ok,metadata:metadata.ok,after:after.ok,error:after.error};
+      })()`);
+      check("background metadata preserves foreground SDK subscription", seam.before && seam.metadata && seam.after, seam);
+    }
     await expand();
     await capture(`${theme}-tree-expanded`);
     const geometry = await evaluate(`(() => {

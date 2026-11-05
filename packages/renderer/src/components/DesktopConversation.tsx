@@ -248,7 +248,6 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
   const sessions = sessionList.phase === "read" ? sessionList.list.sessions : [];
   const activeSession = sessions.find((session) => session.id === sessionId) ?? null;
   const historyReadOnly = activeSession?.archived === true;
-  useEffect(() => { if (activeSession) onSessionSelected?.(activeSession.id); }, [activeSession, onSessionSelected]);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -1027,7 +1026,10 @@ function TaskConversation({ sidebarAction, onSidebarActionConsumed, onSessionSel
     setNotice("正在连接 SDK 会话");
     picked.current = true;
     setActiveSessionId(next);
-  }, [flushDraftSave, taskId]);
+    // Report only a completed local transition. Echoing every list read to the
+    // parent can overwrite a newer sidebar destination with the previous id.
+    onSessionSelected?.(next);
+  }, [flushDraftSave, taskId, onSessionSelected]);
   const switchToSession = async (target: TaskSession) => {
     if (target.id === sessionId) { setSessionsOpen(false); return; }
     if (target.archived) { setSessionNotice(`「${target.name}」已归档，不能继续对话；请先恢复。`); return; }

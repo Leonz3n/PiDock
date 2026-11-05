@@ -2776,10 +2776,14 @@ export function registerIpc(
       if (op === "task/resumeAppend" && !append) {
         return { ok: false as const, error: "真实任务准备恢复尚未接入" };
       }
-      // A same-task read can race the pending subscribe's projection. Preserve
-      // that task binding; a different task still revokes both pending and live authority.
+      // Sidebar/Inventory enumerate these metadata/source-fact reads for EVERY task. They
+      // do not navigate or select a conversation and must not revoke another
+      // task's pending/live subscription. All other different-task operations
+      // keep the existing revocation rule; reads never grant SDK authority.
+      const sidebarMetadata = op === "task/sessionList" || op === "task/lifecycleState" ||
+        op === "task/fileRoots" || op === "task/fileDiff" || op === "task/probeLink";
       const sdkTask = pendingNavigation.get(sender.webContentsId)?.taskId ?? subscriptions.get(sender.webContentsId)?.taskId;
-      if (sdkTask !== taskId) revoke(sender.webContentsId);
+      if (!sidebarMetadata && sdkTask !== taskId) revoke(sender.webContentsId);
       // A persisted Provider selection is reinstalled on first contact with the
       // task, before any turn op can run against an unconfigured context. The
       // status route reports failures, so an install failure never turns an

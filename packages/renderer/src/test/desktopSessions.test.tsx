@@ -680,3 +680,18 @@ it("consumes a sidebar lifecycle intent once across rerenders and requires expli
   expect(fixture.ops.filter(entry => entry.op === "task/sessionDelete")).toHaveLength(1);
   expect(fixture.sdkCalls.some(call => call["action"] === "start")).toBe(false);
 });
+
+it("does not echo an old session over a newer sidebar destination during list hydration", async () => {
+  const fixture = setup();
+  window.pidock = fixture.bridge;
+  const selected = vi.fn();
+  const base = { taskId: TASK_ID, name: "Task", branch: "task/main", repoCount: 1, roots: JSON.stringify(roots), association: JSON.stringify(association), onBack: vi.fn(), onOpenProviders: vi.fn(), onArchived: vi.fn(), onSessionSelected: selected };
+  const mounted = render(<DesktopConversation {...base} initialSessionId="main" />);
+  await screen.findByRole("tab", { name: "主会话" });
+  mounted.rerender(<DesktopConversation {...base} initialSessionId="s-1a2b3c4d" />);
+  await waitFor(() => expect(screen.getByRole("tab", { name: "重构认证" })).toHaveAttribute("aria-selected", "true"));
+  expect(selected).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByTestId("session-new"));
+  await waitFor(() => expect(selected).toHaveBeenCalledExactlyOnceWith("s-9f9f9f9f"));
+  expect(fixture.sdkCalls.some(call => call["action"] === "start")).toBe(false);
+});
