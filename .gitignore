@@ -48,3 +48,7 @@ pnpm-debug.log*
 *.snap
 *.blockmap
 
+
+# Local verification evidence (screenshots, logs, traces) is never versioned.
+# Capture scripts still write here; it stays local to each machine.
+docs/evidence/

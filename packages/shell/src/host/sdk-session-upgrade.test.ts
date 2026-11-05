@@ -4,8 +4,8 @@
  * (`PiSdkTextKernel` + the pinned 1.5.0 `SessionManager`), read its history
  * without a model or tool call, and only append on a NEW turn.
  *
- * The fixtures under `docs/evidence/pencil-v1-t19-upgrade/fixtures` are
- * reconstructed (see their README) and every test works on a COPY: the fixture
+ * The synthetic fixtures under `packages/shell/test-fixtures/pi-session-upgrade`
+ * are reconstructed (see their README) and every test works on a COPY: the fixture
  * files themselves are hashed before/after and must not change.
  */
 import { createHash } from "node:crypto";
@@ -22,7 +22,7 @@ import { PiSdkTextKernel } from "./sdk-text-kernel.js";
 import { buildTaskDiskRecord, serializeTaskRecord } from "./task-store.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const FIXTURES = join(here, "..", "..", "..", "..", "docs", "evidence", "pencil-v1-t19-upgrade", "fixtures");
+const FIXTURES = join(here, "..", "..", "test-fixtures", "pi-session-upgrade");
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }); });
 
