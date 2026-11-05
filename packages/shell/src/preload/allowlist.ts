@@ -14,7 +14,7 @@ export const ALLOWED_INVOKE_CHANNELS = [
   "shell/getVersions",
   "shell/hostPing",
   "shell/listTasks",
-  "shell/importTaskRoot",
+  "shell/importTaskRoot", "shell/pickLocalResource",
   "shell/projectOp",
   "shell/serviceCatalogOp",
   "shell/createTask",

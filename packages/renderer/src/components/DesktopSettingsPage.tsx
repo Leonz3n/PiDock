@@ -1,3 +1,4 @@
+import { LocalResourcePicker } from "./LocalResourcePicker";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   APPEARANCE_OPTIONS,
@@ -455,11 +456,12 @@ function ExternalEditorSection() {
             className={`${field} mt-1`}
             value={program}
             maxLength={4096}
-            disabled={!connected}
+            disabled={!connected || busy}
             placeholder="/绝对路径/编辑器"
             onChange={(event) => setProgram(event.target.value)}
           />
-          <p className="mt-1 text-[11px] text-muted">macOS 上要填可执行文件本身（例如 /usr/local/bin/code）；.app 应用包目录会被拒绝。</p>
+          <LocalResourcePicker kind="executable" label="选择编辑器可执行文件" disabled={!connected || busy} onBusy={setBusy} onSelect={setProgram} />
+          <p className="mt-1 text-[11px] text-muted">macOS 上请选择可执行文件本身（例如 /usr/local/bin/code）；.app 应用包目录会被拒绝。</p>
         </div>
         <div>
           <label className="text-xs text-muted" htmlFor="external-editor-args">附加参数（每行一项）</label>
@@ -468,7 +470,7 @@ function ExternalEditorSection() {
             className={`${field} mt-1 min-h-16 font-mono`}
             value={args}
             rows={2}
-            disabled={!connected}
+            disabled={!connected || busy}
             onChange={(event) => setArgs(event.target.value)}
           />
         </div>

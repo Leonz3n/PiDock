@@ -174,3 +174,50 @@ describe("S10 workspace dialog", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 });
+
+it("selects a workspace directory without typing a local path or submitting", async () => {
+  const pickLocalResource = vi.fn().mockResolvedValue({ ok: true, payload: { canceled: false, path: "/tmp/资料 space" } });
+  Object.defineProperty(window, "pidock", { configurable: true, value: { pickLocalResource } });
+  const onSubmit = vi.fn();
+  render(<Harness initial={{ ...projectDraft(), directories: [{ name: "kept", path: "" }] }} onSubmit={onSubmit} />);
+  fireEvent.click(screen.getByRole("button", { name: "选择目录文件夹 1" }));
+  await waitFor(() => expect(screen.getByLabelText("目录路径 1")).toHaveValue("/tmp/资料 space"));
+  expect(screen.getByLabelText("目录名称 1")).toHaveValue("kept");
+  expect(pickLocalResource).toHaveBeenCalledWith({ kind: "directory" });
+  expect(onSubmit).not.toHaveBeenCalled();
+  Reflect.deleteProperty(window, "pidock");
+});
+
+it("discards a removed unsaved row's late selection instead of updating the next row", async () => {
+  let resolve!: (value: unknown) => void;
+  const pickLocalResource = vi.fn(() => new Promise((done) => { resolve = done; }));
+  Object.defineProperty(window, "pidock", { configurable: true, value: { pickLocalResource } });
+  const onChange = vi.fn();
+  const target = { name: "removed", path: "/old" }, survivor = { name: "survivor", path: "/kept" };
+  const draft = { ...projectDraft(), directories: [target, survivor] };
+  const props = { mode: "edit" as const, draft, onChange, busy: false, onCancel: vi.fn(), onSubmit: vi.fn() };
+  const { rerender } = render(<DesktopWorkspaceDialog {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "选择目录文件夹 1" }));
+  rerender(<DesktopWorkspaceDialog {...props} draft={{ ...draft, directories: [survivor] }} />);
+  resolve({ ok: true, payload: { canceled: false, path: "/late" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "选择目录文件夹 1" })).not.toHaveAttribute("aria-busy", "true"));
+  expect(onChange).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("目录路径 1")).toHaveValue("/kept");
+  Reflect.deleteProperty(window, "pidock");
+});
+
+it("updates the selected source identity after external row reorder and preserves current fields", async () => {
+  let resolve!: (value: unknown) => void;
+  const pickLocalResource = vi.fn(() => new Promise((done) => { resolve = done; }));
+  Object.defineProperty(window, "pidock", { configurable: true, value: { pickLocalResource } });
+  const onChange = vi.fn();
+  const target = { id: "target", name: "initial", path: "/old" }, other = { id: "other", name: "other", path: "/kept" };
+  const draft = { ...projectDraft(), directories: [target, other] };
+  const props = { mode: "edit" as const, draft, onChange, busy: false, onCancel: vi.fn(), onSubmit: vi.fn() };
+  const { rerender } = render(<DesktopWorkspaceDialog {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "选择目录文件夹 1" }));
+  rerender(<DesktopWorkspaceDialog {...props} draft={{ ...draft, description: "current", directories: [other, { ...target, name: "current-name" }] }} />);
+  resolve({ ok: true, payload: { canceled: false, path: "/selected" } });
+  await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ description: "current", directories: [other, { ...target, name: "current-name", path: "/selected" }] })));
+  Reflect.deleteProperty(window, "pidock");
+});

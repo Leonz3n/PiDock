@@ -17,7 +17,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const BRIDGE_NAME = "pidock";
-const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/projectOp", "shell/serviceCatalogOp", "shell/createTask", "shell/appendTaskRepos", "shell/openTaskEditor", "shell/editorSettingsOp", "shell/preferencesOp", "shell/providerOp", "shell/mcpOp", "shell/skillsOp", "shell/schedulerState", "shell/taskOp", "shell/sdkTurn"];
+const INVOKE_CHANNELS = ["shell/getVersions", "shell/hostPing", "shell/listTasks", "shell/importTaskRoot", "shell/pickLocalResource", "shell/projectOp", "shell/serviceCatalogOp", "shell/createTask", "shell/appendTaskRepos", "shell/openTaskEditor", "shell/editorSettingsOp", "shell/preferencesOp", "shell/providerOp", "shell/mcpOp", "shell/skillsOp", "shell/schedulerState", "shell/taskOp", "shell/sdkTurn"];
 const EVENT_CHANNELS = ["shell/hostStatus", "shell/sdkTurnEvent"];
 
 // Preload-only capabilities (NOT visible to the page itself). Sandboxed
@@ -54,6 +54,7 @@ const bridge = {
   listTasks: function () {
     return invoke("shell/listTasks");
   },
+  pickLocalResource: function (request) { return invoke("shell/pickLocalResource", request); },
   importTaskRoot: function () {
     return invoke("shell/importTaskRoot");
   },

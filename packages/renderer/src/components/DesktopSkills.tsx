@@ -1,3 +1,4 @@
+import { LocalResourcePicker } from "./LocalResourcePicker";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -138,9 +139,10 @@ export function DesktopSkills({ bridge, onCount }: { bridge?: PidockBridge; onCo
       </div>
 
       <form
-        className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 below-stack:grid-cols-1"
+        className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 below-stack:grid-cols-1"
         onSubmit={(event) => {
           event.preventDefault();
+          if (busy) return;
           const value = path.trim();
           if (value.length === 0) return;
           void run(async () => {
@@ -155,12 +157,14 @@ export function DesktopSkills({ bridge, onCount }: { bridge?: PidockBridge; onCo
           <Input
             id="skill-source-path"
             data-testid="skills-add-path"
+            disabled={busy}
             value={path}
             onChange={(event) => setPath(event.target.value)}
             placeholder="/Users/you/skills"
             aria-label="技能来源目录"
           />
         </Field>
+        <LocalResourcePicker kind="directory" label="选择技能来源文件夹" bridge={bridge} disabled={busy} onBusy={setBusy} onSelect={setPath} />
         <Button data-testid="skills-add-submit" type="submit" className="self-end" disabled={busy || path.trim().length === 0}>
           添加来源
         </Button>

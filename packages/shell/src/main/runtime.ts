@@ -1,3 +1,4 @@
+import { registerLocalResourcePicker } from "./local-resource-picker.js";
 import path from "node:path";
 import { createServer, type Server } from "node:net";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
@@ -1942,6 +1943,7 @@ export function registerIpc(
    */
   mcp?: McpWiring,
 ): void {
+  registerLocalResourcePicker(registry);
   if (tasks && catalog && taskRoots && projects) tasks.configureServices((workspaceId) => new InstalledServiceHostAuthority(
     app.getPath("userData"), catalog, serviceCatalogAuthority(taskRoots, projects), workspaceId, process.env));
   // [PiDock 04] (#7 box 6) the Agent's shared-template edit reaches main here:

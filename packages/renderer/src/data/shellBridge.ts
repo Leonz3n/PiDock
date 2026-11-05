@@ -41,6 +41,7 @@ export interface PidockBridge {
   getVersions?: () => Promise<unknown>;
   hostPing?: (workspaceId?: string) => Promise<unknown>;
   listTasks?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
+  pickLocalResource?: (request: { kind: "directory" | "executable" }) => Promise<{ ok: boolean; payload?: { canceled: boolean; path?: string }; error?: string }>;
   importTaskRoot?: () => Promise<{ ok: boolean; payload?: unknown; error?: string }>;
   /**
    * Workspace registry operations. The renderer names a workspace, a task and its

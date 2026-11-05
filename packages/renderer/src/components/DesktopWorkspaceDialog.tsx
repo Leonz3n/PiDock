@@ -1,3 +1,4 @@
+import { LocalResourcePicker } from "./LocalResourcePicker";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "./ui/badge";
@@ -85,6 +86,10 @@ export function DesktopWorkspaceDialog({
   /** The S07 修复路径 target: the row whose path input must take focus on open. */
   focusSourceId?: string | null;
 }) {
+  const latestDraft = useRef(draft);
+  latestDraft.current = draft;
+  const [selecting, setSelecting] = useState(false);
+  busy = busy || selecting;
   const [attempted, setAttempted] = useState(false);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -145,6 +150,13 @@ export function DesktopWorkspaceDialog({
               value={row.path} disabled={busy}
               ref={(element) => { pathRefs.current[row.id ?? `${kind}-${index}`] = element; }}
               onChange={(event) => updateRows(kind, values.map((item, at) => at === index ? { ...item, path: event.target.value } : item))} />
+            <LocalResourcePicker kind="directory" label={`选择${ROW_LABEL[kind]}文件夹 ${index + 1}`} disabled={busy} onBusy={setSelecting}
+              onSelect={(path) => {
+                const current = latestDraft.current;
+                const target = current[kind].findIndex((item) => row.id ? item.id === row.id : item === row);
+                if (target < 0) return;
+                onChange({ ...current, [kind]: current[kind].map((item, at) => at === target ? { ...item, path } : item) });
+              }} />
             {status?.status === "ok" ? <Badge variant="soft" className="shrink-0">路径可用</Badge> : null}
             {status?.status === "not-directory" ? <Badge variant="soft" className="shrink-0 text-attention">不是目录</Badge> : null}
             {status?.status === "missing" ? <>

@@ -31,6 +31,7 @@ describe("preload invoke whitelist", () => {
 
   it("allows only main's directory picker and not a raw path IPC channel", () => {
     expect(isAllowedInvokeChannel("shell/importTaskRoot")).toBe(true);
+    expect(isAllowedInvokeChannel("shell/pickLocalResource")).toBe(true);
     expect(isAllowedInvokeChannel("shell/readTaskDir")).toBe(false);
   });
 

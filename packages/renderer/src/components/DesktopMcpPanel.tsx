@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { LocalResourcePicker } from "./LocalResourcePicker";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import {
@@ -281,7 +282,11 @@ function McpForm({ draft, setDraft, draftError, tested, busy, onTest, onSave, on
   onSave: (event: FormEvent) => void;
   onCancel: () => void;
 }) {
+  const [selecting, setSelecting] = useState(false);
+  const latest = useRef(draft);
+  latest.current = draft;
   const update = (patch: Partial<McpDraft>) => setDraft({ ...draft, ...patch });
+  const pick = (patch: Partial<McpDraft>) => setDraft({ ...latest.current, ...patch });
   return <section data-form-open="true" data-testid="capabilities-mcp-form" className="min-w-0">
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
       <div><p className="text-[10px] uppercase tracking-[1.8px] text-muted">MCP Server</p>
@@ -289,7 +294,7 @@ function McpForm({ draft, setDraft, draftError, tested, busy, onTest, onSave, on
         <p className="mt-0.5 text-[11px] text-muted">{draft.name === null ? "由 PiDock 生成 pidock-mcp-&lt;uuid&gt; 名称并写入 mcp.json" : `PiDock 管理的 Server：${draft.name}`}</p></div>
       <Button type="button" size="sm" variant="ghost" onClick={onCancel}>返回列表</Button>
     </div>
-    <form onSubmit={onSave} className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-line bg-paper p-5 below-narrow:grid-cols-1">
+    <form onSubmit={(event) => { if (selecting) event.preventDefault(); else onSave(event); }} className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-line bg-paper p-5 below-narrow:grid-cols-1">
       <div className="col-span-full"><label className={label} htmlFor="mcp-label">名称标签</label>
         <input id="mcp-label" className={field} value={draft.description} maxLength={200} placeholder="例如：本地文档工具（只用于列表显示）" onChange={(event) => update({ description: event.target.value })} /></div>
       <div><label className={label} htmlFor="mcp-transport">传输</label>
@@ -304,11 +309,13 @@ function McpForm({ draft, setDraft, draftError, tested, busy, onTest, onSave, on
 
       {draft.transport === "stdio" ? <>
         <div className="col-span-full"><label className={label} htmlFor="mcp-command">command（单个可执行程序）</label>
-          <input id="mcp-command" className={field} value={draft.command} placeholder="node" onChange={(event) => update({ command: event.target.value })} /></div>
+          <input id="mcp-command" className={field} value={draft.command} placeholder="node" onChange={(event) => update({ command: event.target.value })} />
+          <LocalResourcePicker kind="executable" label="选择 MCP 可执行文件" disabled={busy !== "" || selecting} onBusy={setSelecting} onSelect={(command) => pick({ command })} /></div>
         <div><label className={label} htmlFor="mcp-args">args（每行一个）</label>
           <textarea id="mcp-args" className={`${field} h-[64px] font-mono`} value={draft.argsText} onChange={(event) => update({ argsText: event.target.value })} /></div>
         <div><label className={label} htmlFor="mcp-cwd">cwd（可选，相对会话目录）</label>
-          <input id="mcp-cwd" className={field} value={draft.cwd} placeholder="." onChange={(event) => update({ cwd: event.target.value })} /></div>
+          <input id="mcp-cwd" className={field} value={draft.cwd} placeholder="." onChange={(event) => update({ cwd: event.target.value })} />
+          <LocalResourcePicker kind="directory" label="选择 MCP 工作文件夹" disabled={busy !== "" || selecting} onBusy={setSelecting} onSelect={(cwd) => pick({ cwd })} /></div>
         <div className="col-span-full"><label className={label} htmlFor="mcp-env">环境变量引用（每行 NAME=$VAR，也支持大括号写法）</label>
           <textarea id="mcp-env" className={`${field} h-[64px] font-mono`} value={draft.envText} placeholder="TOKEN=$MCP_TOKEN" onChange={(event) => update({ envText: event.target.value })} />
           <p className="mt-1 text-[10px] text-muted">只保存引用，不保存明文；编辑时留空表示保持原引用。</p></div>
@@ -323,12 +330,12 @@ function McpForm({ draft, setDraft, draftError, tested, busy, onTest, onSave, on
       <div><label className={label} htmlFor="mcp-timeout">超时（秒，1–600）</label>
         <input id="mcp-timeout" className={field} value={draft.timeout} inputMode="numeric" onChange={(event) => update({ timeout: event.target.value })} /></div>
       <div className="flex items-end gap-2">
-        <Button type="button" variant="outline" disabled={busy !== ""} onClick={onTest}>{busy === "test:draft" ? "测试中…" : "测试连接"}</Button>
-        <Button type="submit" disabled={busy !== ""}>{busy === "save" ? "保存中…" : "保存"}</Button>
+        <Button type="button" variant="outline" disabled={busy !== "" || selecting} onClick={onTest}>{busy === "test:draft" ? "测试中…" : "测试连接"}</Button>
+        <Button type="submit" disabled={busy !== "" || selecting}>{busy === "save" ? "保存中…" : "保存"}</Button>
       </div>
       {draftError && <p role="alert" className="col-span-full border border-line bg-soft px-2 py-1.5 text-[11px] text-destructive">{draftError}</p>}
       {tested && <div className="col-span-full">{<TestResult result={tested} />}</div>}
-      <p className="col-span-full text-[10px] leading-5 text-muted">保存只写文件，不会重连或改动任何已打开的会话；新会话启动时读取这份配置。名称与目录由 main 决定，本表单不能指定文件路径。</p>
+      <p className="col-span-full text-[10px] leading-5 text-muted">保存只写文件，不会重连或改动任何已打开的会话；新会话启动时读取这份配置。名称与目录由 main 决定，本表单不能指定配置文件的保存路径。</p>
     </form>
   </section>;
 }
