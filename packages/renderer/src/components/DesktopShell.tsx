@@ -1,5 +1,5 @@
 /** Workspace shell aligned with Pencil S01/S06; management replaces the whole window. */
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { SidebarMenu, type SidebarAction, type SidebarMenuItem } from "./SidebarMenu";
 import { Button } from "./ui/button";
 import { Icon, type IconName } from "./Icon";
@@ -172,7 +172,7 @@ export function DesktopShell({
       { label: "收尾清理…", run: onSidebarAction ? () => command({ action: "cleanup-task" }) : undefined },
       { label: "恢复任务", reason: "请在已归档页恢复已归档任务" },
     ];
-    return <Fragment key={task.taskId}>
+    return <div key={task.taskId} className="sidebar-task-group">
       <SidebarMenu label={`${task.name} 任务菜单`} items={taskMenu}><div data-tree-task-row data-selected={selected} data-open={open} className="sidebar-task-row">
         <button type="button" aria-label={`${open ? "收起" : "展开"}任务 ${task.name}`} aria-expanded={open} onClick={() => toggle(`task:${task.taskId}`)} className="sidebar-task-arrow"><Icon name={open ? "down" : "chevron-right"} /></button>
         <button type="button" data-row-select data-task-nav={task.taskId} aria-label={task.name} title={task.name} aria-current={selected ? "page" : undefined}
@@ -199,7 +199,7 @@ export function DesktopShell({
           {!showArchived && list.sessions.every((session) => session.archived) && <p className="py-1 text-[10px] text-muted">暂无会话</p>}
         </>}
       </div>}
-    </Fragment>;
+    </div>;
   });
   return <>
     <div hidden={Boolean(management)} className={cn("h-screen min-h-0 w-full bg-bg text-ink", management ? "hidden" : "flex")} data-testid="desktop-shell">
@@ -214,7 +214,7 @@ export function DesktopShell({
         <label className="shell-nav-label mb-3 flex h-[30px] shrink-0 items-center gap-1.5 rounded-md border border-line bg-paper px-2 text-muted"><Icon name="search" /><input type="search" aria-label="过滤任务与会话" placeholder="过滤任务与会话…" value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-[11px] outline-none" /></label>
         <nav aria-label="主导航" className="flex min-h-0 flex-1 flex-col">
           <div className="shell-tree min-h-0 flex-1 overflow-y-auto" role="group" aria-label="工作空间与任务">
-            <div className="mb-2 flex items-center justify-between px-1 text-[11px] text-muted"><span>工作空间与任务树</span>{onNewWorkspace && <Button type="button" variant="ghost" size="icon-sm" aria-label="新建工作空间" title="新建工作空间" onClick={onNewWorkspace}><Icon name="plus" /></Button>}</div>
+            <div className="mb-[3px] flex items-center justify-between px-1 text-[11px] text-muted"><span>工作空间与任务树</span>{onNewWorkspace && <Button type="button" variant="ghost" size="icon-sm" aria-label="新建工作空间" title="新建工作空间" onClick={onNewWorkspace}><Icon name="plus" /></Button>}</div>
             {projects.map((project) => {
               const open = Boolean(needle) || !collapsed.has(`workspace:${project.id}`);
               return <div key={project.id} data-workspace-tree={project.id}>
@@ -223,7 +223,7 @@ export function DesktopShell({
                   ...(["edit", "new-task", "remove"] as const).map((action) => ({ label: ({ edit: "编辑工作空间…", "new-task": "在此新建任务…", remove: "移除工作空间…" })[action], run: onWorkspaceAction ? () => onWorkspaceAction(project.id, action) : undefined })),
                 ]}><div className="sidebar-workspace-row" data-selected={view.view === "project" && view.projectId === project.id}>
                   <button type="button" aria-label={`${open ? "收起" : "展开"}工作空间 ${project.name}`} aria-expanded={open} onClick={() => toggle(`workspace:${project.id}`)} className="sidebar-workspace-arrow"><Icon name={open ? "down" : "chevron-right"} /></button>
-                  <button type="button" data-row-select aria-label={project.name} title={project.name} aria-current={view.view === "project" && view.projectId === project.id ? "page" : undefined} onClick={() => onNavigate({ view: "project", projectId: project.id })} className="sidebar-workspace-select"><Icon name="folder" /><span className="truncate">{project.name}</span><span className="ml-auto shrink-0 text-[10px] text-muted">{project.taskCount === null ? "未核验" : `${project.taskCount} 任务`}</span></button>
+                  <button type="button" data-row-select aria-label={project.name} title={project.name} aria-current={view.view === "project" && view.projectId === project.id ? "page" : undefined} onClick={() => onNavigate({ view: "project", projectId: project.id })} className="sidebar-workspace-select"><Icon name={open ? "folder-open" : "folder"} /><span className="truncate">{project.name}</span><span className="ml-auto shrink-0 text-[10px] text-muted">{project.taskCount === null ? "未核验" : `${project.taskCount} 任务`}</span></button>
                 </div></SidebarMenu><div className="sidebar-task-column">{open && taskRows(project.id)}</div>
               </div>;
             })}

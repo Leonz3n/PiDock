@@ -415,7 +415,8 @@
 .sidebar-workspace-select { display:flex; min-width:0; flex:1; align-items:center; gap:5px; text-align:left; font-size:12px; }
 .sidebar-workspace-select svg { width:13px; height:13px; }
 .sidebar-workspace-row[data-selected="true"] .sidebar-workspace-select { font-weight:600; }
-.sidebar-task-column { display:flex; flex-direction:column; gap:2px; padding-left:14px; }
+.sidebar-task-column { display:flex; flex-direction:column; gap:2px; padding-left:14px; margin-top:1px; }
+.sidebar-task-group { display:flex; min-width:0; flex-direction:column; gap:1px; }
 .sidebar-task-row { display:flex; align-items:center; gap:5px; min-width:0; height:24px; padding:0 6px; border-radius:4px; }
 .sidebar-task-row[data-open="true"] { height:26px; }
 .sidebar-task-row[data-selected="true"] { background:var(--color-soft); color:var(--color-accent); font-weight:600; }

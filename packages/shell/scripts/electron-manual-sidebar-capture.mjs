@@ -162,6 +162,7 @@ async function run() {
       return { workspace:box(workspace), workspaceArrow:box(workspace.querySelector('button')), task:box(task), taskArrow:box(task.querySelector('button')), session:box(document.querySelector('[data-session-nav]')) };
     })()`);
     check("Pencil workspace row 26px", geometry.workspace.height === 26, geometry);
+    check("Pencil desktop row y165 and task y192", width < 960 || (geometry.workspace.y === 165 && geometry.task.y === 192), geometry);
     check("Pencil workspace arrow x16 and 12px", geometry.workspaceArrow.x === (width < 960 ? 12 : 16) && geometry.workspaceArrow.width === 12, geometry);
     check("Pencil task arrow x32 and 10px", geometry.taskArrow.x === (width < 960 ? 28 : 32) && geometry.taskArrow.width === 10, geometry);
     check("Pencil session indent x42", geometry.session.x === (width < 960 ? 38 : 42), geometry);

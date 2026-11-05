@@ -31,6 +31,7 @@ export const ICON_PATHS = {
   clock: "M21 12a9 9 0 1 0-18 0a9 9 0 1 0 18 0 M12 7v5l3 2",
   book: "M3 3h7l2 3 2-3h7v17h-7l-2 2-2-2H3Z M12 6v16",
   globe: "M21 12a9 9 0 1 0-18 0a9 9 0 1 0 18 0 M3 12h18 M12 3c-5 5-5 13 0 18c5-5 5-13 0-18",
+  "folder-open": "M3 10V5h6l2 3h10v3 M3 10h20l-3 10H2Z",
   folder: "M3 5h6l2 3h10v12H3Z",
   key: "M14 7a5 5 0 1 0 3 5L22 7l-3-3-3 3Z M4 9h.01",
   branch: "M6 6v12 M6 12c9 0 12-1 12-6 M4 4a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M4 20a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M16 4a2 2 0 1 0 4 0a2 2 0 1 0-4 0",
