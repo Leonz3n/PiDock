@@ -29,7 +29,7 @@ import {
  * asserted on the Tailwind classes that carry the prototype's numbers: a class
  * that drifts (or is dropped) fails here, and the same class list is what the
  * headless-Chromium evidence measures at real viewport widths
- * (`docs/evidence/ui-alignment-s7a/capture-management.mjs`).
+ * (`docs/evidence/ui-alignment-s7a/capture-management.mjs`（本机，不随仓库分发）).
  *
  * The tier classes are the prototype's own boundaries — `below-wide` is
  * `(max-width:1180px)`, `below-mid` is `(max-width:960px)`, `below-stack` is

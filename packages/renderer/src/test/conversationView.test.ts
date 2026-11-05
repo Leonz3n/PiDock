@@ -11,7 +11,7 @@ import type { Message, RunRecord } from "../data/types";
 
 /**
  * [UI 对齐 07] (#31) the conversation's derived data. The geometry lives in
- * `docs/evidence/ui-alignment-s6/capture-conversation.mjs`; what is asserted
+ * `docs/evidence/ui-alignment-s6/capture-conversation.mjs`（本机，不随仓库分发）; what is asserted
  * here is the text, the grouping and — most of all — that the run-result card
  * cannot state anything the Host record does not carry.
  */

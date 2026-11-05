@@ -17,7 +17,7 @@ import { renderApp } from "./helpers";
  * no longer shrink into an ellipsis and the tiers only reduce the visible count.
  * jsdom has no layout, so this file checks the class contract; the measured
  * geometry (and its assertions) live in
- * `docs/evidence/ui-alignment-s3/capture-execution.mjs` → `execution-card.json`.
+ * `docs/evidence/ui-alignment-s3/capture-execution.mjs`（本机，不随仓库分发） → `execution-card.json`.
  */
 const SEEDED_TABS = ["session-tab-main", "session-tab-deploy", "session-tab-failed", "session-tab-archived-1"];
 

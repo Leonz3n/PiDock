@@ -12,7 +12,7 @@ import { renderApp } from "./helpers";
 //
 // jsdom evaluates no media queries, so these cases assert the tier classes are
 // wired to the right elements; the actual geometry per viewport is measured in
-// `docs/evidence/ui-alignment-layout/` (headless Chromium) — see its
+// `docs/evidence/ui-alignment-layout/`（本机，不随仓库分发） (headless Chromium) — see its
 // `verification-log.md`.
 
 const TIERS = ["below-wide:", "below-mid:", "below-narrow:", "below-stack:"];

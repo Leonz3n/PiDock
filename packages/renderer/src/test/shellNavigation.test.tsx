@@ -191,7 +191,7 @@ describe("shell bottom summary bar", () => {
     const summary = screen.getByTestId("shell-summary");
 
     expect(within(summary).getByText("发布前检查")).toBeInTheDocument();
-    expect(within(summary).getByText(`${runningServiceCount(task.services)} 服务`)).toBeInTheDocument();
+    expect(within(summary).getByText(`（本机，不随仓库分发）${runningServiceCount(task.services)} 服务`)).toBeInTheDocument();
     expect(within(summary).getByText("Agent 控制中")).toBeInTheDocument();
     expect(screen.queryByText("布局探索")).toBeNull();
     expect(screen.queryByRole("button", { name: /对话优先/ })).toBeNull();

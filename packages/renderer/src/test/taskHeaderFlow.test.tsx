@@ -12,7 +12,7 @@ import { actStore, renderApp } from "./helpers";
 // stay reachable through the menu — the mapping is asserted below.
 //
 // jsdom has no layout: the measured vertical budget per viewport lives in
-// `docs/evidence/ui-alignment-s2/` (headless Chromium) — see `vertical-budget.json`.
+// `docs/evidence/ui-alignment-s2/`（本机，不随仓库分发） (headless Chromium) — see `vertical-budget.json`.
 
 function actionset() {
   return screen.getByTestId("task-actionset");

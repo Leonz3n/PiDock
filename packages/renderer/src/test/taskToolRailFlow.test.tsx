@@ -247,7 +247,7 @@ describe("task tool rail", () => {
     expect(row).toHaveAttribute("title", expect.stringContaining("release/release-service-1@5173"));
     // The endpoint must keep its own width at every tier, so the class contract
     // is asserted here (jsdom has no layout; the rendered result is in
-    // `docs/evidence/ui-alignment-s5/renderer/*-runtime.png`, #28 review P2-2).
+    // `docs/evidence/ui-alignment-s5/renderer/*-runtime.png`（本机，不随仓库分发）, #28 review P2-2).
     expect(within(local).getByTestId("service-endpoint-release-service-1").className).toContain("shrink-0");
     expect(within(local).getByTestId("service-instance-release-service-1").className).toContain("truncate");
     const remoteRow = within(remote).getByTestId("service-row-release-service-6").closest("li") as HTMLElement;

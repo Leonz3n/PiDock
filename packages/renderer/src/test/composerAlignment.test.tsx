@@ -6,7 +6,7 @@ import { useHostStore } from "../stores/host";
 
 /**
  * [UI 对齐 06] (#30) composer alignment with prototype A. jsdom has no layout,
- * so the heights live in `docs/evidence/ui-alignment-s4/capture-composer.mjs`;
+ * so the heights live in `docs/evidence/ui-alignment-s4/capture-composer.mjs`（本机，不随仓库分发）;
  * what is asserted here is the behaviour and the class contracts that keep the
  * bottom row a single line and the attachment strip bounded at every tier.
  */

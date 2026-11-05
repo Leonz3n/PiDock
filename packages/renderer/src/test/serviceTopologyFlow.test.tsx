@@ -30,7 +30,7 @@ describe("runtime panel topology", () => {
     // squeeze the action buttons into wrapped text; the row keeps the action
     // group at its own size and truncates the name/address instead. jsdom has no
     // layout, so the class contract is asserted here (the rendered result is in
-    // `docs/evidence/ui-alignment-s2/renderer/*-one-panel.png`).
+    // `docs/evidence/ui-alignment-s2/renderer/*-one-panel.png`（本机，不随仓库分发）).
     // [UI 对齐 04] (#28) moved the row to the prototype's shape: the endpoint
     // (`127.0.0.1:port · 运行中`) owns the second line, the mode toggle and the
     // run button are icon-sized, and the untruncated identity stays in `title`.

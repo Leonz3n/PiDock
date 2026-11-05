@@ -10,7 +10,7 @@ import type { RunRecord } from "../data/types";
 /**
  * [UI 对齐 07] (#31) conversation alignment with prototype A. jsdom has no
  * layout, so every height lives in
- * `docs/evidence/ui-alignment-s6/capture-conversation.mjs`; asserted here are
+ * `docs/evidence/ui-alignment-s6/capture-conversation.mjs`（本机，不随仓库分发）; asserted here are
  * the class contracts and the behaviour — the day label comes from the session's
  * own time, the run-result card only renders what the Host reported, and the
  * child-agent band sits outside the log so it cannot take the log's height.

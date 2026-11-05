@@ -8,7 +8,7 @@ import { renderApp } from "./helpers";
 /**
  * [UI 对齐 09] #33: the six remaining management pages against prototype A's
  * structure. jsdom has no layout, so the geometry is measured in
- * `docs/evidence/ui-alignment-s7b/capture-pages.mjs`; what is asserted here is
+ * `docs/evidence/ui-alignment-s7b/capture-pages.mjs`（本机，不随仓库分发）; what is asserted here is
  * the part a screenshot cannot prove — that every number on the page is derived
  * from the store instead of the prototype's sample values, that the page counts
  * match the store, and that the filters really narrow the view.
