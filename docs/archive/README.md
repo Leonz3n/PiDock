@@ -15,6 +15,7 @@
 | 资料 | 追溯用途 |
 | --- | --- |
 | [桌面运行时调研](desktop-runtime-research.md) | 早期候选比较 |
+| [Electrobun 与 Electron 内置浏览器评估（2026-11-06）](electrobun-electron-embedded-browser-evaluation.md) | v2.0.6 官方源码复核、T3 Code / Codex 行为参照与 PiDock 替换门槛 |
 | [Electrobun 源码复核](electrobun-runtime-source-review.md) | 官方源码与接口边界 |
 | [Electrobun 实测复核](electrobun-runtime-recheck.md) | 实验结果与否决依据 |
 | [WebviewJS 运行时复核](webviewjs-runtime-review.md) | Bun 候选与持久隔离边界 |
